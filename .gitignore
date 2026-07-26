@@ -1,0 +1,31 @@
+# Secrets and authentication
+agent/auth.json
+agent/models.json
+agent/mcp.json
+web-search.json
+.env
+.env.*
+!.env.example
+
+# Pi runtime state
+agent/sessions/
+agent/run-history.jsonl
+agent/models-store.json
+agent/mcp-cache.json
+agent/mcp-npx-cache.json
+agent/trust.json
+exa-usage.json
+.tmp/
+
+# Installed dependencies
+node_modules/
+agent/npm/node_modules/
+
+# Local binaries and OS/editor files
+agent/bin/*.exe
+.DS_Store
+Thumbs.db
+*.log
+
+browser
+__pycache__/
