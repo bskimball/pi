@@ -4,9 +4,7 @@
   "defaultThinkingLevel": "high",
   "lastChangelogVersion": "0.82.1",
   "packages": [
-    "npm:pi-mcp-adapter",
-    "npm:pi-web-access",
-    "npm:pi-btw"
+    "npm:pi-mcp-adapter"
   ],
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
