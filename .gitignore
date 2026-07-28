@@ -19,7 +19,6 @@ exa-usage.json
 
 # Installed dependencies
 node_modules/
-agent/npm/node_modules/
 
 # Local binaries and OS/editor files
 agent/bin/*.exe

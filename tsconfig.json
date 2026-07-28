@@ -7,9 +7,13 @@
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "pi-mcp-adapter": ["./agent/types/pi-mcp-adapter.d.ts"]
+    }
   },
   "include": [
-    "agent/extensions/**/*.ts"
+    "agent/extensions/**/*.ts",
+    "agent/types/**/*.d.ts"
   ]
 }

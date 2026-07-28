@@ -215,6 +215,96 @@ export function safeTruncateToWidth(
   return sawAnsi ? `${result}\x1b[0m` : result;
 }
 
+/**
+ * Word-wrap PLAIN text (no ANSI) to a width, with optional hanging indent.
+ *
+ * Callers must wrap unstyled text and apply color to each returned line. This
+ * deliberately avoids reflowing escape sequences, which is where ANSI-aware
+ * wrapping usually goes wrong. Output is hard-bounded by maxLines so a
+ * pathological input can never explode the render.
+ */
+export function wrapPlainText(
+  value: unknown,
+  maxWidth: number,
+  options: { hangingIndent?: number; maxLines?: number } = {},
+): string[] {
+  const widthLimit = normalizedWidth(maxWidth);
+  if (widthLimit === 0) return [];
+  const maxLines = Math.max(1, options.maxLines ?? 400);
+  // Cap the hanging indent at half the line so a large indent on a narrow
+  // terminal cannot starve the continuation lines down to a character each.
+  const indent = Math.max(
+    0,
+    Math.min(options.hangingIndent ?? 0, Math.floor(widthLimit / 2)),
+  );
+  const pad = " ".repeat(indent);
+
+  const text = stripTerminalSequences(value).replace(/\s+$/, "");
+  if (!text) return [""];
+
+  const words = text.split(/ +/).filter((word) => word.length > 0);
+  const lines: string[] = [];
+  let current = "";
+  let currentWidth = 0;
+  let limit = widthLimit;
+
+  const pushCurrent = () => {
+    lines.push(current);
+    current = "";
+    currentWidth = 0;
+    limit = widthLimit - indent;
+  };
+
+  for (const word of words) {
+    if (lines.length >= maxLines) break;
+    const wordWidth = fallbackVisibleWidth(word);
+    const prefix = currentWidth === 0 ? (lines.length === 0 ? "" : pad) : " ";
+    const prefixWidth = currentWidth === 0 ? 0 : 1;
+
+    // A word longer than the line gets hard-split rather than overflowing.
+    if (wordWidth > limit) {
+      if (currentWidth > 0) pushCurrent();
+      let rest = word;
+      while (rest && lines.length < maxLines) {
+        const head = fallbackTruncateToWidth(rest, limit);
+        if (!head) break;
+        lines.push((lines.length === 0 ? "" : pad) + head);
+        rest = rest.slice(head.length);
+        limit = widthLimit - indent;
+      }
+      continue;
+    }
+
+    if (currentWidth + prefixWidth + wordWidth > limit) {
+      pushCurrent();
+      current = pad + word;
+      currentWidth = indent + wordWidth;
+      continue;
+    }
+    current += prefix + word;
+    currentWidth += prefixWidth + wordWidth;
+  }
+
+  if (current && lines.length < maxLines) lines.push(current);
+  return lines.length ? lines.slice(0, maxLines) : [""];
+}
+
+/** Pad plain text on the right to an exact visible width (for column alignment). */
+export function padToWidth(value: unknown, width: number): string {
+  const target = normalizedWidth(width);
+  const current = fallbackVisibleWidth(value);
+  if (current >= target) return fallbackTruncateToWidth(value, target);
+  return `${safeString(value)}${" ".repeat(target - current)}`;
+}
+
+/** Pad plain text on the left to an exact visible width (right-aligned columns). */
+export function padStartToWidth(value: unknown, width: number): string {
+  const target = normalizedWidth(width);
+  const current = fallbackVisibleWidth(value);
+  if (current >= target) return fallbackTruncateToWidth(value, target);
+  return `${" ".repeat(target - current)}${safeString(value)}`;
+}
+
 export function renderLinesSafely(
   build: (width: number) => unknown,
   width: number,

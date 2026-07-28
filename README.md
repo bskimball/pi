@@ -39,6 +39,7 @@ Custom TUI and orchestration extensions live in `agent/extensions/`:
 
 - **`mono/amp-task.ts`** — implements the `task` tool and sub-agent execution. Each task spawns a separate `pi --mode json -p` process using the agent prompt from `agent/agents/*.md`, with hard/idle/turn guards, model fallbacks, streaming, and cleanup kept local to the extension. It renders rich task presentation: specialist badges, mission, model, thinking level, turn count, live tool activity, durations, and bounded final reports.
 - **`mono/mono-ui.ts`** — the "Mono" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Degrades to bounded fallback output on renderer failure.
+- **`mcp-adapter.ts`** — composes Mono's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
 - **`crash-logger.ts`** — records exits, shutdown reasons, and unhandled rejections to `agent/pi-crash.log`, distinguishing main and sub-agent processes.
 
@@ -82,7 +83,6 @@ Delegates lint, format, verify, and deploy to the `stevedore` sub-agent instead 
 
    ```bash
    npm install
-   cd agent/npm && npm install
    ```
 
 3. Restore the ignored local configuration files containing credentials:

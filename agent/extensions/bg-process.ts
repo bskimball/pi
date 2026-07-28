@@ -1,7 +1,11 @@
 // bg-process: start/inspect/stop long-running shell jobs without blocking the agent.
 //
 // Tools: bg_start, bg_status, bg_list, bg_kill.
-// Plain bounded tool results only — no custom renderers or render timers.
+//
+// Results stay plain bounded text for the model, and every result also carries
+// a structured `details.bg` payload that the Mono receipts in
+// mono/lib/bg-view.ts render. Presentation is flat and width-aware; there are
+// no render timers and no pi-tui layout primitives on this path.
 
 import {
   spawn,
@@ -14,6 +18,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  bgCallLine,
+  bgFallbackLines,
+  bgJobCard,
+  bgListCard,
+  bgPayload,
+  type BgJobView,
+} from "./mono/lib/bg-view.ts";
+import {
+  WidthText,
+  textContent,
+  type ToolRenderContext,
+} from "./mono/lib/ui-common.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -240,9 +257,93 @@ function textResult(text: string, isError = false, details: unknown = {}) {
   };
 }
 
+/**
+ * Structured presentation payload for one job. Kept separate from the text
+ * body so the Mono receipt never has to re-parse human-readable output.
+ * `withOutput` is false in listings, where per-job tails would be unbounded.
+ */
+function jobView(job: BgJob, withOutput: boolean): BgJobView {
+  const stdout = withOutput ? tailForStatus(job.stdout) : undefined;
+  const stderr = withOutput ? tailForStatus(job.stderr) : undefined;
+  return {
+    id: job.id,
+    title: job.title,
+    command: cleanOneLine(job.command, LIST_CMD_CAP),
+    cwd: job.cwd,
+    pid: job.pid,
+    status: job.status,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    exitCode: job.exitCode,
+    signal: job.signal,
+    killRequested: job.killRequested,
+    stdoutTail: stdout?.text,
+    stderrTail: stderr?.text,
+    stdoutBytes: stdout?.bytes ?? job.stdout.bytes,
+    stderrBytes: stderr?.bytes ?? job.stderr.bytes,
+    stdoutTruncated: stdout?.truncated,
+    stderrTruncated: stderr?.truncated,
+  };
+}
+
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
+  /**
+   * Shared Mono receipt wiring for one bg tool.
+   *
+   * `card` builds the flat, width-aware body from the structured payload; the
+   * call row is blanked as soon as a result exists so a single receipt
+   * represents the whole tool call. Every builder is invoked inside WidthText,
+   * which clips each line and falls back to a single safe line on throw.
+   */
+  const receipt = (
+    tool: string,
+    card: (
+      theme: any,
+      width: number,
+      payload: NonNullable<ReturnType<typeof bgPayload>>,
+      expanded: boolean,
+    ) => string[],
+  ) => ({
+    renderShell: "self" as const,
+    renderCall(
+      args: any,
+      theme: any,
+      context: ToolRenderContext<{ hasResult?: boolean }, any>,
+    ) {
+      return new WidthText(
+        (width) =>
+          context.state.hasResult
+            ? []
+            : [bgCallLine(theme, width, tool, args, context.executionStarted)],
+        `[${tool} call unavailable]`,
+      );
+    },
+    renderResult(
+      result: any,
+      options: { expanded: boolean; isPartial: boolean },
+      theme: any,
+      context: ToolRenderContext<{ hasResult?: boolean }, any>,
+    ) {
+      context.state.hasResult = true;
+      const payload = bgPayload(result);
+      const isError = Boolean(result?.isError);
+      return new WidthText((width) => {
+        if (!payload) {
+          return bgFallbackLines(
+            theme,
+            width,
+            tool,
+            textContent(result),
+            isError,
+          );
+        }
+        return card(theme, width, payload, context.expanded || options.expanded);
+      }, `[${tool} result unavailable]`);
+    },
+  });
+
   const jobs = new Map<string, BgJob>();
   const order: string[] = [];
   let nextId = 1;
@@ -482,22 +583,35 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "parallel",
+    ...receipt("bg_start", (theme, width, payload, expanded) =>
+      payload.job
+        ? bgJobCard(theme, width, payload.job, {
+            tool: "bg_start",
+            expanded,
+            hint: expanded
+              ? `bg_status id="${payload.job.id}" for logs · bg_kill to stop`
+              : undefined,
+          })
+        : bgFallbackLines(theme, width, "bg_start", payload.message, true),
+    ),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const command = params.command?.trim();
-      if (!command) return textResult("command is required.", true);
+      if (!command) {
+        return textResult("command is required.", true, {
+          bg: { message: "command is required." },
+        });
+      }
 
       // Reserve the slot before any yield so parallel bg_start calls cannot
       // exceed MAX_RUNNING even if this path later gains an await.
       if (runningCount() >= MAX_RUNNING) {
-        return textResult(
-          `Too many running background jobs (max ${MAX_RUNNING}). Stop one with bg_kill first.`,
-          true,
-        );
+        const message = `Too many running background jobs (max ${MAX_RUNNING}). Stop one with bg_kill first.`;
+        return textResult(message, true, { bg: { message } });
       }
 
       const cwd = resolveCwd(params.working_dir, ctx.cwd);
       const cwdError = validateCwd(cwd);
-      if (cwdError) return textResult(cwdError, true);
+      if (cwdError) return textResult(cwdError, true, { bg: { message: cwdError } });
 
       const id = `bg_${nextId++}`;
       const title = cleanOneLine(params.title?.trim() || command, TITLE_CAP);
@@ -535,7 +649,9 @@ export default function (pi: ExtensionAPI) {
         const idx = order.indexOf(id);
         if (idx >= 0) order.splice(idx, 1);
         const message = error instanceof Error ? error.message : String(error);
-        return textResult(`Failed to spawn ${id}: ${message}`, true);
+        return textResult(`Failed to spawn ${id}: ${message}`, true, {
+          bg: { message: `Failed to spawn ${id}: ${message}` },
+        });
       }
 
       attachChild(job, child);
@@ -552,7 +668,7 @@ export default function (pi: ExtensionAPI) {
         `status: running`,
         `Use bg_status id="${id}" for logs; bg_kill id="${id}" to stop.`,
       ].join("\n");
-      return textResult(text);
+      return textResult(text, false, { bg: { job: jobView(job, false) } });
     },
   });
 
@@ -566,17 +682,26 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
+    ...receipt("bg_status", (theme, width, payload, expanded) =>
+      payload.job
+        ? bgJobCard(theme, width, payload.job, { tool: "bg_status", expanded })
+        : bgFallbackLines(theme, width, "bg_status", payload.message, true),
+    ),
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
-      if (!id) return textResult("id is required.", true);
+      if (!id) {
+        return textResult("id is required.", true, {
+          bg: { message: "id is required." },
+        });
+      }
       const job = jobs.get(id);
       if (!job) {
-        return textResult(
-          `Unknown job "${id}". Use bg_list to see current jobs.`,
-          true,
-        );
+        const message = `Unknown job "${id}". Use bg_list to see current jobs.`;
+        return textResult(message, true, { bg: { message } });
       }
-      return textResult(formatStatus(job));
+      return textResult(formatStatus(job), false, {
+        bg: { job: jobView(job, true) },
+      });
     },
   });
 
@@ -595,6 +720,9 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "parallel",
+    ...receipt("bg_list", (theme, width, payload, expanded) =>
+      bgListCard(theme, width, payload, expanded),
+    ),
     async execute(_toolCallId, params) {
       const includeSettled = params.include_settled !== false;
       const now = Date.now();
@@ -602,23 +730,32 @@ export default function (pi: ExtensionAPI) {
         .map((id) => jobs.get(id))
         .filter((job): job is BgJob => !!job)
         .filter((job) => includeSettled || job.status === "running");
+      const running = rows.filter((job) => job.status === "running").length;
+      const bg = {
+        jobs: rows.map((job) => jobView(job, false)),
+        running,
+        total: rows.length,
+        includeSettled,
+      };
 
       if (!rows.length) {
         return textResult(
           includeSettled
             ? "No background jobs."
             : "No running background jobs.",
+          false,
+          { bg },
         );
       }
 
       const lines = [
-        `background jobs (${rows.filter((j) => j.status === "running").length} running / ${rows.length} shown):`,
+        `background jobs (${running} running / ${rows.length} shown):`,
         ...rows.map((job) => {
           const cmd = cleanOneLine(job.command, LIST_CMD_CAP);
           return `${summarizeJob(job, now)}\n  cmd: ${cmd}`;
         }),
       ];
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), false, { bg });
     },
   });
 
@@ -632,20 +769,36 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
+    ...receipt("bg_kill", (theme, width, payload, expanded) =>
+      payload.job
+        ? bgJobCard(theme, width, payload.job, {
+            tool: "bg_kill",
+            expanded,
+            // A still-running job after bg_kill means the tree has not exited
+            // yet; say so rather than claiming it was killed.
+            label:
+              payload.job.status === "running" ? "stopping" : undefined,
+          })
+        : bgFallbackLines(theme, width, "bg_kill", payload.message, true),
+    ),
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
-      if (!id) return textResult("id is required.", true);
+      if (!id) {
+        return textResult("id is required.", true, {
+          bg: { message: "id is required." },
+        });
+      }
       const job = jobs.get(id);
       if (!job) {
-        return textResult(
-          `Unknown job "${id}". Use bg_list to see current jobs.`,
-          true,
-        );
+        const message = `Unknown job "${id}". Use bg_list to see current jobs.`;
+        return textResult(message, true, { bg: { message } });
       }
       const message = killJob(job, "bg_kill");
       // Give the tree a brief moment so status often reflects the kill.
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return textResult(`${message}\n\n${formatStatus(job)}`);
+      return textResult(`${message}\n\n${formatStatus(job)}`, false, {
+        bg: { job: jobView(job, true), message },
+      });
     },
   });
 
