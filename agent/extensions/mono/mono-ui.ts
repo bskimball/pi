@@ -15,8 +15,7 @@ import {
   type KeybindingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import * as Diff from "diff";
+import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import {
   fallbackTruncateToWidth,
   padStartToWidth,
@@ -24,121 +23,31 @@ import {
   safeVisibleWidth,
 } from "./lib/safe-text-layout.ts";
 import {
-  DURATION_COLUMN,
-  TREE,
+  boundedOutput,
+  reportRenderFailure,
+  toolRenderers,
+  type ToolRenderState,
+} from "./lib/tool-receipt.ts";
+import {
+  formatDiffStats,
+  generateDiffString,
+  normalizeToLF,
+  renderDiffLines,
+  resultDiff,
+} from "./lib/edit-diff.ts";
+// Re-export so callers that still look for installMcpPresentation on mono-ui
+// keep working; preferred import is ./lib/mcp-presentation.ts.
+export { installMcpPresentation } from "./lib/mcp-presentation.ts";
+import {
   cleanInline,
   fitLine,
-  formatDuration,
   formatTokens,
   stripAnsi,
-  textContent,
   type ToolRenderContext,
 } from "./lib/ui-common.ts";
 
 type BuiltinName = "read" | "bash" | "edit" | "write";
-interface BuiltinRenderState {
-  startedAt?: number;
-  endedAt?: number;
-  hasResult?: boolean;
-  callComponent?: StableText;
-}
-
-const reportedRenderFailures = new Set<string>();
-
-function reportRenderFailure(surface: string, error: unknown): void {
-  const message =
-    error instanceof Error ? error.stack || error.message : String(error);
-  const key = `${surface}:${message}`;
-  if (reportedRenderFailures.has(key)) return;
-  reportedRenderFailures.add(key);
-  const entry = `\n=== mono-ui ${surface} render fallback at ${new Date().toISOString()} ===\n${message}\n`;
-  void fs
-    .appendFile(path.join(os.homedir(), ".pi", "agent", "pi-render.log"), entry)
-    .catch(() => {});
-}
-
-class StableText implements Component {
-  private value: string | ((width: number) => string) = "";
-
-  /** Accepts a plain string or a width-aware builder for right-aligned columns. */
-  setText(value: unknown): void {
-    this.value =
-      typeof value === "function"
-        ? (value as (width: number) => string)
-        : typeof value === "string"
-          ? value
-          : String(value ?? "");
-  }
-
-  render(width: number): string[] {
-    try {
-      // Keep ANSI theme styling while clipping through the dependency-free
-      // layout path; no pi-tui Text/Segmenter code runs here.
-      const resolved =
-        typeof this.value === "function" ? this.value(width) : this.value;
-      if (!resolved) return [];
-      return resolved
-        .replace(/\t/g, "   ")
-        .split(/\r?\n/)
-        .slice(0, 100)
-        .map((line) => safeTruncateToWidth(line, width));
-    } catch (error) {
-      reportRenderFailure("tool", error);
-      return [fallbackTruncateToWidth("[tool output unavailable]", width)];
-    }
-  }
-
-  invalidate(): void {}
-}
-
-function stableText(text: unknown | ((width: number) => string)): StableText {
-  const component = new StableText();
-  component.setText(text);
-  return component;
-}
-
-/** Header lines followed by a full-width background-padded body block, matching
- * Pi's default expanded tool box (ctrl+o). */
-function paddedSection(
-  header: string[] | ((width: number) => string),
-  body: string[] | ((innerWidth: number) => string[]),
-  bg: (text: string) => string,
-): Component {
-  return {
-    render(width: number): string[] {
-      try {
-        const headerLines =
-          typeof header === "function" ? [header(width)] : header;
-        const lines = headerLines
-          .flatMap((line) => line.split(/\r?\n/))
-          .map((line) => safeTruncateToWidth(line.replace(/\t/g, "   "), width));
-        const bodyLines =
-          typeof body === "function" ? body(Math.max(0, width - 2)) : body;
-        if (bodyLines.length && width > 2) {
-          const innerWidth = width - 2;
-          const blank = bg(" ".repeat(width));
-          lines.push(blank);
-          for (const raw of bodyLines.slice(0, 200)) {
-            const clipped = safeTruncateToWidth(
-              raw.replace(/\t/g, "   "),
-              innerWidth,
-            );
-            const fill = " ".repeat(
-              Math.max(0, innerWidth - safeVisibleWidth(clipped)),
-            );
-            lines.push(bg(` ${clipped}${fill} `));
-          }
-          lines.push(blank);
-        }
-        return lines;
-      } catch (error) {
-        reportRenderFailure("tool", error);
-        return [fallbackTruncateToWidth("[tool output unavailable]", width)];
-      }
-    },
-    invalidate(): void {},
-  };
-}
+type BuiltinRenderState = ToolRenderState;
 
 function primaryArg(name: BuiltinName, args: any): string {
   if (name === "bash") return cleanInline(args?.command, 120);
@@ -146,358 +55,6 @@ function primaryArg(name: BuiltinName, args: any): string {
   if (name === "read" && args?.offset)
     return `${filePath}:${args.offset}${args?.limit ? `+${args.limit}` : ""}`;
   return filePath;
-}
-
-function boundedOutput(
-  text: string,
-  maxLines: number,
-  maxChars = 8000,
-): string[] {
-  const clean = text.replace(
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
-    "",
-  );
-  const totalLines = clean.split(/\r?\n/).length;
-  const lines = clean.slice(0, maxChars).split(/\r?\n/);
-  if (totalLines <= maxLines && clean.length <= maxChars) return lines;
-  const shown = lines.slice(0, maxLines);
-  const hiddenLines = Math.max(0, totalLines - shown.length);
-  const suffix = hiddenLines
-    ? `... ${hiddenLines} more lines`
-    : `... output truncated at ${maxChars} characters`;
-  return [...shown, suffix];
-}
-
-function normalizeToLF(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-/** Pi-style numbered contextual diff (local equivalent of edit-diff.generateDiffString). */
-function generateDiffString(
-  oldContent: string,
-  newContent: string,
-  contextLines = 4,
-): string {
-  const parts = Diff.diffLines(oldContent, newContent);
-  const output: string[] = [];
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-  const lineNumWidth = String(
-    Math.max(oldLines.length, newLines.length),
-  ).length;
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  let lastWasChange = false;
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    const raw = part.value.split("\n");
-    if (raw[raw.length - 1] === "") raw.pop();
-
-    if (part.added || part.removed) {
-      for (const line of raw) {
-        if (part.added) {
-          output.push(
-            `+${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`,
-          );
-          newLineNum++;
-        } else {
-          output.push(
-            `-${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-          );
-          oldLineNum++;
-        }
-      }
-      lastWasChange = true;
-      continue;
-    }
-
-    const nextPartIsChange =
-      i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
-    const hasLeadingChange = lastWasChange;
-    const hasTrailingChange = nextPartIsChange;
-
-    if (hasLeadingChange && hasTrailingChange) {
-      if (raw.length <= contextLines * 2) {
-        for (const line of raw) {
-          output.push(
-            ` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-          );
-          oldLineNum++;
-          newLineNum++;
-        }
-      } else {
-        const leading = raw.slice(0, contextLines);
-        const trailing = raw.slice(raw.length - contextLines);
-        const skipped = raw.length - leading.length - trailing.length;
-        for (const line of leading) {
-          output.push(
-            ` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-          );
-          oldLineNum++;
-          newLineNum++;
-        }
-        output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-        oldLineNum += skipped;
-        newLineNum += skipped;
-        for (const line of trailing) {
-          output.push(
-            ` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-          );
-          oldLineNum++;
-          newLineNum++;
-        }
-      }
-    } else if (hasLeadingChange) {
-      const shown = raw.slice(0, contextLines);
-      const skipped = raw.length - shown.length;
-      for (const line of shown) {
-        output.push(
-          ` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-        );
-        oldLineNum++;
-        newLineNum++;
-      }
-      if (skipped > 0) {
-        output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-        oldLineNum += skipped;
-        newLineNum += skipped;
-      }
-    } else if (hasTrailingChange) {
-      const skipped = Math.max(0, raw.length - contextLines);
-      if (skipped > 0) {
-        output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
-        oldLineNum += skipped;
-        newLineNum += skipped;
-      }
-      for (const line of raw.slice(skipped)) {
-        output.push(
-          ` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`,
-        );
-        oldLineNum++;
-        newLineNum++;
-      }
-    } else {
-      oldLineNum += raw.length;
-      newLineNum += raw.length;
-    }
-    lastWasChange = false;
-  }
-
-  return output.join("\n");
-}
-
-function parseDiffLine(
-  line: string,
-): { prefix: string; lineNum: string; content: string } | null {
-  const match = line.match(/^([+-\s])(\s*\d*)\s(.*)$/);
-  if (!match) return null;
-  return { prefix: match[1], lineNum: match[2], content: match[3] };
-}
-
-function replaceTabs(text: string): string {
-  return text.replace(/\t/g, "   ");
-}
-
-function countDiffStats(diffText: string): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (const line of diffText.split("\n")) {
-    const parsed = parseDiffLine(line);
-    if (!parsed) continue;
-    if (parsed.prefix === "+") added++;
-    else if (parsed.prefix === "-") removed++;
-  }
-  return { added, removed };
-}
-
-function formatDiffStats(
-  theme: { fg: (key: any, text: string) => string },
-  diffText: string | undefined,
-): string {
-  if (!diffText) return "";
-  const { added, removed } = countDiffStats(diffText);
-  if (added === 0 && removed === 0) return "";
-  const parts: string[] = [];
-  if (added > 0) parts.push(theme.fg("toolDiffAdded", `+${added}`));
-  if (removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${removed}`));
-  return parts.join(" ");
-}
-
-function renderIntraLineDiff(
-  oldContent: string,
-  newContent: string,
-  inverse: (text: string) => string,
-): { removedLine: string; addedLine: string } {
-  const wordDiff = Diff.diffWords(oldContent, newContent);
-  let removedLine = "";
-  let addedLine = "";
-  let isFirstRemoved = true;
-  let isFirstAdded = true;
-
-  for (const part of wordDiff) {
-    if (part.removed) {
-      let value = part.value;
-      if (isFirstRemoved) {
-        const leadingWs = value.match(/^(\s*)/)?.[1] || "";
-        value = value.slice(leadingWs.length);
-        removedLine += leadingWs;
-        isFirstRemoved = false;
-      }
-      if (value) removedLine += inverse(value);
-    } else if (part.added) {
-      let value = part.value;
-      if (isFirstAdded) {
-        const leadingWs = value.match(/^(\s*)/)?.[1] || "";
-        value = value.slice(leadingWs.length);
-        addedLine += leadingWs;
-        isFirstAdded = false;
-      }
-      if (value) addedLine += inverse(value);
-    } else {
-      removedLine += part.value;
-      addedLine += part.value;
-    }
-  }
-
-  return { removedLine, addedLine };
-}
-
-// The theme schema fixes the set of background tokens, so diff row backgrounds
-// are emitted as raw truecolor. These match GitHub Dark's diff surfaces and are
-// only ever applied to a full row, which keeps the padding math unchanged.
-const DIFF_ADDED_BG = "\x1b[48;2;3;35;18m";
-const DIFF_REMOVED_BG = "\x1b[48;2;51;13;16m";
-const DIFF_RESET = "\x1b[49m";
-
-/**
- * Paint a full-row background. The row is clipped and space-filled to rowWidth
- * first so every diff line paints an even block instead of a ragged one.
- */
-function diffRow(bg: string, text: string, rowWidth: number): string {
-  let row = text;
-  if (rowWidth > 0) {
-    row = safeTruncateToWidth(row, rowWidth);
-    row += " ".repeat(Math.max(0, rowWidth - safeVisibleWidth(row)));
-  }
-  // Re-assert the row background after any inner reset so intra-line inverse
-  // highlights cannot punch a hole in it.
-  return `${bg}${row.replace(/\x1b\[0m/g, `\x1b[0m${bg}`)}${DIFF_RESET}`;
-}
-
-/** Pi-style colored numbered diff with single-line intra-line inverse highlights. */
-function renderDiffLines(
-  diffText: string,
-  theme: {
-    fg: (key: any, text: string) => string;
-    inverse?: (text: string) => string;
-  },
-  maxLines = 80,
-  rowWidth = 0,
-): string[] {
-  const lines = diffText.split("\n");
-  const result: string[] = [];
-  let i = 0;
-  const inverse = theme.inverse?.bind(theme) ?? ((text: string) => text);
-  const added = (text: string) => diffRow(DIFF_ADDED_BG, text, rowWidth);
-  const removed = (text: string) => diffRow(DIFF_REMOVED_BG, text, rowWidth);
-
-  while (i < lines.length) {
-    const parsed = parseDiffLine(lines[i]);
-    if (!parsed) {
-      result.push(theme.fg("toolDiffContext", lines[i]));
-      i++;
-      continue;
-    }
-
-    if (parsed.prefix === "-") {
-      const removedLines: { lineNum: string; content: string }[] = [];
-      while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
-        if (!p || p.prefix !== "-") break;
-        removedLines.push({ lineNum: p.lineNum, content: p.content });
-        i++;
-      }
-      const addedLines: { lineNum: string; content: string }[] = [];
-      while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
-        if (!p || p.prefix !== "+") break;
-        addedLines.push({ lineNum: p.lineNum, content: p.content });
-        i++;
-      }
-
-      if (removedLines.length === 1 && addedLines.length === 1) {
-        const { removedLine, addedLine } = renderIntraLineDiff(
-          replaceTabs(removedLines[0].content),
-          replaceTabs(addedLines[0].content),
-          inverse,
-        );
-        result.push(
-          removed(
-            theme.fg(
-              "toolDiffRemoved",
-              `-${removedLines[0].lineNum} ${removedLine}`,
-            ),
-          ),
-        );
-        result.push(
-          added(
-            theme.fg("toolDiffAdded", `+${addedLines[0].lineNum} ${addedLine}`),
-          ),
-        );
-      } else {
-        for (const row of removedLines) {
-          result.push(
-            removed(
-              theme.fg(
-                "toolDiffRemoved",
-                `-${row.lineNum} ${replaceTabs(row.content)}`,
-              ),
-            ),
-          );
-        }
-        for (const row of addedLines) {
-          result.push(
-            added(
-              theme.fg(
-                "toolDiffAdded",
-                `+${row.lineNum} ${replaceTabs(row.content)}`,
-              ),
-            ),
-          );
-        }
-      }
-    } else if (parsed.prefix === "+") {
-      result.push(
-        added(
-          theme.fg(
-            "toolDiffAdded",
-            `+${parsed.lineNum} ${replaceTabs(parsed.content)}`,
-          ),
-        ),
-      );
-      i++;
-    } else {
-      result.push(
-        theme.fg(
-          "toolDiffContext",
-          ` ${parsed.lineNum} ${replaceTabs(parsed.content)}`,
-        ),
-      );
-      i++;
-    }
-  }
-
-  if (result.length <= maxLines) return result;
-  return [
-    ...result.slice(0, maxLines),
-    theme.fg("dim", `... ${result.length - maxLines} more lines`),
-  ];
-}
-
-function resultDiff(result: any): string | undefined {
-  const diff = result?.details?.diff;
-  return typeof diff === "string" && diff.length > 0 ? diff : undefined;
 }
 
 function resolveToolPath(filePath: string, cwd: string): string {
@@ -541,6 +98,52 @@ function registerBuiltin(
     return definition;
   };
   const base = get(process.cwd());
+  const isMutation = name === "edit" || name === "write";
+  // Theme for expanded mutation diffs is captured on each renderResult call.
+  let lastTheme:
+    | {
+        fg: (key: any, text: string) => string;
+        inverse?: (text: string) => string;
+      }
+    | undefined;
+
+  const ui = toolRenderers<any>({
+    surface: name,
+    title: name,
+    expandVerb: isMutation ? "diff" : "expand",
+    expandWhen: (result, _args, isError) =>
+      isMutation && !isError && !!resultDiff(result),
+    arg(args, budget) {
+      const rawArg = primaryArg(name, args);
+      return name === "bash"
+        ? safeTruncateToWidth(rawArg, budget)
+        : shortenPath(rawArg, budget);
+    },
+    stats(result, _args, theme) {
+      if (!isMutation) return "";
+      return formatDiffStats(theme, resultDiff(result));
+    },
+    preview(output) {
+      // Collapsed preview is bash-only; mutations show +/− stats, read is header-only.
+      if (name === "bash" && output) return boundedOutput(output, 3, 1200);
+      return [];
+    },
+    body(output, result, _args, innerWidth) {
+      if (isMutation) {
+        const diff = resultDiff(result);
+        // Pre-styled rows; the engine leaves ESC-bearing lines unpainted.
+        return diff
+          ? renderDiffLines(
+              diff,
+              lastTheme ?? { fg: (_k, t) => t },
+              80,
+              innerWidth,
+            )
+          : [];
+      }
+      return output ? boundedOutput(output, 80) : [];
+    },
+  });
 
   pi.registerTool({
     name,
@@ -590,53 +193,8 @@ function registerBuiltin(
         },
       };
     },
-    renderCall(
-      args,
-      theme,
-      context: ToolRenderContext<BuiltinRenderState, any>,
-    ) {
-      if (context.executionStarted && context.state.startedAt === undefined)
-        context.state.startedAt = Date.now();
-      const component = (context.state.callComponent ??= new StableText());
-      if (context.state.hasResult) {
-        component.setText("");
-        return component;
-      }
-
-      const glyph = context.executionStarted
-        ? theme.fg("warning", "●")
-        : theme.fg("dim", "○");
-      const startedAt = context.state.startedAt;
-      component.setText((width: number) => {
-        const elapsed = startedAt
-          ? theme.fg(
-              "dim",
-              padStartToWidth(
-                formatDuration(Date.now() - startedAt),
-                DURATION_COLUMN,
-              ),
-            )
-          : "";
-        // Each tool call is its own transcript item, so the row is a compact
-        // root: the status glyph is the only marker. No tree edges, which would
-        // falsely imply that separate tool calls are siblings in one tree.
-        const lead = `${glyph} ${theme.fg("toolTitle", name)}`;
-        const budget = Math.max(
-          8,
-          width -
-            safeVisibleWidth(lead) -
-            (elapsed ? safeVisibleWidth(elapsed) + 2 : 0) -
-            1,
-        );
-        const rawArg = primaryArg(name, args);
-        const arg =
-          name === "bash"
-            ? safeTruncateToWidth(rawArg, budget)
-            : shortenPath(rawArg, budget);
-        const left = `${lead} ${theme.fg("muted", arg)}`;
-        return elapsed ? fitLine(left, elapsed, width) : left;
-      });
-      return component;
+    renderCall(args, theme, context: ToolRenderContext<BuiltinRenderState, any>) {
+      return ui.renderCall(args, theme, context);
     },
     renderResult(
       result,
@@ -644,105 +202,10 @@ function registerBuiltin(
       theme,
       context: ToolRenderContext<BuiltinRenderState, any>,
     ) {
-      context.state.hasResult = true;
-      // Blank the call header so the tool is never listed twice; the result
-      // header below replaces it in place.
-      context.state.callComponent?.setText("");
-      const runningNow = options.isPartial && !context.isError;
-      if (!runningNow) context.state.endedAt ??= Date.now();
-
-      const glyph = runningNow
-        ? theme.fg("warning", "●")
-        : context.isError
-          ? theme.fg("error", "×")
-          : theme.fg("success", "✓");
-      const elapsed = context.state.startedAt
-        ? theme.fg(
-            "dim",
-            padStartToWidth(
-              formatDuration(
-                (context.state.endedAt ?? Date.now()) - context.state.startedAt,
-              ),
-              DURATION_COLUMN,
-            ),
-          )
-        : "";
-      const isMutation = name === "edit" || name === "write";
-      const diff =
-        !runningNow && !context.isError ? resultDiff(result) : undefined;
-      const stats = isMutation ? formatDiffStats(theme, diff) : "";
-      const expandHint =
-        isMutation && diff
-          ? theme.fg(
-              "dim",
-              options.expanded ? "ctrl+o collapse" : "ctrl+o diff",
-            )
-          : "";
-      const output = textContent(result).trim();
-      // The row is a self-contained receipt: no tree edge is drawn for it.
-      // Identity reads left to right (glyph, name, arg, stats, hint) and only
-      // the duration is right-anchored. The primary arg is budgeted first so a
-      // long path gives way to the stats instead of clipping them off the row.
-      const header = (width: number) => {
-        const tail = [stats, width >= 72 ? expandHint : ""].filter(Boolean);
-        const lead = `${glyph} ${theme.fg("toolTitle", name)}`;
-        const tailText = tail.join(" ");
-        const reserved =
-          safeVisibleWidth(lead) +
-          (tailText ? safeVisibleWidth(tailText) + 1 : 0) +
-          (elapsed ? safeVisibleWidth(elapsed) + 2 : 0) +
-          1;
-        const budget = Math.max(8, width - reserved);
-        const rawArg = primaryArg(name, context.args);
-        // Commands read from the front; paths carry their meaning in the tail,
-        // so shrink them from the left and keep the file name visible.
-        const arg =
-          name === "bash"
-            ? safeTruncateToWidth(rawArg, budget)
-            : shortenPath(rawArg, budget);
-        const left = [lead, theme.fg("muted", arg), tailText]
-          .filter(Boolean)
-          .join(" ");
-        return elapsed ? fitLine(left, elapsed, width) : left;
-      };
-      // A continuation rail appears only when there is actual body output. It
-      // hangs under the tool name rather than at the glyph column so the body
-      // reads as subordinate to this row, not as a branch of a larger tree.
-      const indent = (line: string) => `  ${theme.fg("dim", TREE.rail)} ${line}`;
-
-      if (context.isError) {
-        if (!output) return stableText(header);
-        const body = indent(theme.fg("error", cleanInline(output, 800)));
-        return stableText((width: number) => `${header(width)}\n${body}`);
-      }
-      if (runningNow) return stableText(header);
-
-      // Expanded sections render inside a padded background container, like
-      // Pi's default ctrl+o tool box.
-      if (options.expanded) {
-        const bg = (text: string) =>
-          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text);
-        const body = (innerWidth: number): string[] => {
-          if (isMutation)
-            return diff ? renderDiffLines(diff, theme, 80, innerWidth) : [];
-          if (output)
-            return boundedOutput(output, 80).map((line) =>
-              theme.fg("toolOutput", line),
-            );
-          return [];
-        };
-        return paddedSection(header, body, bg);
-      }
-
-      if (name === "bash" && output) {
-        const body = boundedOutput(output, 3, 1200).map((line) =>
-          indent(theme.fg("toolOutput", line)),
-        );
-        return stableText(
-          (width: number) => `${header(width)}\n${body.join("\n")}`,
-        );
-      }
-      return stableText(header);
+      lastTheme = theme;
+      // Preserve prior mutation error handling: single-line error rail (not full expand).
+      // The engine already supports error expand; keep behavior equivalent for bash/read.
+      return ui.renderResult(result, options, theme, context);
     },
   });
 }
@@ -956,6 +419,9 @@ export default function (pi: ExtensionAPI) {
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
   // the animation clock.
   pi.on("agent_start", (_event, ctx) => applyRandomWorkingIndicator(pi, ctx));
+
+  // MCP presentation is installed by agent/extensions/mcp-adapter.ts on the
+  // adapter's own ExtensionAPI — not here (per-extension tool maps).
 
   registerBuiltin(pi, "read", createReadToolDefinition);
   registerBuiltin(pi, "bash", createBashToolDefinition);

@@ -8,6 +8,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  fetchContentSpec,
+  getSearchContentSpec,
+  hostOf,
+  webSearchSpec,
+  webToolRenderers,
+} from "./mono/lib/web-search-ui.ts";
+
+// Mono receipts for these tools. Presentation lives in mono/lib/web-search-ui.ts
+// and reuses the same primitives as the built-in and MCP rows.
+const searchUi = webToolRenderers(webSearchSpec);
+const fetchUi = webToolRenderers(fetchContentSpec);
+const sliceUi = webToolRenderers(getSearchContentSpec);
 
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -184,7 +197,8 @@ export default function (pi: ExtensionAPI): void {
       numResults: Type.Optional(Type.Number()), includeContent: Type.Optional(Type.Boolean()),
       recencyFilter: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")])),
       domainFilter: Type.Optional(Type.Array(Type.String())), provider: Type.Optional(Type.String()), workflow: Type.Optional(Type.String()),
-    }), executionMode: "parallel",
+    }), executionMode: "parallel", renderShell: "self",
+    renderCall: searchUi.renderCall, renderResult: searchUi.renderResult,
     async execute(_id, params, signal) {
       const credential = requireKey();
       if ("error" in credential) return textResult(credential.error, {}, true);
@@ -214,7 +228,9 @@ export default function (pi: ExtensionAPI): void {
           `Query: ${group.query}`, "Exa search results:",
           ...(group.results.length ? group.results.map((result, index) => `${index + 1}. ${result.title}\n${result.url}${params.includeContent && result.text ? `\n${bound(result.text, 3_000)}` : ""}`) : ["No results found."]),
         ].join("\n\n")).join("\n\n---\n\n");
-        return textResult(bound(`${output}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId for stored result content.`, MAX_OUTPUT), { responseId, provider: "exa", queryCount: groups.length, numResults });
+        // resultCount/queries feed the Mono receipt stats. Non-sensitive only.
+        const resultCount = groups.reduce((total, group) => total + group.results.length, 0);
+        return textResult(bound(`${output}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId for stored result content.`, MAX_OUTPUT), { responseId, provider: "exa", queryCount: groups.length, resultCount, numResults });
       } catch (error) {
         return textResult(`Exa search error: ${redact(error instanceof Error ? error.message : String(error), credential.key)}`, {}, true);
       }
@@ -226,7 +242,8 @@ export default function (pi: ExtensionAPI): void {
     description: "Fetch readable text from one or more public HTTP(S) pages. Stores complete fetched content temporarily for get_search_content.",
     parameters: Type.Object({
       url: Type.Optional(Type.String()), urls: Type.Optional(Type.Array(Type.String())), forceClone: Type.Optional(Type.Boolean()), prompt: Type.Optional(Type.String()), timestamp: Type.Optional(Type.String()), frames: Type.Optional(Type.Boolean()), model: Type.Optional(Type.String()),
-    }), executionMode: "parallel",
+    }), executionMode: "parallel", renderShell: "self",
+    renderCall: fetchUi.renderCall, renderResult: fetchUi.renderResult,
     async execute(_id, params, signal) {
       const urls = [...(params.url?.trim() ? [params.url.trim()] : []), ...(params.urls ?? []).map((url) => url.trim()).filter(Boolean)];
       if (!urls.length) return textResult("url or urls is required.", {}, true);
@@ -237,9 +254,10 @@ export default function (pi: ExtensionAPI): void {
         const responseId = save({ kind: "fetch", createdAt: Date.now(), pages });
         if (pages.length === 1) {
           const page = pages[0]; const preview = bound(page.content, INLINE_LIMIT);
-          return textResult(`# ${page.title}\nSource: ${page.url}\n\n${preview}\n\nresponseId: ${responseId}${preview.length < page.content.length ? "\nContent is truncated; use get_search_content with this responseId and offset." : ""}`, { responseId, provider: "local", contentLength: page.content.length });
+          return textResult(`# ${page.title}\nSource: ${page.url}\n\n${preview}\n\nresponseId: ${responseId}${preview.length < page.content.length ? "\nContent is truncated; use get_search_content with this responseId and offset." : ""}`, { responseId, provider: "local", urlCount: 1, host: hostOf(page.url), contentLength: page.content.length });
         }
-        return textResult(`Fetched ${pages.length} pages.\n${pages.map((page, index) => `${index + 1}. ${page.title} — ${page.url} (${page.content.length} chars)`).join("\n")}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId and urlIndex to retrieve page text.`, { responseId, provider: "local", urlCount: pages.length });
+        // urlCount/contentLength/hosts feed the Mono receipt stats. Non-sensitive only.
+        return textResult(`Fetched ${pages.length} pages.\n${pages.map((page, index) => `${index + 1}. ${page.title} — ${page.url} (${page.content.length} chars)`).join("\n")}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId and urlIndex to retrieve page text.`, { responseId, provider: "local", urlCount: pages.length, hosts: pages.map((page) => hostOf(page.url)), contentLength: pages.reduce((total, page) => total + page.content.length, 0) });
       } catch (error) {
         return textResult(`Fetch error: ${redact(error instanceof Error ? error.message : String(error))}`, {}, true);
       }
@@ -251,7 +269,8 @@ export default function (pi: ExtensionAPI): void {
     description: "Retrieve a bounded slice of content stored by web_search or fetch_content using its responseId.",
     parameters: Type.Object({
       responseId: Type.String(), query: Type.Optional(Type.String()), queryIndex: Type.Optional(Type.Number()), url: Type.Optional(Type.String()), urlIndex: Type.Optional(Type.Number()), offset: Type.Optional(Type.Number()), limit: Type.Optional(Type.Number()),
-    }), executionMode: "parallel",
+    }), executionMode: "parallel", renderShell: "self",
+    renderCall: sliceUi.renderCall, renderResult: sliceUi.renderResult,
     async execute(_id, params) {
       const entry = store.get(params.responseId);
       if (!entry || Date.now() - entry.createdAt > STORE_TTL_MS) { store.delete(params.responseId); return textResult("Unknown or expired responseId. Search and fetch content is retained in memory for about one hour.", {}, true); }

@@ -18,6 +18,10 @@ import {
   stderrDiagnostic,
   type AgentDef,
 } from "./lib/agent-discovery.ts";
+import {
+  argsSummary,
+  missionFromPrompt,
+} from "./lib/task-view.ts";
 import { RpcClient } from "./lib/rpc-client.ts";
 import {
   killProcessTree,
@@ -29,12 +33,8 @@ import {
   extractAssistantText,
   formatAge,
 } from "./lib/text-bounds.ts";
+import { safeTruncateToWidth } from "./lib/safe-text-layout.ts";
 import {
-  padStartToWidth,
-  safeTruncateToWidth,
-} from "./lib/safe-text-layout.ts";
-import {
-  DURATION_COLUMN,
   TREE,
   WidthText,
   fitLine,
@@ -42,26 +42,55 @@ import {
   textContent,
   type ToolRenderContext,
 } from "./lib/ui-common.ts";
+import {
+  MAX_LIVE_WORKERS,
+  MAX_SETTLED_META,
+  MODEL_IDLE_MS,
+  RETRY_COMPACT_BUDGET_MS,
+  TOOL_IDLE_MS,
+  canStartWorker,
+  countLiveWorkers,
+  hasActiveTools,
+  isLiveLifecycle,
+  workerStateLabel,
+  type WorkerLifecycle,
+  type WorkerPhase,
+} from "./lib/worker-runtime.ts";
+import {
+  activityGlyph,
+  boundedRailTextLines,
+  buildTreeLines,
+  durationText,
+  type TreeRow,
+} from "./lib/task-card.ts";
+import {
+  detailRow,
+  emptyStateLines,
+  finiteNumber,
+  lifecycleKind,
+  metaText,
+  noteRow,
+  previewLines,
+  receiptHeader,
+  safeLine,
+  spanText,
+  statusLabel,
+  tailLines,
+  type StatusKind,
+} from "./lib/status-view.ts";
 
 // ---------------------------------------------------------------- constants
 
-const MAX_LIVE_WORKERS = 3;
-const MAX_SETTLED_META = 24;
+
 const MAX_ACTIVITIES = 40;
 const MAX_ERRORS = 12;
 const STATUS_TEXT_CAP = 4_000;
 const STATUS_LINE_CAP = 40;
 const RESULT_TEXT_CAP = 12_000;
 const RESULT_LINE_CAP = 120;
-const ACTIVITY_SUMMARY_CAP = 120;
-const LIST_MISSION_CAP = 100;
-
 const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
-const MODEL_IDLE_MS = 300_000;
-const TOOL_IDLE_MS = 900_000;
-/** Suspend ordinary idle while retry/compaction is active. */
-const RETRY_COMPACT_BUDGET_MS = 600_000;
+
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
@@ -81,17 +110,8 @@ const EXCLUDED_CHILD_TOOLS = [
   "wait",
 ].join(",");
 
-export type WorkerLifecycle =
-  | "starting"
-  | "running"
-  | "retrying"
-  | "compacting"
-  | "settled"
-  | "aborting"
-  | "failed"
-  | "closed";
-
-export type IdlePhase = "model" | "tool" | "retry" | "compacting" | "none";
+export type { WorkerLifecycle } from "./lib/worker-runtime.ts";
+type IdlePhase = WorkerPhase;
 
 interface Activity {
   id: string;
@@ -255,41 +275,6 @@ function ensureSessionDir(workerId: string): string {
   return dir;
 }
 
-function shortArgs(args: unknown): string {
-  try {
-    const text = JSON.stringify(args ?? {});
-    return cleanOneLine(text, ACTIVITY_SUMMARY_CAP);
-  } catch {
-    return cleanOneLine(String(args ?? ""), ACTIVITY_SUMMARY_CAP);
-  }
-}
-
-function missionFromPrompt(prompt: string): string {
-  return cleanOneLine(prompt, LIST_MISSION_CAP);
-}
-
-function isLiveLifecycle(lifecycle: WorkerLifecycle): boolean {
-  return (
-    lifecycle === "starting" ||
-    lifecycle === "running" ||
-    lifecycle === "retrying" ||
-    lifecycle === "compacting" ||
-    lifecycle === "aborting"
-  );
-}
-
-function hasActiveTools(worker: Worker): boolean {
-  return worker.runningById.size > 0 || worker.runningAnonymous.length > 0;
-}
-
-function workerStateLabel(view: WorkerView): string {
-  if (view.waitingUi.length) return "waiting for reply";
-  if (view.lifecycle === "running") {
-    if (view.phase === "tool") return "tool";
-    if (view.phase === "model") return "thinking";
-  }
-  return view.lifecycle;
-}
 
 function renderWorkerCard(
   view: WorkerView,
@@ -328,10 +313,7 @@ function renderWorkerCard(
 
     // Children are accumulated first so exactly one actual final child can own
     // TREE.last; every earlier child keeps TREE.branch.
-    const rows: Array<{
-      line: (rail: string) => string;
-      continuation?: string[];
-    }> = [];
+    const rows: TreeRow[] = [];
 
     const running = view.activities.filter((activity) => activity.status === "running");
     const completed = view.activities
@@ -339,19 +321,10 @@ function renderWorkerCard(
       .slice(expanded ? -12 : -3);
     const shown = [...completed, ...running].slice(expanded ? -16 : -4);
     for (const activity of shown) {
-      const glyph =
-        activity.status === "running"
-          ? theme.fg("warning", "●")
-          : activity.status === "error"
-            ? theme.fg("error", "×")
-            : theme.fg("success", "✓");
-      // Pad as plain text before coloring so ANSI never enters column math.
-      const elapsed = theme.fg(
-        "dim",
-        padStartToWidth(
-          formatDuration(activity.duration ?? Math.max(0, now - activity.startedAt)),
-          DURATION_COLUMN,
-        ),
+      const glyph = activityGlyph(theme, activity.status);
+      const elapsed = durationText(
+        theme,
+        activity.duration ?? Math.max(0, now - activity.startedAt),
       );
       rows.push({
         line: (rail) =>
@@ -422,28 +395,13 @@ function renderWorkerCard(
       });
     }
 
-    for (const line of headerPreview ?? []) {
-      lines.push(
-        safeTruncateToWidth(
-          `${theme.fg("dim", TREE.rail)}  ${theme.fg("toolOutput", line)}`,
-          width,
-        ),
-      );
-    }
-    for (let index = 0; index < rows.length; index++) {
-      const isLast = index === rows.length - 1;
-      lines.push(rows[index].line(isLast ? TREE.last : TREE.branch));
-      const prefix = isLast ? TREE.hang : `${theme.fg("dim", TREE.rail)}  `;
-      for (const line of rows[index].continuation ?? []) {
-        lines.push(
-          safeTruncateToWidth(
-            `${prefix}${theme.fg("toolOutput", line)}`,
-            width,
-          ),
-        );
-      }
-    }
-    return lines;
+    return buildTreeLines(
+      theme,
+      width,
+      lines[0],
+      rows,
+      boundedRailTextLines(theme, width, headerPreview ?? []),
+    );
   }, "[async worker display unavailable]");
 }
 
@@ -455,6 +413,176 @@ function viewFromDetails(details: unknown): WorkerView | undefined {
   return typeof view.id === "string" && typeof view.agent === "string"
     ? view
     : undefined;
+}
+
+/* ----------------------------------------------------------------
+ * Control receipts (task_status / task_list / task_send / task_abort /
+ * task_reply). These are deliberately compact: the worker's own story is told
+ * by the pinned task_start card, so a control call only reports what it did.
+ * Everything is built from structured `details`, never from the human text.
+ * ---------------------------------------------------------------- */
+
+function detailRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+interface ControlReceipt {
+  id?: string;
+  /** Operation/mode being performed: `steer`, `confirm`, `3 live`… */
+  operation?: string;
+  meta?: string;
+  kind: StatusKind;
+  /** Outcome word for the right rail (defaults to the kind's label). */
+  label?: string;
+  /** One short bounded message. */
+  message?: string;
+  /** Extra dim rows; bounded and only widened when expanded. */
+  notes?: readonly string[];
+  duration?: string;
+}
+
+function controlLines(
+  theme: any,
+  width: number,
+  tool: string,
+  receipt: ControlReceipt,
+  expanded: boolean,
+): string[] {
+  const header = receiptHeader(theme, width, {
+    tool,
+    id: receipt.id,
+    subject: receipt.operation,
+    meta: receipt.meta,
+    kind: receipt.kind,
+    label: receipt.label,
+    duration: receipt.duration,
+    rootGlyph: TREE.receipt,
+  });
+  const rows: TreeRow[] = [];
+  if (receipt.message) {
+    rows.push(
+      noteRow(
+        theme,
+        width,
+        receipt.message,
+        receipt.kind === "failed" ? "error" : "muted",
+      ),
+    );
+  }
+  for (const note of (receipt.notes ?? []).slice(0, expanded ? 6 : 2)) {
+    rows.push(noteRow(theme, width, note));
+  }
+  return rows.length ? buildTreeLines(theme, width, header, rows) : [header];
+}
+
+/** Compact receipt for a result that carries no usable structured details. */
+function controlFallbackLines(
+  theme: any,
+  width: number,
+  tool: string,
+  text: unknown,
+  isError: boolean,
+): string[] {
+  const header = receiptHeader(theme, width, {
+    tool,
+    kind: isError ? "failed" : "unknown",
+    rootGlyph: TREE.receipt,
+  });
+  const lines = tailLines(text, 3, 300);
+  if (!lines.length) return [header];
+  return [
+    header,
+    ...previewLines(theme, width, lines, isError ? "error" : "toolOutput"),
+  ];
+}
+
+/** One-line call row shown while a control tool is in flight. */
+function controlCallLine(
+  theme: any,
+  width: number,
+  tool: string,
+  args: unknown,
+  started: boolean,
+): string {
+  const raw = detailRecord(args);
+  const id = safeLine(raw?.id, 40);
+  const operation = safeLine(raw?.mode ?? raw?.request_id, 60);
+  return receiptHeader(theme, width, {
+    tool,
+    id: id || undefined,
+    subject: operation || undefined,
+    kind: started ? "running" : "queued",
+    label: started ? "working" : "queued",
+    rootGlyph: TREE.receipt,
+  });
+}
+
+/**
+ * Shared call/result wiring for the control tools: the call row is blanked as
+ * soon as a result exists, and every builder runs inside WidthText so a throw
+ * degrades to one bounded fallback line.
+ */
+function controlRenderers(
+  tool: string,
+  build: (
+    result: any,
+    theme: any,
+    width: number,
+    expanded: boolean,
+  ) => string[],
+) {
+  return {
+    renderShell: "self" as const,
+    renderCall(
+      args: any,
+      theme: any,
+      context: ToolRenderContext<AsyncRenderState, any>,
+    ): Component {
+      return new WidthText(
+        (width) =>
+          context.state.hasResult
+            ? []
+            : [controlCallLine(theme, width, tool, args, context.executionStarted)],
+        `[${tool} call unavailable]`,
+      );
+    },
+    renderResult(
+      result: any,
+      options: { expanded: boolean; isPartial: boolean },
+      theme: any,
+      context: ToolRenderContext<AsyncRenderState, any>,
+    ): Component {
+      context.state.hasResult = true;
+      return new WidthText(
+        (width) => build(result, theme, width, context.expanded || options.expanded),
+        `[${tool} result unavailable]`,
+      );
+    },
+  };
+}
+
+/** Map a control outcome word onto the shared status vocabulary. */
+function outcomeKind(outcome: string): StatusKind {
+  switch (outcome) {
+    case "accepted":
+    case "delivered":
+    case "cancelled":
+    case "settled":
+      return "succeeded";
+    case "queued":
+      return "waiting";
+    case "rejected":
+    case "failed":
+    case "escalated":
+    case "unconfirmed":
+      return "failed";
+    case "noop":
+      return "unknown";
+    default:
+      return "unknown";
+  }
 }
 
 function renderLaunchReceipt(view: WorkerView, theme: any): Component {
@@ -486,8 +614,7 @@ export default function (pi: ExtensionAPI) {
   let agentBusy = false;
   let shuttingDown = false;
 
-  const liveCount = () =>
-    [...workers.values()].filter((w) => w.countsTowardCap && !w.closed).length;
+  const liveCount = () => countLiveWorkers(workers.values());
 
   const pruneSettled = () => {
     const settled = order
@@ -1021,7 +1148,7 @@ export default function (pi: ExtensionAPI) {
         const activity: Activity = {
           id: callId ?? `anon#${worker.anonymousSeq++}`,
           tool: cleanOneLine(event.toolName, 40),
-          summary: shortArgs(event.args),
+          summary: argsSummary(event.args),
           status: "running",
           startedAt: Date.now(),
         };
@@ -1545,7 +1672,7 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
-      if (liveCount() >= MAX_LIVE_WORKERS) {
+      if (!canStartWorker(workers.values())) {
         return textResult(
           `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a worker with task_close first. Persistent workers count against the cap until closed.`,
           true,
@@ -1669,8 +1796,55 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
         lifecycle: worker.lifecycle,
         generation: worker.generation,
         turns: worker.turns,
+        worker: workerView(worker),
       });
     },
+    ...controlRenderers("task_status", (result, theme, width, expanded) => {
+      const view = viewFromDetails(result?.details);
+      if (!view) {
+        return controlFallbackLines(
+          theme,
+          width,
+          "task_status",
+          textContent(result),
+          Boolean(result?.isError),
+        );
+      }
+      // An observed worker that already owns a pinned task_start card must not
+      // get a second full card here; report the observation compactly instead.
+      if (workers.get(view.id)?.hasPinnedSurface) {
+        const running = view.activities.filter(
+          (activity) => activity.status === "running",
+        ).length;
+        return controlLines(
+          theme,
+          width,
+          "task_status",
+          {
+            id: view.id,
+            operation: "observe",
+            meta: metaText([
+              view.agent,
+              `gen ${view.generation}`,
+              `${view.turns}/${view.maxTurns} turns`,
+              running ? `${running} running` : undefined,
+              view.waitingUi.length
+                ? `${view.waitingUi.length} awaiting reply`
+                : undefined,
+            ]),
+            kind: lifecycleKind(view.lifecycle),
+            label: workerStateLabel(view),
+            message: view.killReason
+              ? cleanOneLine(view.killReason, 200)
+              : undefined,
+            notes: tailLines(view.latestText, expanded ? 4 : 1, 200),
+            duration: spanText(view.createdAt, undefined, Date.now()),
+          },
+          expanded,
+        );
+      }
+      return renderWorkerCard(view, theme, expanded).render(width);
+    }),
   });
 
   pi.registerTool({
@@ -1699,15 +1873,28 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
           return w.countsTowardCap && !w.closed;
         });
 
+      const live = rows.filter((w) => w.countsTowardCap && !w.closed).length;
+      // The renderer reads this structured list; it never parses the text body.
+      const listDetails = {
+        list: {
+          includeSettled,
+          live,
+          total: rows.length,
+          maxWorkers: MAX_LIVE_WORKERS,
+          workers: rows.map((w) => workerView(w)),
+        },
+      };
+
       if (!rows.length) {
         return textResult(
           includeSettled
             ? "No async RPC workers."
             : "No live async RPC workers.",
+          false,
+          listDetails,
         );
       }
 
-      const live = rows.filter((w) => w.countsTowardCap && !w.closed).length;
       const lines = [
         `async RPC workers (${live} live / ${rows.length} shown; cap ${MAX_LIVE_WORKERS}):`,
         ...rows.map((w) => {
@@ -1719,8 +1906,79 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
           return `${w.id}  ${w.lifecycle.padEnd(10)} agent=${w.agent} model=${w.model ?? "default"} gen=${w.generation} turns=${w.turns} cap=${w.countsTowardCap} age=${age} last=${last}  ${w.mission}`;
         }),
       ];
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), false, listDetails);
     },
+    ...controlRenderers("task_list", (result, theme, width, expanded) => {
+      const list = detailRecord(detailRecord(result?.details)?.list);
+      const views = Array.isArray(list?.workers)
+        ? (list.workers as unknown[])
+            .map(viewFromDetails)
+            .filter((view): view is WorkerView => !!view)
+        : undefined;
+      if (!views) {
+        return controlFallbackLines(
+          theme,
+          width,
+          "task_list",
+          textContent(result),
+          Boolean(result?.isError),
+        );
+      }
+      const includeSettled = list?.includeSettled !== false;
+      if (!views.length) {
+        return emptyStateLines(
+          theme,
+          width,
+          "task_list",
+          includeSettled ? "no async workers" : "nothing live",
+          "task_start launches a specialist worker and returns a task_N handle.",
+        );
+      }
+
+      const now = Date.now();
+      const live =
+        finiteNumber(list?.live) ??
+        views.filter((view) => view.countsTowardCap).length;
+      const max = finiteNumber(list?.maxWorkers) ?? MAX_LIVE_WORKERS;
+      const header = receiptHeader(theme, width, {
+        tool: "task_list",
+        subject: `${live}/${max} live`,
+        meta: metaText([
+          views.length !== live ? `${views.length} shown` : undefined,
+          includeSettled ? undefined : "live only",
+        ]),
+      });
+
+      const limit = expanded ? 24 : 8;
+      const shown = views.slice(-limit);
+      const hidden = views.length - shown.length;
+      const rows: TreeRow[] = [];
+      if (hidden > 0) {
+        rows.push(noteRow(theme, width, `${hidden} older workers hidden`, "muted"));
+      }
+      for (const view of shown) {
+        const kind = lifecycleKind(view.lifecycle);
+        rows.push(
+          detailRow(theme, width, {
+            kind,
+            id: view.id,
+            // Missions are capped hard here so the state metadata to the right
+            // survives at normal terminal widths.
+            text: cleanOneLine(view.mission || view.agent, expanded ? 90 : 48),
+            detail: metaText([
+              view.agent,
+              workerStateLabel(view),
+              `gen ${view.generation}`,
+              `${view.turns}/${view.maxTurns} turns`,
+              view.countsTowardCap ? "holds slot" : undefined,
+              expanded ? view.model : undefined,
+            ]),
+            duration: spanText(view.createdAt, undefined, now),
+          }),
+        );
+      }
+      return buildTreeLines(theme, width, header, rows);
+    }),
   });
 
   pi.registerTool({
@@ -1756,18 +2014,37 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const id = params.id?.trim();
       const message = params.message?.trim();
       const mode = params.mode;
-      if (!id) return textResult("id is required.", true);
-      if (!message) return textResult("message is required.", true);
-      if (!mode) return textResult("mode is required.", true);
+      // Structured send receipt: the renderer reads this instead of the prose.
+      const sendDetails = (outcome: string, note?: string) => ({
+        send: {
+          id: id ?? "",
+          mode: mode ?? "",
+          outcome,
+          note,
+          message,
+          lifecycle: workers.get(id ?? "")?.lifecycle,
+          pendingSteer: workers.get(id ?? "")?.pendingSteer,
+          pendingFollowUp: workers.get(id ?? "")?.pendingFollowUp,
+        },
+      });
+      if (!id) return textResult("id is required.", true, sendDetails("rejected", "id is required"));
+      if (!message)
+        return textResult("message is required.", true, sendDetails("rejected", "message is required"));
+      if (!mode)
+        return textResult("mode is required.", true, sendDetails("rejected", "mode is required"));
       const worker = workers.get(id);
       if (!worker) {
-        return textResult(`Unknown worker "${id}".`, true);
+        return textResult(`Unknown worker "${id}".`, true, sendDetails("rejected", "unknown worker"));
       }
       if (worker.closed || worker.lifecycle === "closed") {
-        return textResult(`${id} is closed.`, true);
+        return textResult(`${id} is closed.`, true, sendDetails("rejected", "worker closed"));
       }
       if (!worker.client || worker.client.isClosed) {
-        return textResult(`${id} has no live RPC connection.`, true);
+        return textResult(
+          `${id} has no live RPC connection.`,
+          true,
+          sendDetails("rejected", "no live RPC connection"),
+        );
       }
 
       if (mode === "prompt") {
@@ -1775,6 +2052,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           return textResult(
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
             true,
+            sendDetails("rejected", `worker is ${worker.lifecycle}; prompt needs settled`),
           );
         }
         try {
@@ -1790,6 +2068,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             return textResult(
               `${id} prompt rejected: ${response.error ?? "unknown"}`,
               true,
+              sendDetails("rejected", response.error ?? "unknown"),
             );
           }
           return textResult(
@@ -1798,10 +2077,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               `lifecycle: ${worker.lifecycle}`,
               "A new generation is running.",
             ].join("\n"),
+            false,
+            sendDetails("accepted", `generation ${worker.generation} running`),
           );
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          return textResult(`${id} prompt failed: ${msg}`, true);
+          return textResult(`${id} prompt failed: ${msg}`, true, sendDetails("failed", msg));
         }
       }
 
@@ -1826,6 +2107,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               return textResult(
                 `${id} steer rejected: ${fallback.error ?? response.error ?? "unknown"}`,
                 true,
+                sendDetails("rejected", fallback.error ?? response.error ?? "unknown"),
               );
             }
           }
@@ -1838,10 +2120,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               `lifecycle: ${worker.lifecycle}`,
               `pending_steer (local estimate): ${worker.pendingSteer}`,
             ].join("\n"),
+            false,
+            sendDetails("queued", "delivered at the next model-call boundary"),
           );
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          return textResult(`${id} steer failed: ${msg}`, true);
+          return textResult(`${id} steer failed: ${msg}`, true, sendDetails("failed", msg));
         }
       }
 
@@ -1864,6 +2148,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             return textResult(
               `${id} follow_up rejected: ${fallback.error ?? response.error ?? "unknown"}`,
               true,
+              sendDetails("rejected", fallback.error ?? response.error ?? "unknown"),
             );
           }
         }
@@ -1875,12 +2160,50 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             `lifecycle: ${worker.lifecycle}`,
             `pending_follow_up (local estimate): ${worker.pendingFollowUp}`,
           ].join("\n"),
+          false,
+          sendDetails("queued", "delivered after the worker settles"),
         );
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return textResult(`${id} follow_up failed: ${msg}`, true);
+        return textResult(`${id} follow_up failed: ${msg}`, true, sendDetails("failed", msg));
       }
     },
+    ...controlRenderers("task_send", (result, theme, width, expanded) => {
+      const send = detailRecord(detailRecord(result?.details)?.send);
+      if (!send) {
+        return controlFallbackLines(
+          theme,
+          width,
+          "task_send",
+          textContent(result),
+          Boolean(result?.isError),
+        );
+      }
+      const outcome = safeLine(send.outcome, 20) || "unknown";
+      const pending = finiteNumber(
+        send.mode === "follow_up" ? send.pendingFollowUp : send.pendingSteer,
+      );
+      return controlLines(
+        theme,
+        width,
+        "task_send",
+        {
+          id: safeLine(send.id, 40) || undefined,
+          operation: safeLine(send.mode, 20) || undefined,
+          meta: metaText([
+            safeLine(send.lifecycle, 20) || undefined,
+            outcome === "queued" && pending !== undefined
+              ? `${pending} pending`
+              : undefined,
+          ]),
+          kind: outcomeKind(outcome),
+          label: outcome,
+          message: safeLine(send.note, 200) || undefined,
+          notes: expanded ? tailLines(send.message, 3, 200) : [],
+        },
+        expanded,
+      );
+    }),
   });
 
   pi.registerTool({
@@ -2155,13 +2478,29 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     executionMode: "parallel",
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
-      if (!id) return textResult("id is required.", true);
+      const abortDetails = (
+        outcome: string,
+        note: string,
+        extra?: Record<string, unknown>,
+      ) => ({
+        abort: { id: id ?? "", outcome, note, ...extra },
+      });
+      if (!id)
+        return textResult("id is required.", true, abortDetails("rejected", "id is required"));
       const worker = workers.get(id);
       if (!worker) {
-        return textResult(`Unknown worker "${id}".`, true);
+        return textResult(
+          `Unknown worker "${id}".`,
+          true,
+          abortDetails("rejected", "unknown worker"),
+        );
       }
       if (worker.closed || worker.lifecycle === "closed") {
-        return textResult(`${id} is already closed.`, true);
+        return textResult(
+          `${id} is already closed.`,
+          true,
+          abortDetails("rejected", "worker already closed"),
+        );
       }
       if (
         worker.lifecycle === "settled" ||
@@ -2169,6 +2508,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       ) {
         return textResult(
           `${id} is already ${worker.lifecycle}; nothing to abort.\n\n${formatWorkerStatus(worker)}`,
+          false,
+          {
+            worker: workerView(worker),
+            waiting: false,
+            ...abortDetails("noop", `already ${worker.lifecycle}; nothing to abort`),
+          },
         );
       }
 
@@ -2186,7 +2531,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             formatWorkerStatus(worker),
           ].join("\n"),
           !outcome.exited,
-          { worker: workerView(worker), waiting: false },
+          {
+            worker: workerView(worker),
+            waiting: false,
+            ...abortDetails(
+              outcome.exited ? "escalated" : "unconfirmed",
+              outcome.exited
+                ? "process tree killed; exit confirmed"
+                : "process tree kill requested; exit not confirmed, slot still held",
+              { cooperative: outcome.cooperative, escalated: true, exited: outcome.exited },
+            ),
+          },
         );
       }
 
@@ -2199,9 +2554,53 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           formatWorkerStatus(worker),
         ].join("\n"),
         false,
-        { worker: workerView(worker), waiting: false },
+        {
+          worker: workerView(worker),
+          waiting: false,
+          ...abortDetails(
+            "settled",
+            "stopped cooperatively; worker/session preserved for task_send or task_close",
+            { cooperative: outcome.cooperative, escalated: false, exited: outcome.exited },
+          ),
+        },
       );
     },
+    ...controlRenderers("task_abort", (result, theme, width, expanded) => {
+      const abort = detailRecord(detailRecord(result?.details)?.abort);
+      if (!abort) {
+        return controlFallbackLines(
+          theme,
+          width,
+          "task_abort",
+          textContent(result),
+          Boolean(result?.isError),
+        );
+      }
+      const view = viewFromDetails(result?.details);
+      const outcome = safeLine(abort.outcome, 20) || "unknown";
+      return controlLines(
+        theme,
+        width,
+        "task_abort",
+        {
+          id: safeLine(abort.id, 40) || undefined,
+          operation: abort.escalated === true ? "force kill" : "cooperative abort",
+          meta: metaText([
+            view ? `${view.agent}` : undefined,
+            view ? statusLabel(lifecycleKind(view.lifecycle)) : undefined,
+            view && !view.countsTowardCap ? "slot released" : undefined,
+          ]),
+          kind: outcomeKind(outcome),
+          label: outcome,
+          message: safeLine(abort.note, 200) || undefined,
+          notes:
+            expanded && view?.killReason
+              ? [cleanOneLine(view.killReason, 200)]
+              : [],
+        },
+        expanded,
+      );
+    }),
   });
 
   pi.registerTool({
@@ -2288,7 +2687,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const view = details?.worker;
       const close = details?.close;
       if (!view || !close) {
-        return new WidthText(() => [textContent(result) || "(no output)"]);
+        return new WidthText(
+          (width) =>
+            controlFallbackLines(
+              theme,
+              width,
+              "task_close",
+              textContent(result),
+              Boolean((result as { isError?: boolean }).isError),
+            ),
+          "[task_close result unavailable]",
+        );
       }
       // A pinned worker reports completion inside its canonical card. Keep the
       // task_close tool surface silent; legacy/unpinned workers retain this
@@ -2361,20 +2770,48 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       const requestId = params.request_id?.trim();
-      if (!id) return textResult("id is required.", true);
-      if (!requestId) return textResult("request_id is required.", true);
+      const replyDetails = (
+        outcome: string,
+        note: string,
+        method?: string,
+      ) => ({
+        reply: {
+          id: id ?? "",
+          requestId: requestId ?? "",
+          method,
+          outcome,
+          note,
+        },
+      });
+      if (!id)
+        return textResult("id is required.", true, replyDetails("rejected", "id is required"));
+      if (!requestId)
+        return textResult(
+          "request_id is required.",
+          true,
+          replyDetails("rejected", "request_id is required"),
+        );
       const worker = workers.get(id);
       if (!worker) {
-        return textResult(`Unknown worker "${id}".`, true);
+        return textResult(
+          `Unknown worker "${id}".`,
+          true,
+          replyDetails("rejected", "unknown worker"),
+        );
       }
       if (worker.closed || !worker.client || worker.client.isClosed) {
-        return textResult(`${id} has no live RPC connection.`, true);
+        return textResult(
+          `${id} has no live RPC connection.`,
+          true,
+          replyDetails("rejected", "no live RPC connection"),
+        );
       }
       const pending = worker.pendingUi.get(requestId);
       if (!pending) {
         return textResult(
           `No waiting UI request "${requestId}" on ${id}. Use task_status to list waiting_ui_requests.`,
           true,
+          replyDetails("rejected", "no such waiting UI request"),
         );
       }
 
@@ -2391,6 +2828,11 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
           return textResult(
             `value is required for method ${pending.method} (or set cancelled=true).`,
             true,
+            replyDetails(
+              "rejected",
+              `value is required for ${pending.method}`,
+              pending.method,
+            ),
           );
         }
         response.value = params.value;
@@ -2398,13 +2840,55 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
       const ok = worker.client.write(response);
       if (!ok) {
-        return textResult(`${id} failed to write extension_ui_response.`, true);
+        return textResult(
+          `${id} failed to write extension_ui_response.`,
+          true,
+          replyDetails("failed", "could not write the response", pending.method),
+        );
       }
       worker.pendingUi.delete(requestId);
+      const answer = params.cancelled
+        ? "cancelled"
+        : pending.method === "confirm"
+          ? `confirmed=${params.confirmed === true}`
+          : cleanOneLine(params.value, 120);
       return textResult(
         `${id} replied to UI request ${requestId} (method=${pending.method}).`,
+        false,
+        replyDetails(
+          params.cancelled ? "cancelled" : "delivered",
+          answer,
+          pending.method,
+        ),
       );
     },
+    ...controlRenderers("task_reply", (result, theme, width, expanded) => {
+      const reply = detailRecord(detailRecord(result?.details)?.reply);
+      if (!reply) {
+        return controlFallbackLines(
+          theme,
+          width,
+          "task_reply",
+          textContent(result),
+          Boolean(result?.isError),
+        );
+      }
+      const outcome = safeLine(reply.outcome, 20) || "unknown";
+      return controlLines(
+        theme,
+        width,
+        "task_reply",
+        {
+          id: safeLine(reply.id, 40) || undefined,
+          operation: safeLine(reply.method, 20) || "reply",
+          meta: metaText([safeLine(reply.requestId, 40) || undefined]),
+          kind: outcomeKind(outcome),
+          label: outcome,
+          message: safeLine(reply.note, 200) || undefined,
+        },
+        expanded,
+      );
+    }),
   });
 
   // ------------------------------------------------------------ lifecycle

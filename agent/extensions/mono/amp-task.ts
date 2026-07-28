@@ -21,6 +21,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  agentProvider,
+  discoverAgents,
+  modelAttempts,
+  qualifyModel,
+  readSharedFile,
+  stderrDiagnostic,
+  type AgentDef,
+} from "./lib/agent-discovery.ts";
+import { missionFromPrompt, shortArgs } from "./lib/task-view.ts";
+import {
   padStartToWidth,
   safeTruncateToWidth,
   safeVisibleWidth,
@@ -36,122 +46,10 @@ import {
   textContent,
   type ToolRenderContext,
 } from "./lib/ui-common.ts";
-
-// ---------------------------------------------------------------- agents
-
-interface AgentDef {
-  name: string;
-  description: string;
-  model?: string;
-  fallbackModels: string[];
-  thinking?: string;
-  tools?: string;
-  maxTurns?: number;
-  timeoutSec?: number;
-  /** Skills are prompt-injected and read via the read tool; false passes --no-skills. */
-  inheritSkills: boolean;
-  body: string;
-  file: string;
-}
-
-const AGENT_DIRS = [
-  path.join(getAgentDir(), "agents"),
-  path.join(process.cwd(), ".pi", "agents"),
-];
-
-function parseAgentFile(file: string): AgentDef | undefined {
-  try {
-    const raw = fs.readFileSync(file, "utf8");
-    const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-    if (!m) return undefined;
-    const fm = m[1];
-    const body = m[2].trim();
-    const get = (key: string): string | undefined => {
-      const line = fm.match(new RegExp(`^${key}:[ \\t]*(.+)$`, "m"));
-      return line ? line[1].trim() : undefined;
-    };
-    const getList = (key: string): string[] => {
-      const inline = get(key);
-      const clean = (value: string) =>
-        value
-          .trim()
-          .replace(/^(["'])(.*)\1$/, "$2")
-          .trim();
-      if (inline) {
-        return inline
-          .replace(/^\[|\]$/g, "")
-          .split(",")
-          .map(clean)
-          .filter(Boolean);
-      }
-      const block = fm.match(
-        new RegExp(`^${key}:[ \\t]*\\r?\\n((?:[ \\t]+-.*(?:\\r?\\n|$))+)`, "m"),
-      );
-      if (!block) return [];
-      return block[1]
-        .split(/\r?\n/)
-        .map((line) =>
-          clean(line.match(/^[ \t]+-[ \t]*(.+?)[ \t]*$/)?.[1] ?? ""),
-        )
-        .filter(Boolean);
-    };
-    return {
-      name: get("name") ?? path.basename(file, ".md"),
-      description: get("description") ?? "",
-      model: get("model"),
-      fallbackModels: getList("fallbackModels"),
-      thinking: get("thinking"),
-      tools: get("tools"),
-      maxTurns: get("maxTurns")
-        ? Number(get("maxTurns")) || undefined
-        : undefined,
-      timeoutSec: get("timeoutSec")
-        ? Number(get("timeoutSec")) || undefined
-        : undefined,
-      inheritSkills: get("inheritSkills") !== "false",
-      body,
-      file,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function discoverAgents(): Map<string, AgentDef> {
-  const agents = new Map<string, AgentDef>();
-  for (const dir of AGENT_DIRS) {
-    let files: string[] = [];
-    try {
-      files = fs
-        .readdirSync(dir)
-        .filter((f) => f.endsWith(".md") && !f.startsWith("_"));
-    } catch {
-      continue;
-    }
-    for (const file of files) {
-      const def = parseAgentFile(path.join(dir, file));
-      if (def) agents.set(def.name, def);
-    }
-  }
-  return agents;
-}
-
-// Shared files in the agents dirs (project overrides global):
-// _shared.md is prepended to every agent's system prompt; _handoff.md is
-// passed via --append-system-prompt so only subagents get it.
-function readSharedFile(name: string): string | undefined {
-  for (const dir of [...AGENT_DIRS].reverse()) {
-    try {
-      const text = fs.readFileSync(path.join(dir, name), "utf8").trim();
-      if (text) return text;
-    } catch {
-      // keep looking
-    }
-  }
-  return undefined;
-}
+import { activityGlyph, durationText } from "./lib/task-card.ts";
 
 // ---------------------------------------------------------------- visual helpers
+
 
 const RESET = "\x1b[0m";
 const ansiFg = (hex: string, text: string) => {
@@ -214,107 +112,6 @@ function loadThemeAgentHues(): Record<string, string> {
 const AGENT_HUES = loadThemeAgentHues();
 const agentHue = (agent: string): string =>
   AGENT_HUES[agent.toLowerCase()] ?? AGENT_HUES.fallback ?? "#8b949e";
-
-function missionFromPrompt(prompt: string): string {
-  const lines = prompt
-    .split(/\r?\n/)
-    .map((line) => cleanInline(line, 180))
-    .filter(Boolean);
-  const goal = lines.find((line) => /^goal\s*:/i.test(line));
-  return cleanInline(
-    (goal ?? lines[0] ?? "Mission").replace(/^goal\s*:\s*/i, ""),
-    140,
-  );
-}
-
-function shortArgs(args: unknown): string {
-  try {
-    const a = args as Record<string, unknown>;
-    return cleanInline(
-      a?.command ??
-        a?.path ??
-        a?.pattern ??
-        a?.url ??
-        a?.query ??
-        a?.prompt ??
-        "",
-      100,
-    );
-  } catch {
-    return "";
-  }
-}
-
-function modelProvider(model: string | undefined): string | undefined {
-  if (!model) return undefined;
-  const slash = model.indexOf("/");
-  return slash > 0 ? model.slice(0, slash) : undefined;
-}
-
-function agentProvider(def: AgentDef | undefined): string | undefined {
-  // A bare override inherits only the primary model's provider. Inferring from
-  // a fallback could silently route it to an unrelated provider.
-  return modelProvider(def?.model);
-}
-
-function qualifyModel(
-  model: string | undefined,
-  provider: string | undefined,
-): string | undefined {
-  if (!model || model.includes("/") || !provider) return model;
-  return `${provider}/${model}`;
-}
-
-function modelAttempts(
-  def: AgentDef,
-  override: string | undefined,
-): (string | undefined)[] {
-  const provider = agentProvider(def);
-  const defaultPrimary = qualifyModel(def.model, provider);
-  const qualifiedFallbacks = def.fallbackModels.map((model) =>
-    qualifyModel(model, provider),
-  );
-  // An explicit override replaces only the primary model. The agent's declared
-  // fallback chain remains available, while its default primary stays excluded
-  // so review-diversity overrides cannot silently fall back to that model even
-  // if it was accidentally repeated in fallbackModels.
-  const chain = override
-    ? [
-        qualifyModel(override, provider),
-        ...qualifiedFallbacks.filter((model) => model !== defaultPrimary),
-      ]
-    : [defaultPrimary, ...qualifiedFallbacks];
-  const attempts = [
-    ...new Set(chain.filter((model): model is string => !!model)),
-  ];
-  return attempts.length ? attempts : [undefined];
-}
-
-function stderrDiagnostic(stderr: string): string | undefined {
-  const lines = stderr
-    .split(/\r?\n/)
-    .map((line) => cleanInline(line, 500))
-    .filter(Boolean);
-  if (!lines.length) return undefined;
-
-  const documentationOnly = (line: string) => {
-    const withoutSee = line.replace(/^see:\s*/i, "");
-    return (
-      !withoutSee ||
-      /(?:^|[\\/])docs[\\/](?:models|providers)\.md\b/i.test(withoutSee)
-    );
-  };
-  const useful = lines.filter((line) => !documentationOnly(line));
-  const decisive = useful.find((line) =>
-    /no api key|unauthori[sz]ed|forbidden|rate limit|authentication|something went wrong|\b(?:error|exception|failed|invalid|unknown|not found|timed out|terminated|refused)\b|\b(?:ECONN\w*|ENOTFOUND|EAI_AGAIN)\b/i.test(
-      line,
-    ),
-  );
-  // CLI errors normally lead with the cause and append login/help text. When
-  // no keyword matches, the first non-documentation line is more useful than
-  // the trailing help line.
-  return decisive ?? useful.at(0) ?? lines.at(0);
-}
 
 function exitedFailure(
   model: string,
@@ -506,22 +303,12 @@ function renderActivity(
   isLast: boolean,
   now = Date.now(),
 ): string {
-  const glyph =
-    activity.status === "running"
-      ? theme.fg("warning", "●")
-      : activity.status === "error"
-        ? theme.fg("error", "×")
-        : theme.fg("success", "✓");
+  const glyph = activityGlyph(theme, activity.status);
   const rail = theme.fg("dim", isLast ? TREE.last : TREE.branch);
   const detail = activity.summary ? ` ${theme.fg("dim", activity.summary)}` : "";
-  // Durations are padded as plain text before coloring so the ANSI codes never
-  // participate in the column math.
-  const elapsed = theme.fg(
-    "dim",
-    padStartToWidth(
-      formatDuration(activity.duration ?? now - activity.startedAt),
-      DURATION_COLUMN,
-    ),
+  const elapsed = durationText(
+    theme,
+    activity.duration ?? now - activity.startedAt,
   );
   const left = `${rail} ${glyph} ${theme.fg("muted", activity.tool)}${detail}`;
   return fitLine(left, elapsed, width);
