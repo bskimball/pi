@@ -13,9 +13,14 @@ This repo layers several things on top of a stock Pi install:
 - **Slash commands / prompts** (`agent/prompts/`), including `/browser` for authenticated browser automation and `/deploy` for delegated ship-it workflows.
 - **Skills** (`agent/skills/`) for image generation and background processes.
 
-## Sub-agents and the `task` tool
+## Sub-agents and Orchestration Tools
 
-Pi's main agent delegates bounded units of work to specialist sub-agents through a single `task` tool. Each task spawns a separate `pi` process with the specialist's own system prompt, model, thinking level, and tool set, then streams its activity back into the parent session and returns a single final report.
+Pi's main agent delegates bounded units of work to specialist sub-agents through synchronous and asynchronous task tools:
+
+- **`task`** — synchronous task delegation: spawns a specialist sub-agent, streams activity back into the parent session, and blocks until returning a single final report.
+- **`task_start` / `task_status` / `task_list` / `task_send` / `task_wait` / `task_abort` / `task_close` / `task_reply`** — asynchronous RPC sub-agent management: starts persistent isolated sessions in the background, steers or sends follow-ups mid-flight, handles UI extension requests, and retrieves or waits for results while keeping the lead context free.
+
+Each task spawns a separate `pi` process with the specialist's own system prompt, model, thinking level, and tool set.
 
 The task tool and the sub-agent prompts are **based on Amp's prompts and sub-agents**. Amp ships a small set of built-in sub-agents (an orchestrator, a search/oracle reviewer, a librarian, and fast workers); the reference prompts live under `reference/amp-prompts/` and are used as behavioral and structural templates. On top of that foundation this configuration adds a broader roster of purpose-built specialists:
 
@@ -37,8 +42,10 @@ Shared norms that apply to every specialist (non-interactive reporting, smallest
 
 Custom TUI and orchestration extensions live in `agent/extensions/`:
 
-- **`mono/amp-task.ts`** — implements the `task` tool and sub-agent execution. Each task spawns a separate `pi --mode json -p` process using the agent prompt from `agent/agents/*.md`, with hard/idle/turn guards, model fallbacks, streaming, and cleanup kept local to the extension. It renders rich task presentation: specialist badges, mission, model, thinking level, turn count, live tool activity, durations, and bounded final reports.
-- **`mono/mono-ui.ts`** — the "Mono" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Degrades to bounded fallback output on renderer failure.
+- **`mono/amp-task.ts` & `mono/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, model fallback chains, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports).
+- **`mono/mono-ui.ts`** — the "Mono" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Supports emergency opt-out via `PI_MONO_UI=0` and logs rendering failures to `agent/pi-render.log`.
+- **`web-search.ts`** — provides native Exa web search and page fetching tools (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
+- **`prompt-commands.ts`** — registers native custom slash commands and prompt templates directly without external plugins.
 - **`mcp-adapter.ts`** — composes Mono's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
 - **`crash-logger.ts`** — records exits, shutdown reasons, and unhandled rejections to `agent/pi-crash.log`, distinguishing main and sub-agent processes.
