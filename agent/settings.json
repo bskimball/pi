@@ -1,5 +1,5 @@
 {
-  "defaultModel": "gemini-3.6-flash-high",
+  "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.82.1",
