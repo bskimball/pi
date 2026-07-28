@@ -10,9 +10,8 @@
 // not load mono-ui's default-export side-effect graph.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createMcpAdapter } from "pi-mcp-adapter";
 import { installMcpPresentation } from "./mono/lib/mcp-presentation.ts";
-// Resolve from the managed agent/npm dependency without a machine-specific path.
-import { createMcpAdapter } from "../npm/node_modules/pi-mcp-adapter/index.ts";
 
 export default function mcpAdapterExtension(pi: ExtensionAPI): void {
   installMcpPresentation(pi);

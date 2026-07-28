@@ -1,7 +1,0 @@
-{
-  "name": "pi-extensions",
-  "private": true,
-  "dependencies": {
-    "pi-mcp-adapter": "^2.15.0"
-  }
-}
