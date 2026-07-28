@@ -11,20 +11,24 @@ import {
   type ChildProcessByStdio,
 } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Readable } from "node:stream";
 import { Type } from "typebox";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  padStartToWidth,
   safeTruncateToWidth,
   safeVisibleWidth,
+  wrapPlainText,
 } from "./lib/safe-text-layout.ts";
 import {
+  DURATION_COLUMN,
+  TREE,
   WidthText,
   cleanInline,
   fitLine,
@@ -51,7 +55,7 @@ interface AgentDef {
 }
 
 const AGENT_DIRS = [
-  path.join(os.homedir(), ".pi", "agent", "agents"),
+  path.join(getAgentDir(), "agents"),
   path.join(process.cwd(), ".pi", "agents"),
 ];
 
@@ -155,18 +159,61 @@ const ansiFg = (hex: string, text: string) => {
   return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m${text}${RESET}`;
 };
 
-const IDENTITIES: Record<string, { icon: string; hue: string }> = {
-  advisor: { icon: "A", hue: "#63d7c6" },
-  artisan: { icon: "R", hue: "#d7a6ff" },
-  librarian: { icon: "L", hue: "#79b8ff" },
-  machinist: { icon: "M", hue: "#79e2b1" },
-  oracle: { icon: "O", hue: "#c9a7ff" },
-  picasso: { icon: "P", hue: "#ff9f86" },
-  scout: { icon: "S", hue: "#e8c66a" },
-  scribe: { icon: "W", hue: "#f2a7b8" },
-  stevedore: { icon: "V", hue: "#88a7c2" },
+// Agent hues live in the active theme's `vars` (agent<Name>) so they stay part
+// of one palette family.
+//
+// They are read from the theme JSON rather than declared as `colors` tokens:
+// Pi's published theme schema declares `colors` closed, so custom tokens would
+// be flagged as invalid in editors even though the runtime validator currently
+// accepts them. Staying in `vars` keeps the theme file schema-clean. Every step
+// below is guarded; any failure falls back to this built-in set, which matches
+// the shipped pi-dark values.
+const DEFAULT_AGENT_HUES: Record<string, string> = {
+  advisor: "#39c5cf",
+  artisan: "#d2a8ff",
+  librarian: "#79c0ff",
+  machinist: "#7ee787",
+  oracle: "#bc8cff",
+  picasso: "#ffa657",
+  scout: "#e3b341",
+  scribe: "#ff9bce",
+  stevedore: "#a5d6ff",
+  fallback: "#8b949e",
 };
-const FALLBACK_IDENTITY = { icon: "?", hue: "#9aa8b3" };
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function loadThemeAgentHues(): Record<string, string> {
+  const hues = { ...DEFAULT_AGENT_HUES };
+  try {
+    const agentDir = getAgentDir();
+    const settingsPath = path.join(agentDir, "settings.json");
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    const themeName = String(settings?.theme ?? "").replace(/[^\w.-]/g, "");
+    if (!themeName) return hues;
+    const themePath = path.join(agentDir, "themes", `${themeName}.json`);
+    const vars = JSON.parse(fs.readFileSync(themePath, "utf8"))?.vars;
+    if (!vars || typeof vars !== "object") return hues;
+    for (const [key, value] of Object.entries(vars)) {
+      const match = /^agent([A-Z]\w*)$/.exec(key);
+      // Resolve one level of var indirection, then require a literal hex.
+      const resolved =
+        typeof value === "string" && !HEX_RE.test(value)
+          ? (vars as Record<string, unknown>)[value]
+          : value;
+      if (match && typeof resolved === "string" && HEX_RE.test(resolved)) {
+        hues[match[1].toLowerCase()] = resolved;
+      }
+    }
+  } catch {
+    // Keep the built-in palette.
+  }
+  return hues;
+}
+
+const AGENT_HUES = loadThemeAgentHues();
+const agentHue = (agent: string): string =>
+  AGENT_HUES[agent.toLowerCase()] ?? AGENT_HUES.fallback ?? "#8b949e";
 
 function missionFromPrompt(prompt: string): string {
   const lines = prompt
@@ -306,6 +353,14 @@ interface TaskDetails {
   exitCode?: number | null;
   killReason?: string;
   finalReport?: string;
+  /** Wall-clock time of the last observed child event, for liveness only. */
+  lastEventAt?: number;
+  /** Which idle budget currently applies to the child. */
+  phase?: "model" | "tool";
+  idleMs?: number;
+  toolIdleMs?: number;
+  timeoutMs?: number;
+  maxTurns?: number;
 }
 
 interface TaskRenderState {
@@ -335,23 +390,120 @@ function updateStatus(ctx: ExtensionContext) {
 // turn dies; larger fan-outs simply queue.
 const MAX_CONCURRENT = 3;
 let running = 0;
-const waiters: (() => void)[] = [];
-async function acquire(): Promise<void> {
+
+interface SlotWaiter {
+  settled: boolean;
+  settle: (granted: boolean) => void;
+}
+const waiters: SlotWaiter[] = [];
+
+/**
+ * Reserve one concurrency slot.
+ *
+ * `acquired` resolves true only when the slot is actually held, and false when
+ * `cancel()` ran first, so a queued task can be aborted without ever calling
+ * `release()`. The slot count is incremented at hand-off time (not after the
+ * waiter resumes) so a cancelled waiter can never be granted a slot twice and
+ * a fresh caller cannot slip into a slot that was already handed over.
+ */
+function acquireSlot(): { acquired: Promise<boolean>; cancel: () => void } {
   if (running < MAX_CONCURRENT) {
     running++;
-    return;
+    return { acquired: Promise.resolve(true), cancel: () => {} };
   }
-  await new Promise<void>((resolve) => waiters.push(resolve));
-  running++;
+  let resolve!: (granted: boolean) => void;
+  const acquired = new Promise<boolean>((settle) => {
+    resolve = settle;
+  });
+  const waiter: SlotWaiter = {
+    settled: false,
+    settle: (granted) => {
+      if (waiter.settled) return;
+      waiter.settled = true;
+      if (granted) running++;
+      resolve(granted);
+    },
+  };
+  waiters.push(waiter);
+  return {
+    acquired,
+    cancel: () => {
+      if (waiter.settled) return;
+      const index = waiters.indexOf(waiter);
+      if (index >= 0) waiters.splice(index, 1);
+      waiter.settle(false);
+    },
+  };
 }
+
+/** Only call after `acquired` resolved true, exactly once. */
 function release() {
   running--;
-  waiters.shift()?.();
+  waiters.shift()?.settle(true);
+}
+
+/** Coarse label for a guard budget: minutes above a minute, else seconds. */
+function budgetLabel(ms: number): string {
+  return ms >= 60_000
+    ? `${Math.round(ms / 60_000)}m`
+    : `${Math.max(1, Math.round(ms / 1000))}s`;
+}
+
+type LivenessTier = "normal" | "quiet" | "stale" | "risk";
+
+// Liveness is derived only from silence since the last child event and the
+// idle budget that the kill timer is actually using, so the label can never
+// claim forward progress the extension has not observed.
+function liveness(
+  details: TaskDetails,
+  now: number,
+  width: number,
+): { text: string; tier: LivenessTier } | undefined {
+  if (details.status !== "running" || !details.lastEventAt) return undefined;
+  const toolPhase = details.phase === "tool";
+  const budget = (toolPhase ? details.toolIdleMs : details.idleMs) ?? 0;
+  if (budget <= 0) return { text: toolPhase ? "tool" : "thinking", tier: "normal" };
+  const silent = Math.max(0, now - details.lastEventAt);
+  const ratio = silent / budget;
+  // Only wide layouts get the phase prefix; the status column stays compact.
+  const prefix = toolPhase && width >= 60 ? "tool " : "";
+  if (ratio < 0.1)
+    return { text: toolPhase ? "tool" : "thinking", tier: "normal" };
+  if (ratio < 0.35)
+    return { text: `${prefix}quiet ${formatDuration(silent)}`, tier: "quiet" };
+  if (ratio < 0.7)
+    return { text: `${prefix}stale ${formatDuration(silent)}`, tier: "stale" };
+  return {
+    text: `${prefix}guard ${budgetLabel(silent)}/${budgetLabel(budget)}`,
+    tier: "risk",
+  };
+}
+
+function guardLine(
+  details: TaskDetails,
+  theme: any,
+  width: number,
+): string | undefined {
+  const parts = [
+    details.idleMs && `idle ${budgetLabel(details.idleMs)}`,
+    details.toolIdleMs && `tool ${budgetLabel(details.toolIdleMs)}`,
+    details.timeoutMs && `hard ${budgetLabel(details.timeoutMs)}`,
+    details.maxTurns && `turns ${details.turns}/${details.maxTurns}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (!parts) return undefined;
+  return safeTruncateToWidth(
+    `${theme.fg("dim", TREE.rail)}  ${theme.fg("dim", `guards: ${parts}`)}`,
+    width,
+  );
 }
 
 function renderActivity(
   activity: MissionActivity,
   theme: any,
+  width: number,
+  isLast: boolean,
   now = Date.now(),
 ): string {
   const glyph =
@@ -360,15 +512,19 @@ function renderActivity(
       : activity.status === "error"
         ? theme.fg("error", "×")
         : theme.fg("success", "✓");
-  const detail = theme.fg(
-    "dim",
-    activity.summary ? `  ${activity.summary}` : "",
-  );
+  const rail = theme.fg("dim", isLast ? TREE.last : TREE.branch);
+  const detail = activity.summary ? ` ${theme.fg("dim", activity.summary)}` : "";
+  // Durations are padded as plain text before coloring so the ANSI codes never
+  // participate in the column math.
   const elapsed = theme.fg(
     "dim",
-    formatDuration(activity.duration ?? now - activity.startedAt),
+    padStartToWidth(
+      formatDuration(activity.duration ?? now - activity.startedAt),
+      DURATION_COLUMN,
+    ),
   );
-  return `${theme.fg("dim", "   ├")} ${glyph} ${theme.fg("muted", activity.tool)}${detail}  ${elapsed}`;
+  const left = `${rail} ${glyph} ${theme.fg("muted", activity.tool)}${detail}`;
+  return fitLine(left, elapsed, width);
 }
 
 function taskHeader(
@@ -377,26 +533,42 @@ function taskHeader(
   width: number,
   now: number,
 ): string {
-  const identity = IDENTITIES[details.agent.toLowerCase()] ?? FALLBACK_IDENTITY;
-  const badge = ansiFg(identity.hue, `[${identity.icon} ${details.agent}]`);
+  // One saturated hue per line: the agent name carries the only chroma, the
+  // constant "task" label drops to dim, and the mission gets the brightest
+  // value because it is the line's actual content.
+  const badge = ansiFg(agentHue(details.agent), details.agent);
   const meta = [
     details.model,
     details.thinking && `think:${details.thinking}`,
+    details.fallbackUsed && "fallback",
     details.turns > 0 &&
       `${details.turns} turn${details.turns === 1 ? "" : "s"}`,
   ]
     .filter(Boolean)
     .join(" · ");
-  // Task headers and nested activity/report gutters share the lighter dim
-  // token so outer and internal tree rails match.
-  const left = `${theme.fg("dim", "└")} ${theme.fg("toolTitle", "task")} ${theme.fg("dim", "▸")} ${badge}${meta ? ` ${theme.fg("dim", `(${meta})`)}` : ""} ${theme.fg("text", details.mission)}`;
+  const left = `${theme.fg("dim", TREE.header)} ${theme.fg("dim", "task")} ${badge}${meta ? ` ${theme.fg("dim", `(${meta})`)}` : ""}  ${theme.fg("text", details.mission)}`;
+  const live = liveness(details, now, width);
   const status =
-    details.status === "running" || details.status === "queued"
-      ? theme.fg("warning", details.status)
-      : details.status === "completed"
-        ? theme.fg("success", "complete")
-        : theme.fg("error", details.status);
-  const elapsed = formatDuration(details.duration ?? now - details.startedAt);
+    details.status === "queued"
+      ? `${theme.fg("warning", "queued")} ${theme.fg("dim", "· waiting for slot")}`
+      : live
+        ? theme.fg(
+            live.tier === "risk"
+              ? "error"
+              : live.tier === "quiet"
+                ? "muted"
+                : "warning",
+            live.text,
+          )
+        : details.status === "running"
+          ? theme.fg("warning", "running")
+          : details.status === "completed"
+            ? theme.fg("success", "complete")
+            : theme.fg("error", details.status);
+  const elapsed = padStartToWidth(
+    formatDuration(details.duration ?? now - details.startedAt),
+    DURATION_COLUMN,
+  );
   return fitLine(left, `${status} ${theme.fg("dim", elapsed)}`, width);
 }
 
@@ -413,36 +585,134 @@ function renderTaskComponent(
   // or extension-owned render timers.
   return new WidthText((width) => {
     const lines = [taskHeader(details, theme, width, Date.now())];
+    // Guards are only meaningful once the child is actually executing. A queued
+    // task has no idle/turn budget running yet, so listing them would imply
+    // supervision that is not active.
+    if (expanded && details.status === "running") {
+      const guards = guardLine(details, theme, width);
+      if (guards) lines.push(guards);
+    }
     const limit = expanded ? 80 : 4;
     const shown = details.activities?.slice(-limit) ?? [];
     const hidden = (details.activities?.length ?? 0) - shown.length;
-    if (hidden > 0) lines.push(theme.fg("muted", `   ▸ ${hidden} more steps`));
+    if (hidden > 0)
+      lines.push(
+        `${theme.fg("dim", TREE.rail)}  ${theme.fg("muted", `▸ ${hidden} more steps`)}`,
+      );
     const now = Date.now();
-    for (const activity of shown)
-      lines.push(renderActivity(activity, theme, now));
+    const hasTail =
+      details.attemptFailures.length > 0 ||
+      (!isRunning && !!details.finalReport);
+    shown.forEach((activity, index) => {
+      const isLast = !hasTail && index === shown.length - 1;
+      lines.push(renderActivity(activity, theme, width, isLast, now));
+    });
     if (details.attemptFailures.length) {
       const failures = expanded
         ? details.attemptFailures.slice(-8)
         : details.attemptFailures.slice(-1);
-      for (const failure of failures)
+      const reportFollows = !isRunning && !!details.finalReport;
+      failures.forEach((failure, index) => {
+        const isLast = !reportFollows && index === failures.length - 1;
+        const rail = theme.fg("dim", isLast ? TREE.last : TREE.branch);
         lines.push(
-          `${theme.fg("dim", "   └")} ${theme.fg("error", "×")} ${theme.fg("error", cleanInline(failure, 180))}`,
+          safeTruncateToWidth(
+            `${rail} ${theme.fg("error", "×")} ${theme.fg("error", cleanInline(failure, 180))}`,
+            width,
+          ),
         );
+      });
     }
     if (!isRunning && details.finalReport) {
-      const reportLines = details.finalReport
+      // Body width accounts for the gutter (collapsed) or card padding
+      // (expanded) so wrapped text never overflows its container.
+      const bodyWidth = Math.max(8, width - (expanded ? 2 : 4));
+      const reportLimit = expanded ? 200 : 12;
+      // Preprocessing is bounded twice: the source is read up to a char/line
+      // cap, and formatting stops as soon as one line past the display limit
+      // exists. A huge report can never build a huge intermediate array.
+      const MAX_REPORT_CHARS = 60_000;
+      const MAX_REPORT_SOURCE_LINES = 1200;
+      // The character cap is applied to the raw report first, so trim/replace
+      // never scan or allocate over a report larger than the cap.
+      const rawReport = details.finalReport;
+      let moreContent = rawReport.length > MAX_REPORT_CHARS;
+      const source = (
+        moreContent ? rawReport.slice(0, MAX_REPORT_CHARS) : rawReport
+      )
         .trim()
-        .replace(/\t/g, "   ")
-        .split(/\r?\n/)
-        .map((line) => {
-          const heading = line.match(/^#{1,6}\s+(.+)$/);
-          if (heading) return theme.fg("toolTitle", heading[1]);
-          const bullet = line.match(/^\s*[-*]\s+(.+)$/);
-          if (bullet)
-            return `${theme.fg("accent", "•")} ${theme.fg("toolOutput", bullet[1])}`;
-          return theme.fg("toolOutput", line);
-        });
-      const reportLimit = expanded ? 120 : 12;
+        .replace(/\t/g, "   ");
+
+      const sourceLines: string[] = [];
+      let cursor = 0;
+      while (
+        cursor < source.length &&
+        sourceLines.length < MAX_REPORT_SOURCE_LINES
+      ) {
+        const next = source.indexOf("\n", cursor);
+        const end = next < 0 ? source.length : next;
+        sourceLines.push(source.slice(cursor, end).replace(/\r$/, ""));
+        cursor = end + 1;
+      }
+      if (cursor < source.length) moreContent = true;
+
+      const reportLines: string[] = [];
+      // Returns false once enough lines exist to render the limit plus prove
+      // that more content follows.
+      const pushReport = (line: string): boolean => {
+        reportLines.push(line);
+        if (reportLines.length > reportLimit) {
+          moreContent = true;
+          return false;
+        }
+        return true;
+      };
+      let blankRun = 0;
+      source_lines: for (const raw of sourceLines) {
+        if (!raw.trim()) {
+          // Collapse runs of blank lines to a single spacer.
+          blankRun++;
+          continue;
+        }
+        // A heading binds to the content beneath it, so no spacer before it
+        // when it directly follows a single blank.
+        const heading = raw.match(/^#{1,6}\s+(.+)$/);
+        if (blankRun > 0 && reportLines.length > 0) {
+          if (!pushReport("")) break source_lines;
+        }
+        blankRun = 0;
+        // Wrapping is bounded by what the report can still display (plus the
+        // one extra line that proves more content follows) instead of a small
+        // per-line cap. Any line that fills the remaining capacity also drives
+        // pushReport past the limit, so truncation always sets moreContent.
+        const capacity = Math.max(1, reportLimit + 1 - reportLines.length);
+        if (heading) {
+          for (const line of wrapPlainText(heading[1], bodyWidth, {
+            maxLines: capacity,
+          }))
+            if (!pushReport(theme.fg("toolTitle", line))) break source_lines;
+          continue;
+        }
+        const bullet = raw.match(/^(\s*)[-*]\s+(.+)$/);
+        if (bullet) {
+          const wrapped = wrapPlainText(bullet[2], bodyWidth - 2, {
+            hangingIndent: 0,
+            maxLines: capacity,
+          });
+          for (const [index, line] of wrapped.entries()) {
+            const styled =
+              index === 0
+                ? `${theme.fg("accent", "•")} ${theme.fg("toolOutput", line)}`
+                : `  ${theme.fg("toolOutput", line)}`;
+            if (!pushReport(styled)) break source_lines;
+          }
+          continue;
+        }
+        for (const line of wrapPlainText(raw, bodyWidth, {
+          maxLines: capacity,
+        }))
+          if (!pushReport(theme.fg("toolOutput", line))) break source_lines;
+      }
       const shownReport = reportLines.slice(0, reportLimit);
       if (expanded && width > 2) {
         // Expanded report renders inside a padded background container, like
@@ -460,14 +730,18 @@ function renderTaskComponent(
         }
         lines.push(blank);
       } else {
-        lines.push(theme.fg("dim", "   │"));
         for (const line of shownReport) {
-          lines.push(`${theme.fg("dim", "   │")} ${line}`);
+          lines.push(
+            safeTruncateToWidth(`${theme.fg("dim", TREE.rail)}  ${line}`, width),
+          );
         }
       }
-      if (reportLines.length > shownReport.length) {
+      if (moreContent || reportLines.length > shownReport.length) {
+        // The exact unseen line count is unknown because preprocessing stops
+        // early, so the signal states that content remains rather than
+        // inventing a number.
         lines.push(
-          `${theme.fg("dim", "   └")} ${theme.fg("muted", `▸ ${reportLines.length - shownReport.length} more report lines · ctrl+o`)}`,
+          `${theme.fg("dim", TREE.last)} ${theme.fg("muted", "▸ more report content · ctrl+o")}`,
         );
       }
     }
@@ -566,7 +840,6 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      await acquire();
       const timeoutMs = (params.timeoutSec ?? def.timeoutSec ?? 1800) * 1000;
       const idleMs = 300_000;
       const toolIdleMs = 900_000;
@@ -576,12 +849,24 @@ export default function (pi: ExtensionAPI) {
       const activities: MissionActivity[] = [];
       const attemptedModels: string[] = [];
       const attemptFailures: string[] = [];
-      let activeActivity: MissionActivity | undefined;
+      // Tool calls can overlap, so running activities are tracked per call
+      // rather than as one "active" activity. Identified calls are keyed by
+      // toolCallId; anonymous calls form a LIFO stack so an anonymous end can
+      // only ever close an anonymous start.
+      const runningById = new Map<string, MissionActivity>();
+      const runningAnonymous: MissionActivity[] = [];
+      let anonymousSeq = 0;
+      const hasActiveTools = () =>
+        runningById.size > 0 || runningAnonymous.length > 0;
       let turns = 0;
       let killReason: string | undefined;
       let finalExitCode: number | null = null;
       let finalAssistantText = "";
       let currentModel: string | undefined;
+      // Liveness mirrors the idle timer: it only advances on events that also
+      // reset the kill budget, so the label can never outrun the guard.
+      let lastEventAt: number | undefined;
+      let phase: "model" | "tool" = "model";
 
       const snapshot = (
         status: TaskDetails["status"],
@@ -605,26 +890,46 @@ export default function (pi: ExtensionAPI) {
         exitCode: finalExitCode,
         killReason,
         finalReport,
+        lastEventAt: status === "running" ? lastEventAt : undefined,
+        phase,
+        idleMs,
+        toolIdleMs,
+        timeoutMs,
+        maxTurns,
       });
-      const emit = () => {
+      const emit = (status: TaskDetails["status"] = "running") => {
         try {
           onUpdate?.({
             content: [{ type: "text", text: `[${def.name}] ${mission}` }],
-            details: snapshot("running"),
+            details: snapshot(status),
           });
         } catch {}
       };
-      const closeActive = (status: ActivityStatus = "completed") => {
-        if (!activeActivity || activeActivity.status !== "running") return;
-        activeActivity.status = status;
-        activeActivity.duration = Date.now() - activeActivity.startedAt;
-        activeActivity = undefined;
+      const closeActivity = (
+        activity: MissionActivity | undefined,
+        status: ActivityStatus = "completed",
+      ) => {
+        if (!activity || activity.status !== "running") return;
+        activity.status = status;
+        activity.duration = Date.now() - activity.startedAt;
+      };
+      const closeAllRunning = (status: ActivityStatus = "completed") => {
+        for (const activity of runningById.values())
+          closeActivity(activity, status);
+        for (const activity of runningAnonymous)
+          closeActivity(activity, status);
+        runningById.clear();
+        runningAnonymous.length = 0;
       };
 
       const run: TaskRun = { agent: def.name, done: false };
+      // Set while this task is parked in the concurrency queue, so a kill can
+      // withdraw the waiter instead of leaving it to be granted a slot later.
+      let cancelSlot: (() => void) | undefined;
       const kill = (reason: string) => {
         if (killReason) return;
         killReason = reason;
+        cancelSlot?.();
         const child = run.child;
         if (!child?.pid) return;
         if (process.platform === "win32") {
@@ -663,8 +968,12 @@ export default function (pi: ExtensionAPI) {
         } catch {}
       };
       run.cancel = kill;
+      // Queued work is registered before the queue wait so abort, session
+      // shutdown, and the global tasks status all cover it.
       activeRuns.add(run);
       updateStatus(ctx);
+      // The hard timeout starts before the queue wait, so the published
+      // `hard` budget honestly bounds queue wait plus execution.
       const hardTimer = setTimeout(
         () => kill(`exceeded ${timeoutMs / 1000}s time limit`),
         timeoutMs,
@@ -673,20 +982,43 @@ export default function (pi: ExtensionAPI) {
       signal?.addEventListener("abort", onAbort);
       if (signal?.aborted) onAbort();
 
+      // The queue wait lives inside the try so the timer, run registration,
+      // and slot are always cleaned up, including if the wait itself throws.
+      let acquired = false;
       try {
-        emit();
+        // Show a real queued state before blocking on a slot, so queue wait is
+        // never presented as silent model work.
+        emit("queued");
+        const slot = acquireSlot();
+        cancelSlot = slot.cancel;
+        // An abort that landed before the waiter existed must still withdraw it.
+        if (killReason) slot.cancel();
+        acquired = await slot.acquired;
+        cancelSlot = undefined;
+        // No idle timer is armed until the child spawns, so no liveness is
+        // published here; the frame renders as plain running.
+        lastEventAt = undefined;
+
+        // No emit here: the attempt loop publishes immediately after selecting
+        // a model, so the first "running" snapshot already carries the model
+        // and fallback metadata instead of a blank running frame.
         for (
           let attemptIndex = 0;
-          attemptIndex < attempts.length;
+          acquired && attemptIndex < attempts.length;
           attemptIndex++
         ) {
           if (killReason) break;
           const model = attempts[attemptIndex];
+          lastEventAt = undefined;
+          phase = "model";
           const modelLabel = model ?? "default model";
           currentModel = modelLabel;
           attemptedModels.push(modelLabel);
           run.model = modelLabel;
           updateStatus(ctx);
+          // Publish the chosen model and fallback flag before the child starts
+          // its first (silent) thinking stretch.
+          emit();
 
           const cliJs = process.argv[1];
           const args = [
@@ -760,104 +1092,165 @@ export default function (pi: ExtensionAPI) {
           let stderrTail = "";
           let attemptTurns = 0;
           // Tools may legitimately stay quiet longer than model turns, but
-          // still need an idle bound below the hard process timeout. Track
-          // overlapping calls so one completion cannot end another's budget.
-          const activeToolIds = new Set<string>();
-          let anonymousTools = 0;
-          const hasActiveTools = () =>
-            activeToolIds.size > 0 || anonymousTools > 0;
-          const resetIdle = () => {
+          // still need an idle bound below the hard process timeout. The
+          // running-activity maps decide the phase, so overlapping calls
+          // cannot end one another's budget.
+          //
+          // Publishing is part of the reset: the rendered lastEventAt/phase is
+          // the same value the kill timer just armed with, so liveness can
+          // never drift from the guard. Idle/kill timers still arm on every
+          // byte; raw stream onUpdate is monotonically throttled so token-rate
+          // chunks cannot publish at stream cadence. Tool/turn/failure frames
+          // force an immediate publish. No presentation setInterval is used.
+          //
+          // Within one synchronous chunk handler nothing can render, so the
+          // resets in it are coalesced into a single emission carrying the
+          // final state. That is still exact, just not redundant.
+          const STREAM_PUBLISH_MS = 250;
+          let deferEmit = false;
+          let pendingEmit = false;
+          let pendingForcePublish = false;
+          let lastPublishAt = 0;
+          const publish = (force = false) => {
+            if (deferEmit) {
+              pendingEmit = true;
+              if (force) pendingForcePublish = true;
+              return;
+            }
+            const now = Date.now();
+            if (!force && now - lastPublishAt < STREAM_PUBLISH_MS) return;
+            emit();
+            lastPublishAt = now;
+          };
+          const flushEmit = () => {
+            deferEmit = false;
+            if (!pendingEmit) return;
+            const force = pendingForcePublish;
+            pendingEmit = false;
+            pendingForcePublish = false;
+            publish(force);
+          };
+          const resetIdle = (forcePublish = true) => {
             if (idleTimer) clearTimeout(idleTimer);
             const toolPhase = hasActiveTools();
+            lastEventAt = Date.now();
+            phase = toolPhase ? "tool" : "model";
             const budgetMs = toolPhase ? toolIdleMs : idleMs;
-            const phase = toolPhase ? " during tool execution" : "";
+            const phaseNote = toolPhase ? " during tool execution" : "";
             idleTimer = setTimeout(
-              () => kill(`idle for ${budgetMs / 1000}s${phase}`),
+              () => kill(`idle for ${budgetMs / 1000}s${phaseNote}`),
               budgetMs,
             );
+            publish(forcePublish);
           };
           resetIdle();
 
           child.stdout.on("data", (chunk: Buffer) => {
-            resetIdle();
-            buffer += chunk.toString("utf8");
-            let newline: number;
-            while ((newline = buffer.indexOf("\n")) >= 0) {
-              const line = buffer.slice(0, newline).trim();
-              buffer = buffer.slice(newline + 1);
-              if (!line) continue;
-              let event: any;
-              try {
-                event = JSON.parse(line);
-              } catch {
-                continue;
-              }
-              try {
-                if (event.type === "turn_start") {
-                  turns++;
-                  attemptTurns++;
-                  if (attemptTurns > maxTurns)
-                    kill(`exceeded ${maxTurns} turns`);
-                } else if (event.type === "tool_execution_start") {
-                  if (event.toolCallId == null) anonymousTools++;
-                  else activeToolIds.add(String(event.toolCallId));
-                  resetIdle();
-                  closeActive();
-                  activeActivity = {
-                    id: String(event.toolCallId ?? activities.length),
-                    tool: cleanInline(event.toolName, 40),
-                    summary: shortArgs(event.args),
-                    status: "running",
-                    startedAt: Date.now(),
-                  };
-                  activities.push(activeActivity);
-                  if (activities.length > 400)
-                    activities.splice(0, activities.length - 300);
-                  emit();
-                } else if (event.type === "tool_execution_end") {
-                  if (event.toolCallId == null) {
-                    // Only match an anonymous end to an anonymous start. Do not
-                    // guess which identified overlapping call may have ended.
-                    if (anonymousTools > 0) anonymousTools--;
-                  } else {
-                    activeToolIds.delete(String(event.toolCallId));
-                  }
-                  resetIdle();
-                  if (
-                    activeActivity &&
-                    (!event.toolCallId ||
-                      activeActivity.id === String(event.toolCallId))
-                  )
-                    closeActive(event.isError ? "error" : "completed");
-                  emit();
-                } else if (
-                  event.type === "message_end" &&
-                  event.message?.role === "assistant"
-                ) {
-                  const message = event.message;
-                  assistantError =
-                    message.stopReason === "error" || message.errorMessage
-                      ? String(message.errorMessage ?? "provider/model error")
-                      : undefined;
-                  if (Array.isArray(message.content)) {
-                    const text = message.content
-                      .filter((item: any) => item.type === "text")
-                      .map((item: any) => item.text)
-                      .join("\n")
-                      .trim();
-                    if (text) assistantText = text;
-                  }
+            deferEmit = true;
+            try {
+              // Raw stdout always resets the idle budget; liveness publish is
+              // throttled unless a structured event below forces one.
+              resetIdle(false);
+              buffer += chunk.toString("utf8");
+              let newline: number;
+              while ((newline = buffer.indexOf("\n")) >= 0) {
+                const line = buffer.slice(0, newline).trim();
+                buffer = buffer.slice(newline + 1);
+                if (!line) continue;
+                let event: any;
+                try {
+                  event = JSON.parse(line);
+                } catch {
+                  continue;
                 }
-              } catch {}
+                try {
+                  if (event.type === "turn_start") {
+                    turns++;
+                    attemptTurns++;
+                    if (attemptTurns > maxTurns)
+                      kill(`exceeded ${maxTurns} turns`);
+                    // Publish the new turn count with the matching timer state.
+                    resetIdle();
+                  } else if (event.type === "tool_execution_start") {
+                    const callId =
+                      event.toolCallId == null
+                        ? undefined
+                        : String(event.toolCallId);
+                    const activity: MissionActivity = {
+                      id: callId ?? `anon#${anonymousSeq++}`,
+                      tool: cleanInline(event.toolName, 40),
+                      summary: shortArgs(event.args),
+                      status: "running",
+                      startedAt: Date.now(),
+                    };
+                    if (callId) {
+                      // A repeated id means the previous one will never get its
+                      // own end event; close it rather than leaking it.
+                      closeActivity(runningById.get(callId));
+                      runningById.set(callId, activity);
+                    } else {
+                      runningAnonymous.push(activity);
+                    }
+                    activities.push(activity);
+                    if (activities.length > 400)
+                      activities.splice(0, activities.length - 300);
+                    // Reset (and force-publish) after the running set changed
+                    // so the emitted phase reflects the new tool budget.
+                    resetIdle();
+                  } else if (event.type === "tool_execution_end") {
+                    let activity: MissionActivity | undefined;
+                    if (event.toolCallId == null) {
+                      // Only match an anonymous end to an anonymous start, most
+                      // recent first. Never guess which identified overlapping
+                      // call may have ended.
+                      activity = runningAnonymous.pop();
+                    } else {
+                      const callId = String(event.toolCallId);
+                      activity = runningById.get(callId);
+                      runningById.delete(callId);
+                    }
+                    closeActivity(
+                      activity,
+                      event.isError ? "error" : "completed",
+                    );
+                    resetIdle();
+                  } else if (
+                    event.type === "message_end" &&
+                    event.message?.role === "assistant"
+                  ) {
+                    const message = event.message;
+                    assistantError =
+                      message.stopReason === "error" || message.errorMessage
+                        ? String(message.errorMessage ?? "provider/model error")
+                        : undefined;
+                    if (Array.isArray(message.content)) {
+                      const text = message.content
+                        .filter((item: any) => item.type === "text")
+                        .map((item: any) => item.text)
+                        .join("\n")
+                        .trim();
+                      if (text) assistantText = text;
+                    }
+                    resetIdle();
+                  }
+                } catch {}
+              }
+            } finally {
+              flushEmit();
             }
           });
           child.stderr.on("data", (chunk: Buffer) => {
-            resetIdle();
+            // stderr resets the idle budget too; raw publish stays throttled.
+            resetIdle(false);
             // Keep enough context to retain the decisive diagnostic even when
             // the CLI follows it with login help and documentation paths.
             stderrTail = (stderrTail + chunk.toString("utf8")).slice(-8000);
           });
 
+          // Slot release waits for confirmed process death. A post-spawn
+          // "error" (stdio/kill issues) must not resolve the waiter while the
+          // child may still be alive; only a failed launch (no pid) or an
+          // already-reaped child may settle early.
           const exitCode: number | null = await new Promise((resolve) => {
             let settled = false;
             const settle = (code: number | null) => {
@@ -866,17 +1259,44 @@ export default function (pi: ExtensionAPI) {
                 resolve(code);
               }
             };
-            child.on("close", settle);
+            child.on("close", (code) => settle(code));
             child.on("error", (error) => {
-              spawnFailure = error.message;
-              stderrTail = (
-                stderrTail + `\nspawn error: ${error.message}`
-              ).slice(-8000);
-              settle(-1);
+              const message = error.message;
+              stderrTail = (stderrTail + `\nprocess error: ${message}`).slice(
+                -8000,
+              );
+              const neverStarted = child.pid == null;
+              const alreadyDead =
+                child.exitCode !== null || child.signalCode !== null;
+              if (neverStarted) {
+                // Async spawn failure: process never launched.
+                spawnFailure = message;
+                settle(-1);
+                return;
+              }
+              if (alreadyDead) {
+                settle(child.exitCode ?? -1);
+                return;
+              }
+              // Still alive: keep run.child until "close". If a kill was
+              // already requested, re-issue a direct kill so a failed first
+              // attempt cannot strand the concurrency slot forever.
+              if (killReason) {
+                try {
+                  child.kill();
+                } catch {}
+              }
             });
           });
           if (idleTimer) clearTimeout(idleTimer);
-          closeActive(killReason || exitCode !== 0 ? "error" : "completed");
+          // The idle timer is cleared, so post-close frames publish no
+          // liveness metadata that no guard is backing.
+          lastEventAt = undefined;
+          phase = "model";
+          // The child is gone, so any call still marked running ended with it.
+          closeAllRunning(
+            killReason || exitCode !== 0 ? "error" : "completed",
+          );
           run.child = undefined;
           finalExitCode = exitCode;
           finalAssistantText = assistantText;
@@ -922,12 +1342,13 @@ export default function (pi: ExtensionAPI) {
       } finally {
         clearTimeout(hardTimer);
         signal?.removeEventListener("abort", onAbort);
-        closeActive(killReason ? "error" : "completed");
+        closeAllRunning(killReason ? "error" : "completed");
         run.done = true;
         run.child = undefined;
         activeRuns.delete(run);
         updateStatus(ctx);
-        release();
+        // Never release a slot that was never held.
+        if (acquired) release();
       }
     },
 
@@ -937,7 +1358,12 @@ export default function (pi: ExtensionAPI) {
       const details: TaskDetails = {
         agent: args.agent ?? "agent",
         mission: missionFromPrompt(args.prompt ?? "Mission"),
-        status: context.executionStarted ? "running" : "queued",
+        // `executionStarted` only means `execute` was entered; the task may
+        // still be waiting for a concurrency slot. Stay queued here and let
+        // the first emitted snapshot (rendered by renderResult) prove that
+        // the child is actually running, so a queued task never flickers
+        // through a false "running" frame.
+        status: "queued",
         startedAt: context.state.startedAt,
         model: args.model
           ? qualifyModel(args.model, agentProvider(def))

@@ -1,7 +1,7 @@
 {
-  "defaultModel": "gpt-5.6-sol",
+  "defaultModel": "grok-4.5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "lastChangelogVersion": "0.82.1",
   "packages": [
     "npm:pi-mcp-adapter",
