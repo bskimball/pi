@@ -19,11 +19,15 @@ import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import {
   fallbackTruncateToWidth,
+  padStartToWidth,
   safeTruncateToWidth,
   safeVisibleWidth,
 } from "./lib/safe-text-layout.ts";
 import {
+  DURATION_COLUMN,
+  TREE,
   cleanInline,
+  fitLine,
   formatDuration,
   formatTokens,
   stripAnsi,
@@ -54,18 +58,26 @@ function reportRenderFailure(surface: string, error: unknown): void {
 }
 
 class StableText implements Component {
-  private value = "";
+  private value: string | ((width: number) => string) = "";
 
+  /** Accepts a plain string or a width-aware builder for right-aligned columns. */
   setText(value: unknown): void {
-    this.value = typeof value === "string" ? value : String(value ?? "");
+    this.value =
+      typeof value === "function"
+        ? (value as (width: number) => string)
+        : typeof value === "string"
+          ? value
+          : String(value ?? "");
   }
 
   render(width: number): string[] {
     try {
       // Keep ANSI theme styling while clipping through the dependency-free
       // layout path; no pi-tui Text/Segmenter code runs here.
-      if (!this.value) return [];
-      return this.value
+      const resolved =
+        typeof this.value === "function" ? this.value(width) : this.value;
+      if (!resolved) return [];
+      return resolved
         .replace(/\t/g, "   ")
         .split(/\r?\n/)
         .slice(0, 100)
@@ -79,7 +91,7 @@ class StableText implements Component {
   invalidate(): void {}
 }
 
-function stableText(text: unknown): StableText {
+function stableText(text: unknown | ((width: number) => string)): StableText {
   const component = new StableText();
   component.setText(text);
   return component;
@@ -88,16 +100,20 @@ function stableText(text: unknown): StableText {
 /** Header lines followed by a full-width background-padded body block, matching
  * Pi's default expanded tool box (ctrl+o). */
 function paddedSection(
-  headerLines: string[],
-  bodyLines: string[],
+  header: string[] | ((width: number) => string),
+  body: string[] | ((innerWidth: number) => string[]),
   bg: (text: string) => string,
 ): Component {
   return {
     render(width: number): string[] {
       try {
+        const headerLines =
+          typeof header === "function" ? [header(width)] : header;
         const lines = headerLines
           .flatMap((line) => line.split(/\r?\n/))
           .map((line) => safeTruncateToWidth(line.replace(/\t/g, "   "), width));
+        const bodyLines =
+          typeof body === "function" ? body(Math.max(0, width - 2)) : body;
         if (bodyLines.length && width > 2) {
           const innerWidth = width - 2;
           const blank = bg(" ".repeat(width));
@@ -347,6 +363,28 @@ function renderIntraLineDiff(
   return { removedLine, addedLine };
 }
 
+// The theme schema fixes the set of background tokens, so diff row backgrounds
+// are emitted as raw truecolor. These match GitHub Dark's diff surfaces and are
+// only ever applied to a full row, which keeps the padding math unchanged.
+const DIFF_ADDED_BG = "\x1b[48;2;3;35;18m";
+const DIFF_REMOVED_BG = "\x1b[48;2;51;13;16m";
+const DIFF_RESET = "\x1b[49m";
+
+/**
+ * Paint a full-row background. The row is clipped and space-filled to rowWidth
+ * first so every diff line paints an even block instead of a ragged one.
+ */
+function diffRow(bg: string, text: string, rowWidth: number): string {
+  let row = text;
+  if (rowWidth > 0) {
+    row = safeTruncateToWidth(row, rowWidth);
+    row += " ".repeat(Math.max(0, rowWidth - safeVisibleWidth(row)));
+  }
+  // Re-assert the row background after any inner reset so intra-line inverse
+  // highlights cannot punch a hole in it.
+  return `${bg}${row.replace(/\x1b\[0m/g, `\x1b[0m${bg}`)}${DIFF_RESET}`;
+}
+
 /** Pi-style colored numbered diff with single-line intra-line inverse highlights. */
 function renderDiffLines(
   diffText: string,
@@ -355,11 +393,14 @@ function renderDiffLines(
     inverse?: (text: string) => string;
   },
   maxLines = 80,
+  rowWidth = 0,
 ): string[] {
   const lines = diffText.split("\n");
   const result: string[] = [];
   let i = 0;
   const inverse = theme.inverse?.bind(theme) ?? ((text: string) => text);
+  const added = (text: string) => diffRow(DIFF_ADDED_BG, text, rowWidth);
+  const removed = (text: string) => diffRow(DIFF_REMOVED_BG, text, rowWidth);
 
   while (i < lines.length) {
     const parsed = parseDiffLine(lines[i]);
@@ -386,42 +427,53 @@ function renderDiffLines(
       }
 
       if (removedLines.length === 1 && addedLines.length === 1) {
-        const removed = removedLines[0];
-        const added = addedLines[0];
         const { removedLine, addedLine } = renderIntraLineDiff(
-          replaceTabs(removed.content),
-          replaceTabs(added.content),
+          replaceTabs(removedLines[0].content),
+          replaceTabs(addedLines[0].content),
           inverse,
         );
         result.push(
-          theme.fg("toolDiffRemoved", `-${removed.lineNum} ${removedLine}`),
-        );
-        result.push(
-          theme.fg("toolDiffAdded", `+${added.lineNum} ${addedLine}`),
-        );
-      } else {
-        for (const removed of removedLines) {
-          result.push(
+          removed(
             theme.fg(
               "toolDiffRemoved",
-              `-${removed.lineNum} ${replaceTabs(removed.content)}`,
+              `-${removedLines[0].lineNum} ${removedLine}`,
+            ),
+          ),
+        );
+        result.push(
+          added(
+            theme.fg("toolDiffAdded", `+${addedLines[0].lineNum} ${addedLine}`),
+          ),
+        );
+      } else {
+        for (const row of removedLines) {
+          result.push(
+            removed(
+              theme.fg(
+                "toolDiffRemoved",
+                `-${row.lineNum} ${replaceTabs(row.content)}`,
+              ),
             ),
           );
         }
-        for (const added of addedLines) {
+        for (const row of addedLines) {
           result.push(
-            theme.fg(
-              "toolDiffAdded",
-              `+${added.lineNum} ${replaceTabs(added.content)}`,
+            added(
+              theme.fg(
+                "toolDiffAdded",
+                `+${row.lineNum} ${replaceTabs(row.content)}`,
+              ),
             ),
           );
         }
       }
     } else if (parsed.prefix === "+") {
       result.push(
-        theme.fg(
-          "toolDiffAdded",
-          `+${parsed.lineNum} ${replaceTabs(parsed.content)}`,
+        added(
+          theme.fg(
+            "toolDiffAdded",
+            `+${parsed.lineNum} ${replaceTabs(parsed.content)}`,
+          ),
         ),
       );
       i++;
@@ -554,20 +606,36 @@ function registerBuiltin(
       const glyph = context.executionStarted
         ? theme.fg("warning", "●")
         : theme.fg("dim", "○");
-      const elapsed = context.state.startedAt
-        ? theme.fg("dim", formatDuration(Date.now() - context.state.startedAt))
-        : "";
-      component.setText(
-        [
-          theme.fg("dim", "├"),
-          glyph,
-          theme.fg("toolTitle", name),
-          theme.fg("muted", primaryArg(name, args)),
-          elapsed,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
+      const startedAt = context.state.startedAt;
+      component.setText((width: number) => {
+        const elapsed = startedAt
+          ? theme.fg(
+              "dim",
+              padStartToWidth(
+                formatDuration(Date.now() - startedAt),
+                DURATION_COLUMN,
+              ),
+            )
+          : "";
+        // Each tool call is its own transcript item, so the row is a compact
+        // root: the status glyph is the only marker. No tree edges, which would
+        // falsely imply that separate tool calls are siblings in one tree.
+        const lead = `${glyph} ${theme.fg("toolTitle", name)}`;
+        const budget = Math.max(
+          8,
+          width -
+            safeVisibleWidth(lead) -
+            (elapsed ? safeVisibleWidth(elapsed) + 2 : 0) -
+            1,
+        );
+        const rawArg = primaryArg(name, args);
+        const arg =
+          name === "bash"
+            ? safeTruncateToWidth(rawArg, budget)
+            : shortenPath(rawArg, budget);
+        const left = `${lead} ${theme.fg("muted", arg)}`;
+        return elapsed ? fitLine(left, elapsed, width) : left;
+      });
       return component;
     },
     renderResult(
@@ -591,8 +659,11 @@ function registerBuiltin(
       const elapsed = context.state.startedAt
         ? theme.fg(
             "dim",
-            formatDuration(
-              (context.state.endedAt ?? Date.now()) - context.state.startedAt,
+            padStartToWidth(
+              formatDuration(
+                (context.state.endedAt ?? Date.now()) - context.state.startedAt,
+              ),
+              DURATION_COLUMN,
             ),
           )
         : "";
@@ -607,56 +678,71 @@ function registerBuiltin(
               options.expanded ? "ctrl+o collapse" : "ctrl+o diff",
             )
           : "";
-      const header = [
-        theme.fg("dim", "├"),
-        glyph,
-        theme.fg("toolTitle", name),
-        theme.fg("muted", primaryArg(name, context.args)),
-        stats,
-        expandHint,
-        elapsed,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const lines = [header];
       const output = textContent(result).trim();
-      // Indent collapsed result lines underneath the tool name, matching the
-      // task activity indentation style. Outer tool rails and nested result
-      // gutters share the lighter dim token so they read as one tree.
-      const indent = (line: string) =>
-        `${theme.fg("dim", "   │")} ${line}`;
+      // The row is a self-contained receipt: no tree edge is drawn for it.
+      // Identity reads left to right (glyph, name, arg, stats, hint) and only
+      // the duration is right-anchored. The primary arg is budgeted first so a
+      // long path gives way to the stats instead of clipping them off the row.
+      const header = (width: number) => {
+        const tail = [stats, width >= 72 ? expandHint : ""].filter(Boolean);
+        const lead = `${glyph} ${theme.fg("toolTitle", name)}`;
+        const tailText = tail.join(" ");
+        const reserved =
+          safeVisibleWidth(lead) +
+          (tailText ? safeVisibleWidth(tailText) + 1 : 0) +
+          (elapsed ? safeVisibleWidth(elapsed) + 2 : 0) +
+          1;
+        const budget = Math.max(8, width - reserved);
+        const rawArg = primaryArg(name, context.args);
+        // Commands read from the front; paths carry their meaning in the tail,
+        // so shrink them from the left and keep the file name visible.
+        const arg =
+          name === "bash"
+            ? safeTruncateToWidth(rawArg, budget)
+            : shortenPath(rawArg, budget);
+        const left = [lead, theme.fg("muted", arg), tailText]
+          .filter(Boolean)
+          .join(" ");
+        return elapsed ? fitLine(left, elapsed, width) : left;
+      };
+      // A continuation rail appears only when there is actual body output. It
+      // hangs under the tool name rather than at the glyph column so the body
+      // reads as subordinate to this row, not as a branch of a larger tree.
+      const indent = (line: string) => `  ${theme.fg("dim", TREE.rail)} ${line}`;
 
       if (context.isError) {
-        if (output)
-          lines.push(indent(theme.fg("error", cleanInline(output, 800))));
-        return stableText(lines.join("\n"));
+        if (!output) return stableText(header);
+        const body = indent(theme.fg("error", cleanInline(output, 800)));
+        return stableText((width: number) => `${header(width)}\n${body}`);
       }
-      if (runningNow) return stableText(lines.join("\n"));
+      if (runningNow) return stableText(header);
 
       // Expanded sections render inside a padded background container, like
       // Pi's default ctrl+o tool box.
       if (options.expanded) {
-        const bg = (text: string) => theme.bg("toolSuccessBg", text);
-        let body: string[] = [];
-        if (name === "bash") {
-          body = boundedOutput(output, 80).map((line) =>
-            theme.fg("toolOutput", line),
-          );
-        } else if (isMutation) {
-          if (diff) body = renderDiffLines(diff, theme, 80);
-        } else if (output) {
-          body = boundedOutput(output, 80).map((line) =>
-            theme.fg("toolOutput", line),
-          );
-        }
-        return paddedSection(lines, body, bg);
+        const bg = (text: string) =>
+          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text);
+        const body = (innerWidth: number): string[] => {
+          if (isMutation)
+            return diff ? renderDiffLines(diff, theme, 80, innerWidth) : [];
+          if (output)
+            return boundedOutput(output, 80).map((line) =>
+              theme.fg("toolOutput", line),
+            );
+          return [];
+        };
+        return paddedSection(header, body, bg);
       }
 
-      if (name === "bash") {
-        for (const line of boundedOutput(output, 3, 1200))
-          lines.push(indent(theme.fg("toolOutput", line)));
+      if (name === "bash" && output) {
+        const body = boundedOutput(output, 3, 1200).map((line) =>
+          indent(theme.fg("toolOutput", line)),
+        );
+        return stableText(
+          (width: number) => `${header(width)}\n${body.join("\n")}`,
+        );
       }
-      return stableText(lines.join("\n"));
+      return stableText(header);
     },
   });
 }
@@ -666,6 +752,18 @@ function formatCwd(cwd: string): string {
   return home && cwd.toLowerCase().startsWith(home.toLowerCase())
     ? `~${cwd.slice(home.length)}`
     : cwd;
+}
+
+/** Keep the tail segments of a path, which carry the identifying information. */
+function shortenPath(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const segments = value.split(/[\\/]+/).filter(Boolean);
+  for (let start = 1; start < segments.length; start++) {
+    const tail = `…/${segments.slice(start).join("/")}`;
+    if (tail.length <= max) return tail;
+  }
+  const last = segments[segments.length - 1] ?? value;
+  return last.length <= max ? last : `…${last.slice(-Math.max(1, max - 1))}`;
 }
 
 interface VsStatusParts {
@@ -712,13 +810,32 @@ function taskCount(status: string | undefined): number {
 const RANDOM_INDICATOR_FRAME_COUNT = 256;
 const RANDOM_INDICATOR_INTERVAL_MS = 120;
 
+// One message is picked at random per run. The indicator is event-driven only:
+// no extension-owned timer rewrites it mid-run.
 const WORKING_MESSAGES = [
   "Thinking through it",
   "Tracing the next move",
   "Exploring the code",
   "Working the problem",
   "Following the signal",
+  "Chasing the details",
+  "Piecing it together",
 ];
+
+function workingMessage(): string {
+  return WORKING_MESSAGES[Math.floor(Math.random() * WORKING_MESSAGES.length)];
+}
+
+/** Thinking level drives the indicator hue, making the animation informative. */
+const THINKING_TONES: Record<string, string> = {
+  off: "thinkingOff",
+  minimal: "thinkingMinimal",
+  low: "thinkingLow",
+  medium: "thinkingMedium",
+  high: "thinkingHigh",
+  xhigh: "thinkingXhigh",
+  max: "thinkingMax",
+};
 
 const WORKING_PATTERNS = [
   // Pulse from the center, then settle back on the beat.
@@ -742,6 +859,30 @@ const WORKING_PATTERNS = [
     "000000100",
     "000100000",
   ],
+  // Two dots orbiting 180 degrees apart.
+  [
+    "100000001",
+    "010000010",
+    "001000100",
+    "000101000",
+    "001000100",
+    "010000010",
+  ],
+  // Rain: columns falling on a stagger.
+  [
+    "100000000",
+    "100100000",
+    "010100100",
+    "010010100",
+    "001010010",
+    "001001010",
+    "000001001",
+    "000000001",
+  ],
+  // Breathe: density ramps up from the center and releases.
+  ["000010000", "010101010", "111111111", "010101010", "000010000"],
+  // Scanline with a trailing dimmer column.
+  ["100100100", "110110110", "011011011", "001001001", "000000000"],
 ] as const;
 
 function shuffle<T>(values: readonly T[]): T[] {
@@ -766,16 +907,19 @@ function renderWorkingDots(mask: string): string {
   return `${String.fromCodePoint(0x2800 + firstTwoColumns)}${String.fromCodePoint(0x2800 + thirdColumn)}`;
 }
 
-function randomWorkingFrames(ctx: ExtensionContext): string[] {
+function randomWorkingFrames(ctx: ExtensionContext, leadTone: string): string[] {
   const frames: string[] = [];
   while (frames.length < RANDOM_INDICATOR_FRAME_COUNT) {
     for (const sourcePattern of shuffle(WORKING_PATTERNS)) {
       // Randomly reverse each motif so repeated cycles keep their rhythm without
       // always moving in the same direction or appearing in the same order.
-      const pattern = Math.random() < 0.5 ? [...sourcePattern].reverse() : sourcePattern;
+      const pattern =
+        Math.random() < 0.5 ? [...sourcePattern].reverse() : sourcePattern;
       for (let beat = 0; beat < pattern.length; beat++) {
-        const tone = beat === 0 ? "accent" : beat % 2 === 0 ? "muted" : "dim";
-        frames.push(ctx.ui.theme.fg(tone, renderWorkingDots(pattern[beat])));
+        // The leading beat carries the thinking-level hue; the rest decay so the
+        // motion still reads as a trail.
+        const tone = beat === 0 ? leadTone : beat % 2 === 0 ? "muted" : "dim";
+        frames.push(ctx.ui.theme.fg(tone as any, renderWorkingDots(pattern[beat])));
         if (frames.length >= RANDOM_INDICATOR_FRAME_COUNT) return frames;
       }
     }
@@ -783,17 +927,21 @@ function randomWorkingFrames(ctx: ExtensionContext): string[] {
   return frames;
 }
 
-function applyRandomWorkingIndicator(ctx: ExtensionContext): void {
+function applyRandomWorkingIndicator(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): void {
   if (!ctx.hasUI) return;
+  let leadTone = "accent";
+  try {
+    leadTone = THINKING_TONES[String(pi.getThinkingLevel())] ?? "accent";
+  } catch {
+    // Keep the default accent hue.
+  }
   ctx.ui.setWorkingVisible(true);
-  ctx.ui.setWorkingMessage(
-    ctx.ui.theme.fg(
-      "dim",
-      `${WORKING_MESSAGES[Math.floor(Math.random() * WORKING_MESSAGES.length)]}...`,
-    ),
-  );
+  ctx.ui.setWorkingMessage(ctx.ui.theme.fg("dim", `${workingMessage()}...`));
   ctx.ui.setWorkingIndicator({
-    frames: randomWorkingFrames(ctx),
+    frames: randomWorkingFrames(ctx, leadTone),
     intervalMs: RANDOM_INDICATOR_INTERVAL_MS,
   });
 }
@@ -804,11 +952,10 @@ export default function (pi: ExtensionAPI) {
   // editor and working indicator.
   if (process.env.PI_MONO_UI === "0") return;
 
-  // Regenerate the sequence for every low-level run so retries and subsequent
-  // turns do not reuse the same pseudo-random loop.
-  pi.on("agent_start", (_event, ctx) => {
-    applyRandomWorkingIndicator(ctx);
-  });
+  // Regenerate the sequence for every run so retries and subsequent turns do
+  // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
+  // the animation clock.
+  pi.on("agent_start", (_event, ctx) => applyRandomWorkingIndicator(pi, ctx));
 
   registerBuiltin(pi, "read", createReadToolDefinition);
   registerBuiltin(pi, "bash", createBashToolDefinition);
@@ -819,7 +966,7 @@ export default function (pi: ExtensionAPI) {
 
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
-    applyRandomWorkingIndicator(ctx);
+    applyRandomWorkingIndicator(piApi, ctx);
 
     class MonoEditor extends CustomEditor {
       constructor(
@@ -838,12 +985,12 @@ export default function (pi: ExtensionAPI) {
           // Keep every upstream editor row and cursor calculation intact. Only
           // repaint the existing top border and replace its two leading padding
           // cells with a prompt glyph; no rows or terminal columns are added.
-          const modelString = `${ctx.model?.id ?? "no-model"} · ${piApi.getThinkingLevel()}`;
-          const label = safeTruncateToWidth(modelString, Math.max(0, width - 1));
-          const labelWidth = safeVisibleWidth(label);
-          const gap = labelWidth > 0 && width > labelWidth ? 1 : 0;
-          const borderWidth = Math.max(0, width - labelWidth - gap);
-          lines[0] = `${ctx.ui.theme.fg("borderMuted", "─".repeat(borderWidth))}${gap ? " " : ""}${ctx.ui.theme.fg("muted", label)}`;
+          // Model/thinking now lives in the footer information system instead
+          // of floating alone above the input's right edge.
+          lines[0] = ctx.ui.theme.fg(
+            "borderMuted",
+            "─".repeat(Math.max(0, width)),
+          );
 
           if (lines.length > 1) {
             const inputLine = stripAnsi(lines[1]);
@@ -910,16 +1057,33 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           try {
+            if (width <= 0) return [];
             const { input, output, cacheRead, cacheWrite } = sessionUsage();
             const usage = ctx.getContextUsage();
             const window =
               usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
             const tokens = usage?.tokens;
-            const cells =
-              usage?.percent == null
-                ? 0
-                : Math.max(0, Math.min(10, Math.round(usage.percent / 10)));
-            const gauge = `${theme.fg(cells >= 9 ? "error" : cells >= 7 ? "warning" : "accent", "■".repeat(cells))}${theme.fg("borderMuted", "□".repeat(10 - cells))}`;
+            const percent = usage?.percent;
+            // A continuous rule reads quieter than outlined boxes: the empty
+            // track recedes instead of competing with the filled portion.
+            const gauge = (track: number) => {
+              const cells =
+                percent == null
+                  ? 0
+                  : Math.max(
+                      0,
+                      Math.min(track, Math.round((percent / 100) * track)),
+                    );
+              const tone =
+                percent == null
+                  ? "borderMuted"
+                  : percent >= 90
+                    ? "error"
+                    : percent >= 70
+                      ? "warning"
+                      : "accent";
+              return `${theme.fg(tone, "━".repeat(cells))}${theme.fg("borderMuted", "─".repeat(track - cells))}`;
+            };
             const promptTokens = input + cacheRead + cacheWrite;
             const cacheHit = promptTokens
               ? Math.round((cacheRead / promptTokens) * 100)
@@ -937,36 +1101,190 @@ export default function (pi: ExtensionAPI) {
             );
             const tasks = taskCount(statuses.get("tasks"));
             const branch = footerData.getGitBranch();
-            const cwd = `${formatCwd(ctx.cwd)}${branch ? `:${branch}` : ""}`;
-            const context = `${gauge} ${tokens == null ? "?" : formatTokens(tokens)}/${formatTokens(window)}`;
-            const stats = `↑${formatTokens(input)} ↓${formatTokens(output)} cache ${cacheHit}%`;
-            const mainItems = [
-              { text: cwd, min: 28 },
-              { text: context, min: 48 },
-              { text: stats, min: 64 },
-              { text: tasks ? `T${tasks}` : undefined, min: 38 },
-              {
-                text: otherStatus ? cleanInline(otherStatus[1], 50) : undefined,
-                min: 142,
-              },
-            ].filter(
-              (item): item is { text: string; min: number } =>
-                !!item.text && width >= item.min,
+            const cwd = formatCwd(ctx.cwd);
+
+            // Dynamic counters are padded to a fixed cell so the footer does
+            // not jitter column-by-column as numbers grow during a turn.
+            const used = padStartToWidth(
+              tokens == null ? "?" : formatTokens(tokens),
+              5,
             );
-            const separator = theme.fg("borderMuted", "  │  ");
-            const main = mainItems.map((item) => item.text).join(separator);
-            const secondaryItems = [
-              mcpEntry ? cleanInline(mcpEntry[1], 50) : undefined,
-              vs
-                ? theme.fg("accent", width >= 105 ? vs.wide : vs.narrow)
-                : undefined,
-            ].filter((item): item is string => !!item);
-            const secondary = secondaryItems.join(separator);
-            const lines = [safeTruncateToWidth(main, width)];
-            if (secondary) {
-              lines.push(safeTruncateToWidth(secondary, width));
+            const total = window > 0 ? formatTokens(window) : "?";
+            const pct =
+              percent == null
+                ? "   ?"
+                : padStartToWidth(`${Math.round(percent)}%`, 4);
+            const place = (text: string) => theme.fg("muted", text);
+            const value = (text: string) => theme.fg("dim", text);
+
+            const placeItem = [
+              place(`${cwd}${branch ? `:${branch}` : ""}`),
+              place(`${shortenPath(cwd, 22)}${branch ? `:${branch}` : ""}`),
+              place(
+                `${shortenPath(cwd, 14)}${branch ? `:${shortenPath(branch, 14)}` : ""}`,
+              ),
+              place(
+                `${shortenPath(cwd, 8)}${branch ? `:${shortenPath(branch, 10)}` : ""}`,
+              ),
+            ];
+            const contextItem = [
+              `${gauge(10)} ${value(`${used}/${total}`)}`,
+              `${gauge(8)} ${value(`${used}/${total}`)}`,
+              `${gauge(6)} ${value(pct)}`,
+            ];
+            const inputText = formatTokens(input);
+            const outputText = formatTokens(output);
+            const trafficItem = [
+              value(
+                `↑${padStartToWidth(inputText, 5)} ↓${padStartToWidth(outputText, 5)} cache ${padStartToWidth(`${cacheHit}%`, 4)}`,
+              ),
+              value(`↑${inputText} ↓${outputText}`),
+            ];
+            const thinking = String(piApi.getThinkingLevel());
+            const modelId = ctx.model?.id ?? "no-model";
+            const modelItem = [
+              `${value(modelId)} ${theme.fg((THINKING_TONES[thinking] ?? "muted") as any, thinking)}`,
+              `${value(shortenPath(modelId, 16))} ${theme.fg((THINKING_TONES[thinking] ?? "muted") as any, thinking.slice(0, 3))}`,
+            ];
+            const mcpText = mcpEntry
+              ? cleanInline(mcpEntry[1], 40)
+                  .replace(/^MCP:\s*/i, "")
+                  .replace(/\s*servers?$/i, "")
+              : "";
+            const mcpItem = mcpText
+              ? [value(`mcp ${mcpText}`), value(`mcp ${mcpText}`)]
+              : undefined;
+            const taskItem = tasks
+              ? [
+                  theme.fg("accent", `${tasks} task${tasks === 1 ? "" : "s"}`),
+                  theme.fg("accent", `T${tasks}`),
+                ]
+              : undefined;
+            const vsItem = vs
+              ? [theme.fg("muted", vs.wide), theme.fg("muted", vs.narrow)]
+              : undefined;
+            const otherItem = otherStatus
+              ? [value(cleanInline(otherStatus[1], 40))]
+              : undefined;
+
+            const separator = theme.fg("borderMuted", "  ·  ");
+            const has = (item?: string[]): item is string[] => !!item;
+            const narrowest = (item: string[]) => item[item.length - 1];
+
+            /**
+             * Fit a row by shrinking individual cells in a fixed give-way order
+             * rather than degrading every cell in lockstep, so a wide terminal
+             * never abbreviates a field it had room to show in full.
+             * Cell arrays are stable per-render objects, so they are used
+             * directly as identity keys for the per-row level map.
+             * Returns undefined when even the narrowest form overflows, so a
+             * caller never emits a row that was silently clipped.
+             */
+            const pack = (
+              cells: string[][],
+              right: string[] | undefined,
+              giveWay: string[][],
+            ): string[] | undefined => {
+              const levels = new Map<string[], number>();
+              const at = (cell: string[]) =>
+                cell[Math.min(levels.get(cell) ?? 0, cell.length - 1)];
+              const measure = () => {
+                // Separators carry ANSI styling; widths are measured on the
+                // joined string so the escape sequences are never counted.
+                const left = cells.map(at).join(separator);
+                const tail = right ? at(right) : "";
+                return {
+                  left,
+                  tail,
+                  total:
+                    safeVisibleWidth(left) +
+                    (tail ? 2 + safeVisibleWidth(tail) : 0),
+                };
+              };
+              // Only cells actually on this row can give way; otherwise the
+              // budget is spent degrading a field the row does not render.
+              const present = new Set<string[]>([
+                ...cells,
+                ...(right ? [right] : []),
+              ]);
+              let state = measure();
+              for (const cell of giveWay) {
+                if (!present.has(cell)) continue;
+                while (
+                  state.total > width &&
+                  (levels.get(cell) ?? 0) < cell.length - 1
+                ) {
+                  levels.set(cell, (levels.get(cell) ?? 0) + 1);
+                  state = measure();
+                }
+                if (state.total <= width) break;
+              }
+              if (state.total > width) return undefined;
+              return [
+                state.tail
+                  ? fitLine(state.left, state.tail, width)
+                  : safeTruncateToWidth(state.left, width),
+              ];
+            };
+
+            // Place and context anchor the left; session identity
+            // (model/thinking) anchors the right so it belongs to the footer
+            // information system instead of floating above the input border.
+            const detail = [
+              trafficItem,
+              taskItem,
+              vsItem,
+              mcpItem,
+              otherItem,
+            ].filter(has);
+            // Give-way order: identity/location abbreviate before the numbers
+            // the user reads, and the context gauge yields last.
+            const giveWay = [
+              placeItem,
+              vsItem,
+              modelItem,
+              trafficItem,
+              taskItem,
+              contextItem,
+            ].filter(has);
+
+            // Wide: one balanced line carrying everything.
+            const single = pack(
+              [placeItem, contextItem, ...detail],
+              modelItem,
+              giveWay,
+            );
+            if (single) return single;
+
+            // Medium: identity, context and model hold the primary line and the
+            // tail of the detail group moves down as a block. The split is
+            // taken as late as possible so the second line is a coherent group;
+            // a single leftover item is never stranded on its own line, so a
+            // solitary MCP status is either carried on the primary line or
+            // dropped with the rest of the overflow.
+            for (let split = detail.length - 1; split >= 0; split--) {
+              const tail = detail.slice(split);
+              // A single status (mcp, vs, task count) never earns a line of its
+              // own; only the multi-field traffic group reads as a coherent
+              // second line by itself.
+              if (tail.length === 1 && tail[0] !== trafficItem) continue;
+              const primary = pack(
+                [placeItem, contextItem, ...detail.slice(0, split)],
+                modelItem,
+                giveWay,
+              );
+              if (!primary) continue;
+              const secondary = pack(tail, undefined, giveWay);
+              if (secondary) return [primary[0], secondary[0]];
             }
-            return lines;
+
+            // Narrow: the context bar stays visible and everything else yields.
+            return (
+              pack([placeItem, contextItem], undefined, giveWay) ??
+              pack([contextItem], undefined, giveWay) ?? [
+                safeTruncateToWidth(narrowest(contextItem), width),
+              ]
+            );
           } catch (error) {
             reportRenderFailure("footer", error);
             return [fallbackTruncateToWidth("mono-ui", width)];

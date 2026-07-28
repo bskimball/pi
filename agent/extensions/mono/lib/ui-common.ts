@@ -33,8 +33,25 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60)
+    return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
+
+/** Shared tree glyphs and column widths for tool and task surfaces. */
+export const TREE = {
+  header: "\u25c6",
+  branch: "\u251c\u2500",
+  last: "\u2570\u2500",
+  rail: "\u2502",
+  /** Receipt root: a closed//cleanup surface that is not a tree child. */
+  receipt: "\u25c7",
+  /** Detached continuation: aligns to the child column without a tree edge. */
+  hang: "   ",
+} as const;
+
+export const DURATION_COLUMN = 6;
 
 export function formatTokens(value: number): string {
   if (value < 1000) return String(value);

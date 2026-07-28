@@ -1,5 +1,5 @@
 {
   "pi": {
-    "extensions": ["amp-task.ts", "mono-ui.ts"]
+    "extensions": ["amp-task.ts", "async-task.ts", "mono-ui.ts"]
   }
 }
