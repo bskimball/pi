@@ -1,11 +1,10 @@
 {
-  "defaultModel": "gpt-5.6-sol1. ",
+  "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.82.1",
   "packages": [
     "npm:pi-mcp-adapter",
-    "npm:pi-prompt-template-model",
     "npm:pi-web-access",
     "npm:pi-btw"
   ],
@@ -15,10 +14,5 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "pi-dark",
-  "prompts": [
-    "+prompts/browser.md",
-    "+prompts/brainstorm.md",
-    "+prompts/deploy.md"
-  ]
+  "theme": "pi-dark"
 }
