@@ -2,7 +2,7 @@
 
 Personal configuration for [Pi](https://github.com/earendil-works/pi-mono) — a customized coding-agent setup with a fleet of specialist sub-agents, TUI extensions, and slash commands for browser automation and deployment.
 
-Credentials are stored directly in the local configuration files that consume them; those files are excluded by `.gitignore`.
+Credential-bearing local configuration files are excluded by `.gitignore`. Each ignored config has a tracked `*.example.json` sibling that uses environment-variable references rather than real secrets. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation.
 
 ## Overview
 
@@ -10,7 +10,7 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, background-process management, a custom "Mono" TUI presentation layer, and crash logging.
-- **Slash commands / prompts** (`agent/prompts/`), including `/browser` for authenticated browser automation and `/deploy` for delegated ship-it workflows.
+- **Slash commands and prompt templates** — native `/browser` and `/deploy` commands are registered by `agent/extensions/prompt-commands.ts`; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for image generation and background processes.
 
 ## Sub-agents and Orchestration Tools
@@ -52,7 +52,7 @@ Custom TUI and orchestration extensions live in `agent/extensions/`:
 
 ## Slash commands
 
-Custom prompts are registered in `agent/settings.json` and defined under `agent/prompts/`.
+`/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. `/brainstorm`); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
 ### `/browser`
 
@@ -92,14 +92,19 @@ Delegates lint, format, verify, and deploy to the `stevedore` sub-agent instead 
    npm install
    ```
 
-3. Restore the ignored local configuration files containing credentials:
-   - `agent/models.json` for model-provider API keys
-   - `agent/mcp.json` for MCP credentials
-   - `web-search.json` for web-search provider keys
-4. Sign in to OAuth-backed providers again with Pi's `/login` command. `agent/auth.json` is intentionally ignored.
-5. Restart Pi after changing these configuration files.
+3. Restore the ignored local configuration files from their tracked examples (see [CONFIGURATION.md](CONFIGURATION.md) for field details):
 
-`.env.example` remains a reference for the supported key names, but Pi does not automatically load the repository's `.env` file.
+   ```bash
+   cp agent/models.example.json agent/models.json
+   cp agent/mcp.example.json agent/mcp.json
+   cp web-search.example.json web-search.json
+   ```
+
+   Prefer leaving `$LOCAL_PROXY_API_KEY` and `$EXA_API_KEY` references in place and defining those environment variables. For MCP, `bearerTokenEnv` contains an environment-variable **name**: define `EXAMPLE_MCP_TOKEN`, or rename the field value and define the renamed variable. Do not paste a token into `bearerTokenEnv`. Literal secrets are supported by some formats but are discouraged.
+
+   If `PI_CODING_AGENT_DIR` is set, `web-search.ts` reads `web-search.json` from that exact directory instead of the repo root; copy the example there.
+4. Sign in to OAuth-backed providers again with Pi's `/login` command. `agent/auth.json` is intentionally ignored.
+5. `agent/models.json` reloads automatically when `/model` is opened. The Exa credential config is re-read on each `web_search` call. `agent/mcp.json` changes apply on the next session start or `/reload` — restart Pi (or `/reload`) after changing it.
 
 Before committing, review the staged files and run a secret scanner such as Gitleaks:
 

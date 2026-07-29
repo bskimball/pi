@@ -1,0 +1,36 @@
+{
+  "providers": {
+    "local-proxy": {
+      "api": "openai-completions",
+      "apiKey": "$LOCAL_PROXY_API_KEY",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "models": [
+        {
+          "id": "example-model-id",
+          "contextWindow": 128000,
+          "maxTokens": 32000,
+          "input": ["text", "image"],
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "xhigh": "xhigh"
+          }
+        }
+      ]
+    },
+    "ollama": {
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "models": [
+        {
+          "id": "llama3.1:8b",
+          "contextWindow": 128000,
+          "input": ["text"],
+          "reasoning": false
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@1.6.0",
+        "--browserUrl=http://127.0.0.1:29300"
+      ],
+      "lifecycle": "lazy"
+    },
+    "example-http-server": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": "bearer",
+      "bearerTokenEnv": "EXAMPLE_MCP_TOKEN"
+    }
+  },
+  "settings": {
+    "toolPrefix": "server",
+    "idleTimeout": 10
+  }
+}
