@@ -79,7 +79,9 @@ The one exception is oracle. Oracle exists for an independent second opinion, an
 
 ## Delegating well
 
-Delegate with the `task` tool. Each task runs the chosen agent in its own process with a fresh context window; only its final report comes back. You cannot steer a task mid-flight, so the work order must be complete and self-contained. Issue multiple `task` calls in one message to run agents in parallel.
+Delegate with `task_start` by default: it runs the chosen agent asynchronously in its own process with a fresh context window and returns a handle immediately, so you can keep doing useful lead work, monitor progress, steer it, or dispatch other work while it runs. Reach for `task_start` for implementation, uncertain investigation, multi-turn work, anything likely to need mid-course correction, and anything that can usefully overlap with other work. Normal async flow: `task_start` to launch, continue other useful work or monitor, `task_send` (mode `steer` or `follow_up`) to redirect it, `task_wait` to collect the result, `task_close` when done. Always `task_close` finished workers — each live worker counts against a concurrency cap until closed.
+
+Use the synchronous `task` tool only for short, deterministic, genuinely one-shot bounded results where no steering or follow-up will be needed — a single self-contained lookup or check with a known-shape answer. A synchronous `task` cannot be steered once dispatched, so its work order must be complete and self-contained; issue multiple `task` calls in one message for parallel read-only bounded lookups. Async `steer` is not a mid-inference interrupt either — it queues and is delivered at the next model-call boundary, after the current assistant turn finishes its tool calls and before the next LLM call.
 
 Subagents have no access to this conversation. Write outcome-first work orders, not process-heavy prompts. A strong delegation prompt includes:
 
