@@ -2,16 +2,18 @@
 
 Personal configuration for [Pi](https://github.com/earendil-works/pi-mono) — a customized coding-agent setup with a fleet of specialist sub-agents, TUI extensions, and slash commands for browser automation and deployment.
 
-Credential-bearing local configuration files are excluded by `.gitignore`. Each ignored config has a tracked `*.example.json` sibling that uses environment-variable references rather than real secrets. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation.
+Credential-bearing local configuration files (`agent/auth.json`, `agent/models.json`, `agent/mcp.json`, `web-search.json`, plus any `.env`/`.env.*`) are excluded by `.gitignore`. Three of them — `agent/models.json`, `agent/mcp.json`, and `web-search.json` — have a tracked `*.example.json` minimal template with environment-variable references instead of real secrets; `agent/auth.json` and any `.env` files have no example and are populated by `/login` or your own shell environment. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation, and [CONTEXT.md](CONTEXT.md) for the local extension architecture (seams, tool receipts, agent catalog, sync-vs-async task internals).
 
 ## Overview
 
 This repo layers several things on top of a stock Pi install:
 
-- **A `task` tool and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
-- **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, background-process management, a custom "Mono" TUI presentation layer, and crash logging.
+- **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
+- **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, web search, MCP presentation, background-process management, a custom "Mono" TUI presentation layer, and crash logging.
 - **Slash commands and prompt templates** — native `/browser` and `/deploy` commands are registered by `agent/extensions/prompt-commands.ts`; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for image generation and background processes.
+- **A theme** (`agent/themes/pi-dark.json`) selected via `agent/settings.json`.
+- **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
 
 ## Sub-agents and Orchestration Tools
 
@@ -21,6 +23,17 @@ Pi's main agent delegates bounded units of work to specialist sub-agents through
 - **`task_start` / `task_status` / `task_list` / `task_send` / `task_wait` / `task_abort` / `task_close` / `task_reply`** — asynchronous RPC sub-agent management: starts persistent isolated sessions in the background, steers or sends follow-ups mid-flight, handles UI extension requests, and retrieves or waits for results while keeping the lead context free.
 
 Each task spawns a separate `pi` process with the specialist's own system prompt, model, thinking level, and tool set.
+
+**`task_start` is the preferred delegation path** (see `agent/SYSTEM.md`): it returns a worker handle immediately so the lead agent can keep working, monitor, or dispatch other tasks in parallel. `task` (synchronous, blocking) is reserved for cases needing a single bounded result in-line before continuing. The async lifecycle is: `task_start` to launch a worker (counts against a cap of 3 concurrent live workers) → do other work or poll with `task_status` / `task_list` → `task_send` to steer or follow up → `task_wait` to block until the current generation settles → **`task_close` to reap the worker**. A worker normally holds its concurrency slot until closed, so `task_close` is required lifecycle hygiene once a worker's result has been collected. `task_reply` answers a worker's interactive UI dialog request (select/confirm/input/editor) by request id.
+
+**Model fallback differs between the two tools.** Each agent file declares a primary model plus an ordered fallback chain (`modelAttempts()`). The synchronous `task` tool retries through that full chain on failure. `task_start` currently spawns using only the first resolved model in the chain — declared fallbacks are not retried at spawn time (source comment: "v1: use first model only for spawn; fallbacks can be retried on hard fail later").
+
+`task_send` has two delivery modes with different queueing semantics:
+
+- **`steer`** — queued at the next **model-call boundary**: it cannot interrupt inference or an in-flight tool call, and is delivered after the current assistant turn finishes its tool calls, just before the next LLM call.
+- **`follow_up`** — delivered only after the worker fully **settles** (no more tool calls or pending steering).
+
+A `prompt`-mode send is only allowed once a worker is settled or failed; use `steer`/`follow_up` while it's still running.
 
 The task tool and the sub-agent prompts are **based on Amp's prompts and sub-agents**. Amp ships a small set of built-in sub-agents (an orchestrator, a search/oracle reviewer, a librarian, and fast workers); the reference prompts live under `reference/amp-prompts/` and are used as behavioral and structural templates. On top of that foundation this configuration adds a broader roster of purpose-built specialists:
 
@@ -36,23 +49,25 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
 | `stevedore` | Fast ops specialist for deploys and CLI chores: lint, format, build, git, and platform CLIs. |
 
-Shared norms that apply to every specialist (non-interactive reporting, smallest-correct-change discipline, browser rules, etc.) live in `agent/agents/_shared.md`. Each agent file also declares its primary model plus a fallback chain, so a task keeps running even if a provider is unavailable.
+Shared norms that apply to every specialist (non-interactive reporting, smallest-correct-change discipline, browser rules, etc.) live in [`agent/agents/_shared.md`](agent/agents/_shared.md) and are prepended to every agent's system prompt; [`agent/agents/_handoff.md`](agent/agents/_handoff.md) is appended for subagent runs and requires a non-empty final text handoff. Each agent file also declares its primary model plus a fallback chain: the synchronous `task` tool retries through that chain on failure, so a `task` call keeps running even if a provider is unavailable. `task_start` currently spawns with only the first resolved model in the chain (no fallback retry at spawn time) — see the note in [Sub-agents and Orchestration Tools](#sub-agents-and-orchestration-tools).
 
 ## Extensions
 
 Custom TUI and orchestration extensions live in `agent/extensions/`:
 
-- **`mono/amp-task.ts` & `mono/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, model fallback chains, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports).
+- **`mono/amp-task.ts` & `mono/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports). `task` retries the agent's declared model fallback chain on failure; `task_start` spawns with only the first resolved model (no fallback retry at spawn time).
 - **`mono/mono-ui.ts`** — the "Mono" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Supports emergency opt-out via `PI_MONO_UI=0` and logs rendering failures to `agent/pi-render.log`.
 - **`web-search.ts`** — provides native Exa web search and page fetching tools (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
-- **`prompt-commands.ts`** — registers native custom slash commands and prompt templates directly without external plugins.
+- **`prompt-commands.ts`** — registers the native `/browser` and `/deploy` slash commands directly via `pi.registerCommand()`, without external plugins. It does not register or discover Markdown prompt templates; those are handled by upstream Pi's own prompt-template loading (see [Slash commands](#slash-commands)).
 - **`mcp-adapter.ts`** — composes Mono's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
 - **`crash-logger.ts`** — records exits, shutdown reasons, and unhandled rejections to `agent/pi-crash.log`, distinguishing main and sub-agent processes.
 
 ## Slash commands
 
-`/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. `/brainstorm`); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
+`/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
+
+`agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
 
 ### `/browser`
 
@@ -82,6 +97,31 @@ Delegates lint, format, verify, and deploy to the `stevedore` sub-agent instead 
 /deploy staging
 /deploy wrangler, skip tests
 ```
+
+## Skills
+
+Skills live in `agent/skills/` and are freeform directories beyond the required `SKILL.md`:
+
+- [`background-process/SKILL.md`](agent/skills/background-process/SKILL.md) — documents the `bg_*` tools (from `bg-process.ts`) for long-running commands like dev servers and watchers.
+- [`generate-image/SKILL.md`](agent/skills/generate-image/SKILL.md) — image generation via a bundled helper script, [`generate_image.py`](agent/skills/generate-image/generate_image.py), with an automatic model fallback chain.
+
+## Theme
+
+`agent/themes/pi-dark.json` is a custom dark theme selected via `agent/settings.json` (`"theme": "pi-dark"`) and hot-reloads when edited while active. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
+
+## Example and template files
+
+Three of the gitignored, credential-bearing configs have a tracked example sibling — a **minimal supported template**, not a full mirror of the active file's shape, with placeholder/env-only values safe to read or copy:
+
+| Active (gitignored) | Example (tracked) |
+| --- | --- |
+| `agent/mcp.json` | [`agent/mcp.example.json`](agent/mcp.example.json) |
+| `agent/models.json` | [`agent/models.example.json`](agent/models.example.json) |
+| `web-search.json` | [`web-search.example.json`](web-search.example.json) |
+
+`agent/auth.json` has no example — it is populated by Pi's `/login` command, not copied.
+
+Copying an example is a starting point, not a drop-in config: placeholders need real values, and the shapes are illustrative rather than exhaustive. `agent/mcp.example.json`'s server entry is a sample server, not a required one — replace or remove it for your own MCP servers. `agent/models.example.json`'s provider/model IDs are placeholders; if you copy it as-is, also check that `agent/settings.json`'s `defaultProvider`/`defaultModel` still name a provider and model that actually exist in your `models.json`. See [CONFIGURATION.md](CONFIGURATION.md) for field-by-field documentation of each format, and [Restore on a new machine](#restore-on-a-new-machine) below for how to turn an example into an active config.
 
 ## Restore on a new machine
 
