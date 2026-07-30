@@ -2450,11 +2450,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       if (pinned?.hasPinnedSurface) {
         // Timeout/validation failures are control outcomes the worker card
         // cannot express, so retain one compact diagnostic line. It is a
-        // detached hanging annotation, not a child of the frozen work card,
-        // so it must not claim that card's terminal `╰─`.
+        // detached annotation, not a child of the frozen work card, so it
+        // must not claim that card's terminal `╰─` nor sit at the child
+        // indent. It starts in the glyph column like any other receipt row.
         return new WidthText((width) => [
           safeTruncateToWidth(
-            `${TREE.hang}${theme.fg(isError ? "error" : "warning", isError ? "×" : "!")} ${theme.fg(isError ? "error" : "warning", cleanOneLine(resultText, 240))}`,
+            `${theme.fg(isError ? "error" : "warning", isError ? "×" : "!")} ${theme.fg(isError ? "error" : "warning", cleanOneLine(resultText, 240))}`,
             width,
           ),
         ]);

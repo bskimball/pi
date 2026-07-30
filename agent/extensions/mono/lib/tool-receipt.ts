@@ -13,6 +13,7 @@ import {
   padStartToWidth,
   safeTruncateToWidth,
   safeVisibleWidth,
+  stripTerminalSequences,
 } from "./safe-text-layout.ts";
 import {
   DURATION_COLUMN,
@@ -100,10 +101,17 @@ export function paddedSection(
         const lines = headerLines
           .flatMap((line) => line.split(/\r?\n/))
           .map((line) => safeTruncateToWidth(line.replace(/\t/g, "   "), width));
-        const bodyLines =
+        const built =
           typeof body === "function" ? body(Math.max(0, width - 2)) : body;
+        // Trailing blank rows read as dead bands at the bottom of the card.
+        let end = built.length;
+        while (end > 0 && !stripTerminalSequences(built[end - 1]).trim()) end--;
+        const bodyLines = built.slice(0, end);
         if (bodyLines.length && width > 2) {
           const innerWidth = width - 2;
+          // theme.bg() emits `<open>text<close>`; recover `<open>` so it can be
+          // re-asserted after any interior reset.
+          const open = bg("\u0000").split("\u0000")[0] ?? "";
           const blank = bg(" ".repeat(width));
           lines.push(blank);
           for (const raw of bodyLines.slice(0, 200)) {
@@ -114,7 +122,17 @@ export function paddedSection(
             const fill = " ".repeat(
               Math.max(0, innerWidth - safeVisibleWidth(clipped)),
             );
-            lines.push(bg(` ${clipped}${fill} `));
+            // A styled body row ends in a full `\x1b[0m` (and diff rows carry
+            // `\x1b[49m`), which clears the row background before the padding
+            // is drawn. Re-open the background after every interior reset so
+            // each row paints one even band instead of a ragged fragment.
+            const painted = open
+              ? `${clipped}${fill}`.replace(
+                  /\x1b\[(?:0|49)m/g,
+                  (reset) => `${reset}${open}`,
+                )
+              : `${clipped}${fill}`;
+            lines.push(bg(` ${painted} `));
           }
           lines.push(blank);
         }

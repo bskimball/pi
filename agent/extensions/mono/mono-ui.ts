@@ -57,6 +57,45 @@ function primaryArg(name: BuiltinName, args: any): string {
   return filePath;
 }
 
+/**
+ * Trailing notices appended after file content, matched exactly as emitted so
+ * ordinary source is never mistaken for one. A loose `^\[` test would swallow
+ * real lines such as `[key: string]: Foo` and desynchronize every number after
+ * it. Upstream forms come from the read tool; the `...` forms come from
+ * `boundedOutput`.
+ */
+const READ_NOTICE_RE =
+  /^(?:\[Showing lines \d+-\d+ of \d+.*\]|\[\d+ more lines in file\. Use offset=\d+ to continue\.\]|\[Line \d+ is .*exceeds .*limit\..*\]|\.\.\. \d+ more lines|\.\.\. output truncated at \d+ characters)$/;
+
+/**
+ * Prefix each read line with a right-aligned line number so the expanded card
+ * has a stable left edge, matching the numbered edit/write diffs. Only the
+ * read tool's actual trailing notices are left unnumbered; everything else is
+ * treated as file content so the numbering stays in step with the file.
+ */
+function numberReadLines(
+  lines: string[],
+  offset: unknown,
+  theme: { fg: (key: any, text: string) => string } | undefined,
+  innerWidth: number,
+): string[] {
+  const dim = (text: string) => theme?.fg("dim", text) ?? text;
+  const body = (text: string) => theme?.fg("toolOutput", text) ?? text;
+  const start = Number.isFinite(Number(offset))
+    ? Math.max(1, Math.floor(Number(offset)))
+    : 1;
+  const gutter = Math.max(2, String(start + lines.length - 1).length);
+  // Keep at least a usable slice of content on very narrow terminals.
+  if (innerWidth <= gutter + 4) return lines;
+  let lineNumber = start;
+  return lines.map((line) => {
+    if (READ_NOTICE_RE.test(line)) return dim(line);
+    const numbered = `${padStartToWidth(String(lineNumber), gutter)} `;
+    lineNumber++;
+    return `${dim(numbered)}${body(safeTruncateToWidth(line, innerWidth - gutter - 1))}`;
+  });
+}
+
 function resolveToolPath(filePath: string, cwd: string): string {
   const normalized = filePath
     .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ")
@@ -128,7 +167,7 @@ function registerBuiltin(
       if (name === "bash" && output) return boundedOutput(output, 3, 1200);
       return [];
     },
-    body(output, result, _args, innerWidth) {
+    body(output, result, args, innerWidth) {
       if (isMutation) {
         const diff = resultDiff(result);
         // Pre-styled rows; the engine leaves ESC-bearing lines unpainted.
@@ -141,7 +180,12 @@ function registerBuiltin(
             )
           : [];
       }
-      return output ? boundedOutput(output, 80) : [];
+      if (!output) return [];
+      const lines = boundedOutput(output, 80);
+      // A numbered gutter gives read the same scannable left edge as the
+      // numbered edit/write diffs, so both expanded surfaces read alike.
+      if (name !== "read") return lines;
+      return numberReadLines(lines, args?.offset, lastTheme, innerWidth);
     },
   });
 
@@ -433,6 +477,12 @@ export default function (pi: ExtensionAPI) {
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     applyRandomWorkingIndicator(piApi, ctx);
+
+    // Collapsed reasoning is otherwise a bare italic sentence that reads like
+    // narration. The shared quiet glyph marks it as the assistant's private
+    // channel without adding a row and matches Mono's restrained glyph set.
+    // Pi paints and italicises this label itself.
+    ctx.ui.setHiddenThinkingLabel("\u00b7 thinking");
 
     class MonoEditor extends CustomEditor {
       constructor(
