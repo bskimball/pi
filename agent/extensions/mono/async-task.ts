@@ -78,6 +78,7 @@ import {
   tailLines,
   type StatusKind,
 } from "./lib/status-view.ts";
+import { noticeComponent, type NoticeRow } from "./lib/notice-view.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -93,6 +94,12 @@ const DEFAULT_MAX_TURNS = 30;
 
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
+
+/** Follow-up commands carried by every settlement notice, model-side and UI. */
+const SETTLED_HINT =
+  "Use task_status/task_wait for full results; task_send for follow-up; task_close to reap.";
+/** Result preview budget in the settlement notice payload. */
+const NOTICE_RESULT_CAP = 400;
 
 /** Tools that must never be available inside a child worker. */
 const EXCLUDED_CHILD_TOOLS = [
@@ -1059,7 +1066,7 @@ export default function (pi: ExtensionAPI) {
         ? "Async RPC worker settled:"
         : `${pending.length} async RPC workers settled:`,
       ...pending.map(workerNotifyLine),
-      "Use task_status/task_wait for full results; task_send for follow-up; task_close to reap.",
+      SETTLED_HINT,
     ];
     try {
       pi.sendMessage(
@@ -1075,6 +1082,12 @@ export default function (pi: ExtensionAPI) {
               generation: w.generation,
               turns: w.turns,
               killReason: w.killReason,
+              // Bounded preview so the transcript notice can show what the
+              // worker concluded without re-parsing the prose body.
+              result: cleanOneLine(
+                w.latestResult || w.latestAssistantText || "",
+                NOTICE_RESULT_CAP,
+              ),
             })),
           },
         },
@@ -1613,7 +1626,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_start",
     label: "Task Start",
-    description: `Start an asynchronous specialist sub-agent via pi --mode rpc with an isolated persistent session. Returns immediately with a stable worker id (task_N) after the initial prompt is accepted. Use when you need to keep working while the specialist runs, send steer/follow-up later, or collect results with task_wait. Prefer the synchronous \`task\` tool when you need a single bounded result in-line.
+    description: `Start an asynchronous specialist sub-agent via pi --mode rpc with an isolated persistent session. The lead delegates all multi-file implementation and broad investigation through this tool; inline work is for single known-file edits only. Returns immediately with a stable worker id (task_N) after the initial prompt is accepted. Use when you need to keep working while the specialist runs, send steer/follow-up later, or collect results with task_wait. Prefer the synchronous \`task\` tool when you need a single bounded result in-line.
 
 Available agents:
 ${agentList}
@@ -1643,19 +1656,19 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
       model: Type.Optional(
         Type.String({
           description:
-            "Override the agent's primary model. Use provider/id, or a bare id to inherit the agent's provider.",
+            "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider.",
         }),
       ),
       timeoutSec: Type.Optional(
         Type.Number({
           description:
-            "Hard time limit in seconds (default 1800, or the agent's own default)",
+            "Omit to use the agent's configured time budget. Never lower it to constrain scope; put scope in the prompt.",
         }),
       ),
       maxTurns: Type.Optional(
         Type.Number({
           description:
-            "Max assistant turns before the worker is stopped (default 30, or the agent's own default)",
+            "Omit to use the agent's configured turn budget. Never lower it to constrain scope; a starved worker is killed mid-task and loses its report. Raise only for genuinely larger-than-normal work.",
         }),
       ),
     }),
@@ -2891,6 +2904,51 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       );
     }),
   });
+
+  // ---------------------------------------------------- settlement notice
+
+  // Without this the settlement message renders as a raw `[async-task-settled]`
+  // prose block that reads like a user turn. The renderer keeps worker id,
+  // status, agent, generation/turns and the follow-up commands, but presents
+  // them as a bounded background receipt.
+  pi.registerMessageRenderer<{ workers?: unknown }>(
+    "async-task-settled",
+    (message, options, theme) => {
+      const raw = Array.isArray(message.details?.workers)
+        ? message.details.workers
+        : [];
+      const rows: NoticeRow[] = [];
+      for (const entry of raw.slice(0, 24)) {
+        const record = detailRecord(entry);
+        if (!record) continue;
+        const id = safeLine(record.id, 40);
+        if (!id) continue;
+        const generation = finiteNumber(record.generation);
+        const turns = finiteNumber(record.turns);
+        rows.push({
+          kind: lifecycleKind(record.lifecycle),
+          id,
+          subject: safeLine(record.agent, 40) || undefined,
+          detail: metaText([
+            generation !== undefined ? `gen ${generation}` : undefined,
+            turns !== undefined ? `${turns} turns` : undefined,
+            safeLine(record.killReason, 80) || undefined,
+          ]),
+          preview: safeLine(record.result, NOTICE_RESULT_CAP) || undefined,
+        });
+      }
+      // No structured workers means a malformed payload; fall through to Pi's
+      // default rendering rather than showing an empty receipt.
+      if (!rows.length) return undefined;
+      return noticeComponent(theme, {
+        channel: "async task",
+        rows,
+        hint: SETTLED_HINT,
+        expanded: options.expanded,
+        pad: options.outputPad,
+      });
+    },
+  );
 
   // ------------------------------------------------------------ lifecycle
 

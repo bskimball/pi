@@ -1,0 +1,12 @@
+{
+  "name": "pi-thin-lsp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "vscode-jsonrpc": "^9.0.1"
+  },
+  "pi": {
+    "extensions": ["index.ts"]
+  }
+}

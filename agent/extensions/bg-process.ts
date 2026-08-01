@@ -31,6 +31,13 @@ import {
   textContent,
   type ToolRenderContext,
 } from "./mono/lib/ui-common.ts";
+import { noticeComponent, type NoticeRow } from "./mono/lib/notice-view.ts";
+import {
+  bgStatusKind,
+  finiteNumber,
+  metaText,
+  safeLine,
+} from "./mono/lib/status-view.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -40,6 +47,9 @@ const STREAM_CAP = 48_000;
 const STATUS_STREAM_CAP = 12_000;
 const STATUS_LINE_CAP = 80;
 const LIST_CMD_CAP = 120;
+/** Follow-up commands carried by every settlement notice, model-side and UI. */
+const BG_SETTLED_HINT =
+  "Use bg_status for bounded logs, or bg_list to see jobs.";
 const TITLE_CAP = 80;
 
 type JobStatus = "running" | "completed" | "failed" | "killed";
@@ -425,7 +435,7 @@ export default function (pi: ExtensionAPI) {
         ? "Background process settled:"
         : `${pending.length} background processes settled:`,
       ...pending.map(jobNotifyLine),
-      "Use bg_status for bounded logs, or bg_list to see jobs.",
+      BG_SETTLED_HINT,
     ];
     try {
       pi.sendMessage(
@@ -439,6 +449,8 @@ export default function (pi: ExtensionAPI) {
               status: job.status,
               exitCode: job.exitCode,
               signal: job.signal,
+              title: job.title,
+              command: cleanOneLine(job.command, LIST_CMD_CAP),
             })),
           },
         },
@@ -801,6 +813,47 @@ export default function (pi: ExtensionAPI) {
       });
     },
   });
+
+  // ---------------------------------------------------- settlement notice
+
+  // Same rationale as async-task: a settled background job is a background
+  // event, not conversation, so it gets notice chrome instead of a raw
+  // `[bg-process-settled]` prose block.
+  pi.registerMessageRenderer<{ jobs?: unknown }>(
+    "bg-process-settled",
+    (message, options, theme) => {
+      const raw = Array.isArray(message.details?.jobs)
+        ? message.details.jobs
+        : [];
+      const rows: NoticeRow[] = [];
+      for (const entry of raw.slice(0, 24)) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry))
+          continue;
+        const record = entry as Record<string, unknown>;
+        const id = safeLine(record.id, 40);
+        if (!id) continue;
+        const exitCode = finiteNumber(record.exitCode);
+        rows.push({
+          kind: bgStatusKind(record.status),
+          id,
+          subject: safeLine(record.title, 80) || undefined,
+          detail: metaText([
+            exitCode !== undefined ? `exit ${exitCode}` : undefined,
+            safeLine(record.signal, 20) || undefined,
+          ]),
+          preview: safeLine(record.command, 300) || undefined,
+        });
+      }
+      if (!rows.length) return undefined;
+      return noticeComponent(theme, {
+        channel: "background job",
+        rows,
+        hint: BG_SETTLED_HINT,
+        expanded: options.expanded,
+        pad: options.outputPad,
+      });
+    },
+  );
 
   // ------------------------------------------------------------ lifecycle
 

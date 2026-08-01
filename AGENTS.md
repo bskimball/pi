@@ -87,6 +87,32 @@ When modifying Mono UI or task rendering:
 5. Prefer disabling one restored surface at a time in this order: final task-report styling, live task activity presentation, built-in tool presentation, footer, working-indicator styling.
 6. Keep editor customization limited to in-place border/padding repainting and keep all rendering timer-free throughout the investigation.
 
+## Observatory Landing Screen
+
+The blank-chat landing screen ("Observatory") lives in `agent/extensions/mono/lib/observatory.ts` and is mounted by `agent/extensions/mono/mono-ui.ts` as an `aboveEditor` widget, so Pi's startup resource dump scrolls above it and the portal sits flush against the composer.
+
+### Preview Harness
+
+Do not iterate on this surface through screenshots. Use the harness:
+
+```
+node --experimental-transform-types agent/extensions/mono/lib/observatory-preview.mjs
+node --experimental-transform-types agent/extensions/mono/lib/observatory-preview.mjs 80
+```
+
+- Renders three scenarios (populated user inventory, balanced project inventory, empty inventory) at 40/60/80/100/120/160 columns, or at the widths passed as arguments.
+- Approximates pi-dark colors on a dark background so contrast and hierarchy can be judged directly in the terminal.
+- Flags `TOO TALL` and `OVERFLOW` per scenario and exits nonzero when any bound fails.
+- Keep it in sync when `renderObservatory` or `buildObservatory` signatures change.
+
+### Constraints
+
+- Above-editor widgets are capped at 10 lines; `OBSERVATORY_MAX_LINES` is 9. Keep the composition dense rather than padded with blank lines.
+- Pure passive string rendering only: no timers, no `requestRender()`, no Pi TUI `Text`, `Markdown`, or `Container`.
+- Measure and truncate with `agent/extensions/mono/lib/safe-text-layout.ts` helpers, never `.length`.
+- Color only through `theme.fg(key, text)`; use narrow BMP glyphs so centering matches real terminal cells.
+- The workspace signal must stay truthful. Fall back to `AWAITING A SIGNAL` when no project-scoped resources exist.
+
 ## Rules
 
 - Treat this directory as the active project when the request concerns custom Pi behavior or configuration.

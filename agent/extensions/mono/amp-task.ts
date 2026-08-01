@@ -560,19 +560,19 @@ export default function (pi: ExtensionAPI) {
     model: Type.Optional(
       Type.String({
         description:
-          "Override the agent's primary model. Use provider/id, or a bare id to inherit the agent's provider. Declared fallback models remain enabled.",
+          "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider. Declared fallback models remain enabled.",
       }),
     ),
     timeoutSec: Type.Optional(
       Type.Number({
         description:
-          "Hard time limit in seconds (default 1800, or the agent's own default)",
+          "Omit to use the agent's configured time budget. Never lower it to constrain scope; put scope in the prompt.",
       }),
     ),
     maxTurns: Type.Optional(
       Type.Number({
         description:
-          "Max assistant turns before the agent is stopped (default 30, or the agent's own default)",
+          "Omit to use the agent's configured turn budget. Never lower it to constrain scope; a starved agent is killed mid-task and loses its report. Raise only for genuinely larger-than-normal work.",
       }),
     ),
   });

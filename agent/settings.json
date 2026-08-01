@@ -1,9 +1,12 @@
 {
-  "defaultModel": "gpt-5.6-sol",
+  "defaultModel": "claude-opus-5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "0.82.1",
-  "packages": [],
+  "defaultThinkingLevel": "low",
+  "lastChangelogVersion": "0.83.0",
+  "packages": [
+    "npm:pi-sticky-input"
+  ],
+  "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
   "terminal": {

@@ -21,10 +21,10 @@ export interface AgentDef {
 }
 
 /** Global agents dir plus project override. Project wins on name collision. */
-function agentDirs(): string[] {
+function agentDirs(cwd: string = process.cwd()): string[] {
   return [
     path.join(getAgentDir(), "agents"),
-    path.join(process.cwd(), ".pi", "agents"),
+    path.join(cwd, ".pi", "agents"),
   ];
 }
 
@@ -86,9 +86,9 @@ export function parseAgentFile(file: string): AgentDef | undefined {
   }
 }
 
-export function discoverAgents(): Map<string, AgentDef> {
+export function discoverAgents(cwd: string = process.cwd()): Map<string, AgentDef> {
   const agents = new Map<string, AgentDef>();
-  for (const dir of agentDirs()) {
+  for (const dir of agentDirs(cwd)) {
     let files: string[] = [];
     try {
       files = fs
@@ -105,9 +105,19 @@ export function discoverAgents(): Map<string, AgentDef> {
   return agents;
 }
 
+/** True when an agent definition lives under the project-local `.pi/agents` tree. */
+export function isProjectAgentFile(file: string, cwd: string = process.cwd()): boolean {
+  const projectAgents = path.resolve(cwd, ".pi", "agents");
+  const resolved = path.resolve(file);
+  return (
+    resolved === projectAgents ||
+    resolved.startsWith(projectAgents + path.sep)
+  );
+}
+
 /** Shared preamble (_shared.md) and handoff (_handoff.md); project overrides global. */
-export function readSharedFile(name: string): string | undefined {
-  for (const dir of [...agentDirs()].reverse()) {
+export function readSharedFile(name: string, cwd: string = process.cwd()): string | undefined {
+  for (const dir of [...agentDirs(cwd)].reverse()) {
     try {
       const text = fs.readFileSync(path.join(dir, name), "utf8").trim();
       if (text) return text;

@@ -7,7 +7,7 @@ import {
   getAgentDir,
   stripFrontmatter,
   type ExtensionAPI,
-  type ExtensionCommandContext,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
 const PREVIEW_CHARS = 8_000;
@@ -77,7 +77,7 @@ function boundText(
 }
 
 function notify(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   message: string,
   type: "info" | "warning" | "error" = "info",
 ): void {
@@ -90,7 +90,7 @@ function notify(
 
 function handOff(
   pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   prompt: string,
   busyNotice = "Agent is busy; queued as follow-up.",
 ): void {
@@ -434,73 +434,126 @@ function buildDeployPrompt(args: string, snapshot: string): string {
   ].join("\n");
 }
 
+export async function runBrowserCommand(
+  pi: ExtensionAPI,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const helperPath = resolveBrowserConnectHelper();
+  if (!existsSync(helperPath)) {
+    notify(
+      ctx,
+      "Browser helper is missing from the agent bin directory.",
+      "error",
+    );
+    return;
+  }
+
+  const extraArgs = args.trim() ? [args.trim()] : [];
+  const started = Date.now();
+  let result: { code: number; stdout: string; stderr: string; killed: boolean };
+  try {
+    result = await pi.exec(
+      process.execPath,
+      [helperPath, "connect", ...extraArgs],
+      {
+        cwd: ctx.cwd,
+        timeout: BROWSER_CONNECT_TIMEOUT_MS,
+        signal: ctx.signal,
+      },
+    );
+  } catch (error) {
+    const message = redactPersonalPaths(
+      error instanceof Error ? error.message : String(error),
+    );
+    notify(ctx, `Browser connect failed: ${message}`, "error");
+    return;
+  }
+  const durationMs = Date.now() - started;
+  const connectBlock = buildConnectBlock(result, durationMs);
+
+  if (result.code !== 0 || result.killed) {
+    const stderr = boundText(
+      redactPersonalPaths(result.stderr),
+      800,
+      12,
+    ).text;
+    notify(
+      ctx,
+      `Browser connect failed (exit ${result.code}${result.killed ? ", killed" : ""}).${stderr ? ` ${stderr}` : ""}`,
+      "error",
+    );
+    return;
+  }
+
+  const skill = loadSkillBody(pi, "agent-browser");
+  if (!skill) {
+    notify(
+      ctx,
+      "agent-browser skill not found; continuing without skill injection.",
+      "warning",
+    );
+  }
+
+  const skillBlock = skill
+    ? wrapSkill("agent-browser", skill.body)
+    : undefined;
+  const prompt = buildBrowserPrompt(args, connectBlock, skillBlock);
+  handOff(pi, ctx, prompt, "Browser prompt queued as follow-up.");
+  notify(ctx, "Browser attached; handed off to agent.", "info");
+}
+
+export async function runDeployCommand(
+  pi: ExtensionAPI,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  let snapshot: string;
+  try {
+    snapshot = await gatherDeployContext(pi, ctx.cwd, ctx.signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    notify(ctx, `Failed to gather deploy context: ${message}`, "error");
+    return;
+  }
+
+  const boundedSnapshot = boundText(snapshot, 20_000, 300);
+  handOff(
+    pi,
+    ctx,
+    buildDeployPrompt(args, boundedSnapshot.text),
+    "Deploy handoff queued as follow-up.",
+  );
+  notify(ctx, "Deploy context gathered; delegated via task handoff.", "info");
+}
+
+/**
+ * Run a featured pathway command that is implemented as a native extension
+ * slash command rather than a prompt template. Used by Observatory launch.
+ */
+export async function runFeaturedExtensionCommand(
+  pi: ExtensionAPI,
+  name: string,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  if (name === "browser") {
+    await runBrowserCommand(pi, args, ctx);
+    return;
+  }
+  if (name === "deploy") {
+    await runDeployCommand(pi, args, ctx);
+    return;
+  }
+  throw new Error(`No featured handler registered for /${name}`);
+}
+
 export default function (pi: ExtensionAPI): void {
   pi.registerCommand("browser", {
     description:
       "Attach to dedicated authenticated debug Chrome (no Allow spam)",
     handler: async (args, ctx) => {
-      const helperPath = resolveBrowserConnectHelper();
-      if (!existsSync(helperPath)) {
-        notify(
-          ctx,
-          "Browser helper is missing from the agent bin directory.",
-          "error",
-        );
-        return;
-      }
-
-      const extraArgs = args.trim() ? [args.trim()] : [];
-      const started = Date.now();
-      let result: { code: number; stdout: string; stderr: string; killed: boolean };
-      try {
-        result = await pi.exec(
-          process.execPath,
-          [helperPath, "connect", ...extraArgs],
-          {
-            cwd: ctx.cwd,
-            timeout: BROWSER_CONNECT_TIMEOUT_MS,
-            signal: ctx.signal,
-          },
-        );
-      } catch (error) {
-        const message = redactPersonalPaths(
-          error instanceof Error ? error.message : String(error),
-        );
-        notify(ctx, `Browser connect failed: ${message}`, "error");
-        return;
-      }
-      const durationMs = Date.now() - started;
-      const connectBlock = buildConnectBlock(result, durationMs);
-
-      if (result.code !== 0 || result.killed) {
-        const stderr = boundText(
-          redactPersonalPaths(result.stderr),
-          800,
-          12,
-        ).text;
-        notify(
-          ctx,
-          `Browser connect failed (exit ${result.code}${result.killed ? ", killed" : ""}).${stderr ? ` ${stderr}` : ""}`,
-          "error",
-        );
-        return;
-      }
-
-      const skill = loadSkillBody(pi, "agent-browser");
-      if (!skill) {
-        notify(
-          ctx,
-          "agent-browser skill not found; continuing without skill injection.",
-          "warning",
-        );
-      }
-
-      const skillBlock = skill
-        ? wrapSkill("agent-browser", skill.body)
-        : undefined;
-      const prompt = buildBrowserPrompt(args, connectBlock, skillBlock);
-      handOff(pi, ctx, prompt, "Browser prompt queued as follow-up.");
-      notify(ctx, "Browser attached; handed off to agent.", "info");
+      await runBrowserCommand(pi, args, ctx);
     },
   });
 
@@ -508,23 +561,7 @@ export default function (pi: ExtensionAPI): void {
     description:
       "Delegate lint, format, verify, and deploy to the stevedore subagent",
     handler: async (args, ctx) => {
-      let snapshot: string;
-      try {
-        snapshot = await gatherDeployContext(pi, ctx.cwd, ctx.signal);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        notify(ctx, `Failed to gather deploy context: ${message}`, "error");
-        return;
-      }
-
-      const boundedSnapshot = boundText(snapshot, 20_000, 300);
-      handOff(
-        pi,
-        ctx,
-        buildDeployPrompt(args, boundedSnapshot.text),
-        "Deploy handoff queued as follow-up.",
-      );
-      notify(ctx, "Deploy context gathered; delegated via task handoff.", "info");
+      await runDeployCommand(pi, args, ctx);
     },
   });
 }

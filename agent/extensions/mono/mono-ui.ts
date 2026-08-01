@@ -39,12 +39,34 @@ import {
 // keep working; preferred import is ./lib/mcp-presentation.ts.
 export { installMcpPresentation } from "./lib/mcp-presentation.ts";
 import {
+  WidthText,
   cleanInline,
   fitLine,
   formatTokens,
   stripAnsi,
   type ToolRenderContext,
 } from "./lib/ui-common.ts";
+import {
+  buildObservatory,
+  expandFeatured,
+  inventoryAt,
+  inventorySelectorOptions,
+  inventorySelectorTitle,
+  isConversationBlank,
+  listInventory,
+  renderObservatory,
+  resolveSelectorChoice,
+  selectorOptions,
+  selectorTitle,
+  specialistLaunchDraft,
+  type FeaturedEntry,
+  type Observatory,
+} from "./lib/observatory.ts";
+import {
+  createObservatoryOrb,
+  type ObservatoryOrbResult,
+} from "./lib/observatory-orb.ts";
+import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
 
 type BuiltinName = "read" | "bash" | "edit" | "write";
 type BuiltinRenderState = ToolRenderState;
@@ -472,7 +494,260 @@ export default function (pi: ExtensionAPI) {
   registerBuiltin(pi, "edit", createEditToolDefinition);
   registerBuiltin(pi, "write", createWriteToolDefinition);
 
-  pi.on("session_start", (_event, ctx) => installLayout(pi, ctx));
+  // The observatory landing screen. It exists only for a conversation-blank
+  // fresh chat and is owned entirely by this module through Pi's startup
+  // header. No timers.
+  let observatory: Observatory | undefined;
+  let observatoryCtx: ExtensionContext | undefined;
+
+  function clearObservatory(): void {
+    const ctx = observatoryCtx;
+    observatory = undefined;
+    observatoryCtx = undefined;
+    if (!ctx) return;
+    try {
+      ctx.ui.setHeader(undefined);
+    } catch {
+      // A teardown failure must never propagate into Pi's event loop.
+    }
+  }
+
+  function showObservatory(piApi: ExtensionAPI, ctx: ExtensionContext): void {
+    let view: Observatory;
+    try {
+      view = buildObservatory(piApi.getCommands(), ctx.cwd);
+    } catch (error) {
+      reportRenderFailure("observatory", error);
+      return;
+    }
+
+    // The startup header is the real opening surface: with quiet startup there
+    // is nothing above it, so it IS the splash screen. Unlike an above-editor
+    // widget it has no line cap, hence OBSERVATORY_MAX_LINES = 22.
+    try {
+      ctx.ui.setHeader((_tui, theme) =>
+        new WidthText(
+          (width) =>
+            renderObservatory(view, (key, text) => theme.fg(key, text), width),
+          "[observatory unavailable]",
+        ),
+      );
+      observatory = view;
+      observatoryCtx = ctx;
+    } catch (error) {
+      reportRenderFailure("observatory", error);
+      observatory = undefined;
+      observatoryCtx = undefined;
+      try {
+        ctx.ui.setHeader(undefined);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  async function launchFeatured(
+    entry: FeaturedEntry,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    if (entry.source === "extension") {
+      // Native pathway commands need executable pre-steps; invoke the shared
+      // handlers rather than inlining a prompt template.
+      try {
+        await runFeaturedExtensionCommand(pi, entry.name, "", ctx);
+      } catch (error) {
+        ctx.ui.notify(
+          `Could not run /${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        return;
+      }
+      // Only a successful launch dismisses the screen.
+      clearObservatory();
+      return;
+    }
+
+    if (entry.source === "agent") {
+      // Specialists need a user-authored brief. Prefill the composer; do not
+      // auto-start a task with an empty mission.
+      try {
+        ctx.ui.setEditorText(specialistLaunchDraft(entry));
+      } catch (error) {
+        ctx.ui.notify(
+          `Could not prepare /${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        return;
+      }
+      clearObservatory();
+      ctx.ui.notify(
+        `Specialist ${entry.name} ready — fill the brief and send.`,
+        "info",
+      );
+      return;
+    }
+
+    let expanded: string;
+    try {
+      expanded = await expandFeatured(entry);
+    } catch (error) {
+      ctx.ui.notify(
+        `Could not read /${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+    // Only a successful launch dismisses the screen.
+    clearObservatory();
+    pi.sendUserMessage(expanded);
+  }
+
+  /**
+   * The interactive orb: the splash rendered as a focused overlay whose
+   * selection is driven by the arrow keys. Any printable key hands the
+   * character straight back to the composer, so opening the orb never costs
+   * the user a keystroke.
+   *
+   * Deliberately never opened automatically at startup. The blank-session
+   * splash stays the passive `setHeader` render and the composer keeps focus,
+   * because passthrough only rescues a *single* printable keystroke: a
+   * bracketed paste, an IME commit, or any app keybinding arriving before the
+   * first character would be swallowed by the overlay. The hotkey and
+   * `/observatory` are the entry points.
+   */
+  async function openObservatoryOrb(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("Observatory requires the interactive TUI.", "info");
+      return;
+    }
+    let view: Observatory;
+    try {
+      // Rebuilt per invocation so the orb always reflects current inventory.
+      view = buildObservatory(pi.getCommands(), ctx.cwd);
+    } catch (error) {
+      reportRenderFailure("observatory", error);
+      return;
+    }
+    if (
+      view.pathways.length === 0 &&
+      view.instruments.length === 0 &&
+      view.specialists.length === 0
+    ) {
+      ctx.ui.notify("No prompts, skills, or specialists are available.", "info");
+      return;
+    }
+
+    let result;
+    try {
+      result = await ctx.ui.custom<ObservatoryOrbResult>(
+        (_tui, theme, _keybindings, done) =>
+          createObservatoryOrb(view, theme, done),
+        { overlay: true },
+      );
+    } catch (error) {
+      reportRenderFailure("observatory-orb", error);
+      return;
+    }
+
+    if (result.action === "launch") {
+      await launchFeatured(result.entry, ctx);
+      return;
+    }
+    if (result.action === "passthrough") {
+      try {
+        ctx.ui.pasteToEditor(result.text);
+      } catch (error) {
+        reportRenderFailure("observatory-orb", error);
+      }
+    }
+    // Dismiss leaves the splash and the session exactly as they were.
+  }
+
+  pi.registerShortcut("alt+o", {
+    description: "Open the Observatory portal",
+    handler: (ctx) => openObservatoryOrb(ctx),
+  });
+
+  pi.registerCommand("observatory", {
+    description:
+      "Open the Observatory portal and launch a pathway or instrument",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("Observatory requires the interactive TUI.", "info");
+        return;
+      }
+      // Always present the visual portal when the command is invoked.
+      if (!observatory) showObservatory(pi, ctx);
+      const view = observatory ?? buildObservatory(pi.getCommands(), ctx.cwd);
+      if (!observatory) observatory = view;
+
+      const options = selectorOptions(view);
+      // options always ends with Cancel; need at least one real choice.
+      if (options.length <= 1) {
+        ctx.ui.notify("No prompts, skills, or specialists are available.", "info");
+        return;
+      }
+
+      const choice = await ctx.ui.select(selectorTitle(view), options);
+      const resolved = resolveSelectorChoice(view, choice, options);
+
+      if (resolved.action === "cancel") return;
+
+      if (resolved.action === "featured") {
+        await launchFeatured(resolved.entry, ctx);
+        return;
+      }
+
+      const source =
+        resolved.action === "all-prompts"
+          ? "prompt"
+          : resolved.action === "all-skills"
+            ? "skill"
+            : "agent";
+      const inventory = listInventory(pi.getCommands(), source, ctx.cwd);
+      if (!inventory.length) {
+        ctx.ui.notify(
+          source === "prompt"
+            ? "No prompts are available."
+            : source === "skill"
+              ? "No skills are available."
+              : "No specialists are available.",
+          "info",
+        );
+        return;
+      }
+      const invOptions = inventorySelectorOptions(inventory);
+      const invChoice = await ctx.ui.select(
+        inventorySelectorTitle(source, inventory.length),
+        invOptions,
+      );
+      const entry = inventoryAt(inventory, invChoice, invOptions);
+      if (!entry) return;
+      await launchFeatured(entry, ctx);
+    },
+  });
+
+  // Real user submits end the landing screen; the command above bypasses this.
+  pi.on("input", () => clearObservatory());
+  pi.on("session_shutdown", () => clearObservatory());
+
+  pi.on("session_start", (event, ctx) => {
+    // Always drop a prior session's header/widget/model before any guard so
+    // new/resume/reload/fork never inherits a stale observatory.
+    clearObservatory();
+    installLayout(pi, ctx);
+    // Rebuild only for a conversation-blank new/initial startup chat.
+    // Ignore model_change / thinking_level_change / session_info seeds that
+    // the SDK appends before session_start on every fresh session.
+    if (!ctx.hasUI) return;
+    if (event.reason !== "new" && event.reason !== "startup") return;
+    try {
+      if (!isConversationBlank(ctx.sessionManager.getEntries())) return;
+    } catch {
+      return;
+    }
+    showObservatory(pi, ctx);
+  });
 
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
@@ -495,6 +770,13 @@ export default function (pi: ExtensionAPI) {
 
       render(width: number): string[] {
         try {
+          // Pi colors both input borders from the thinking level (and bash mode).
+          // Mono keeps the chrome quiet: only the footer thinking label carries
+          // that hue. Force the border painter before super.render so the bottom
+          // rule and scroll indicators stay muted too, not just the top line.
+          this.borderColor = (str: string) =>
+            ctx.ui.theme.fg("borderMuted", str);
+
           const lines = super.render(width);
           if (!lines.length) return lines;
 
