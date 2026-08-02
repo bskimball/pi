@@ -9,10 +9,10 @@ Credential-bearing local configuration files (`agent/auth.json`, `agent/models.j
 This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
-- **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, web search, MCP presentation, background-process management, a custom "Mono" TUI presentation layer, and crash logging.
+- **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, web search, MCP presentation, background-process management, a custom "Apex" TUI presentation layer, and crash logging.
 - **Slash commands and prompt templates** — native `/browser` and `/deploy` commands are registered by `agent/extensions/prompt-commands.ts`; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for image generation and background processes.
-- **A theme** (`agent/themes/pi-dark.json`) selected via `agent/settings.json`.
+- **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
 
 ## Sub-agents and Orchestration Tools
@@ -55,12 +55,14 @@ Shared norms that apply to every specialist (non-interactive reporting, smallest
 
 Custom TUI and orchestration extensions live in `agent/extensions/`:
 
-- **`mono/amp-task.ts` & `mono/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports). `task` retries the agent's declared model fallback chain on failure; `task_start` spawns with only the first resolved model (no fallback retry at spawn time).
-- **`mono/mono-ui.ts`** — the "Mono" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Supports emergency opt-out via `PI_MONO_UI=0` and logs rendering failures to `agent/pi-render.log`.
+- **`apex/amp-task.ts` & `apex/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports). `task` retries the agent's declared model fallback chain on failure; `task_start` spawns with only the first resolved model (no fallback retry at spawn time).
+- **`apex/apex-ui.ts`** — the "Apex" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Supports emergency opt-out via `PI_APEX_UI=0` and logs rendering failures to `agent/pi-render.log`.
+- **`apex/lib/` shark surfaces** — the mark carries state rather than just opening the session; see [The shark](#the-shark).
 - **`web-search.ts`** — provides native Exa web search and page fetching tools (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
 - **`prompt-commands.ts`** — registers the native `/browser` and `/deploy` slash commands directly via `pi.registerCommand()`, without external plugins. It does not register or discover Markdown prompt templates; those are handled by upstream Pi's own prompt-template loading (see [Slash commands](#slash-commands)).
-- **`mcp-adapter.ts`** — composes Mono's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
+- **`mcp-adapter.ts`** — composes Apex's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
+- **`todo-list.ts`** — the session plan (`todo_write`, `todo_read`). `todo_write` replaces the whole list on each call and enforces at most one `in_progress` item; `todo_read` reads it back so the plan survives compaction. Scoped to the lead agent: specialists run non-interactively and report once, and no agent definition grants them these tools. The threshold for writing a plan lives in `agent/SYSTEM.md`.
 - **`crash-logger.ts`** — records exits, shutdown reasons, and unhandled rejections to `agent/pi-crash.log`, distinguishing main and sub-agent processes.
 
 ## Slash commands
@@ -107,7 +109,26 @@ Skills live in `agent/skills/` and are freeform directories beyond the required 
 
 ## Theme
 
-`agent/themes/pi-dark.json` is a custom dark theme selected via `agent/settings.json` (`"theme": "pi-dark"`) and hot-reloads when edited while active. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
+`agent/themes/apex-dark.json` is a custom dark theme selected via `agent/settings.json` (`"theme": "apex-dark"`) and hot-reloads when edited while active. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
+
+## The shark
+
+The configuration has one visual identity — a shark in deep space — and it is used to carry information, not as decoration.
+
+The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. `tools/shark-art/encode-fin.py` crops that *same* design down to its first dorsal fin, so the small sprite and the large mark can never drift apart. Both emit generated TypeScript (`lib/shark-art.ts`, `lib/fin-art.ts`) — regenerate them, never hand-edit. `lib/pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
+
+Four surfaces use it:
+
+| Surface | What it shows |
+| --- | --- |
+| **Observatory splash** (`lib/observatory.ts`) | The full mark, on a fresh chat only. |
+| **Fleet waterline** (`lib/fleet-waterline.ts`) | One dorsal fin per live async worker, cruising above the editor. Fin speed is that worker's event rate, so the 3-worker cap and a stalled worker are legible at a glance instead of via `task_list`. A worker waiting on a reply holds station. |
+| **Star field** (`lib/star-field.ts`) | Two facts in one row: the *shape* is seeded from the workspace path, so every project has its own constellation that is stable across launches; the *density* is context usage, with stars burning out faintest-first as the window fills. |
+| **Dive** (`lib/dive.ts`) and **re-entry** (`lib/reentry.ts`) | Compaction as a descent that surfaces with the one figure that is actually known (`surfaced · carried 148k down`), and a one-line orientation row when an existing session is resumed. |
+
+Pi constructs its own compaction spinner internally and exposes no API to restyle it, so the dive renders **alongside** that spinner rather than replacing it; matching it fully needs an upstream change. Pi's spinner therefore owns the words and the dive carries no label of its own. The mark bobs and sways mid-water instead of landing on a floor: compaction has no honest percentage, and a mark that came to rest would read as finished while the work was still running.
+
+These two motion surfaces are the only sanctioned `setInterval` clocks in Apex (see the exception in [CONTEXT.md](CONTEXT.md#apex-stability-constraints)); each starts on demand, `unref()`s, and is disposed with its widget.
 
 ## Example and template files
 

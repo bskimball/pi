@@ -14,9 +14,9 @@ import {
   hostOf,
   webSearchSpec,
   webToolRenderers,
-} from "./mono/lib/web-search-ui.ts";
+} from "./apex/lib/web-search-ui.ts";
 
-// Mono receipts for these tools. Presentation lives in mono/lib/web-search-ui.ts
+// Apex receipts for these tools. Presentation lives in apex/lib/web-search-ui.ts
 // and reuses the same primitives as the built-in and MCP rows.
 const searchUi = webToolRenderers(webSearchSpec);
 const fetchUi = webToolRenderers(fetchContentSpec);
@@ -228,7 +228,7 @@ export default function (pi: ExtensionAPI): void {
           `Query: ${group.query}`, "Exa search results:",
           ...(group.results.length ? group.results.map((result, index) => `${index + 1}. ${result.title}\n${result.url}${params.includeContent && result.text ? `\n${bound(result.text, 3_000)}` : ""}`) : ["No results found."]),
         ].join("\n\n")).join("\n\n---\n\n");
-        // resultCount/queries feed the Mono receipt stats. Non-sensitive only.
+        // resultCount/queries feed the Apex receipt stats. Non-sensitive only.
         const resultCount = groups.reduce((total, group) => total + group.results.length, 0);
         return textResult(bound(`${output}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId for stored result content.`, MAX_OUTPUT), { responseId, provider: "exa", queryCount: groups.length, resultCount, numResults });
       } catch (error) {
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI): void {
           const page = pages[0]; const preview = bound(page.content, INLINE_LIMIT);
           return textResult(`# ${page.title}\nSource: ${page.url}\n\n${preview}\n\nresponseId: ${responseId}${preview.length < page.content.length ? "\nContent is truncated; use get_search_content with this responseId and offset." : ""}`, { responseId, provider: "local", urlCount: 1, host: hostOf(page.url), contentLength: page.content.length });
         }
-        // urlCount/contentLength/hosts feed the Mono receipt stats. Non-sensitive only.
+        // urlCount/contentLength/hosts feed the Apex receipt stats. Non-sensitive only.
         return textResult(`Fetched ${pages.length} pages.\n${pages.map((page, index) => `${index + 1}. ${page.title} — ${page.url} (${page.content.length} chars)`).join("\n")}\n\nresponseId: ${responseId}\nUse get_search_content with this responseId and urlIndex to retrieve page text.`, { responseId, provider: "local", urlCount: pages.length, hosts: pages.map((page) => hostOf(page.url)), contentLength: pages.reduce((total, page) => total + page.content.length, 0) });
       } catch (error) {
         return textResult(`Fetch error: ${redact(error instanceof Error ? error.message : String(error))}`, {}, true);

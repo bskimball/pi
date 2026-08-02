@@ -1,4 +1,4 @@
-// observatory-orb: the keyboard-focusable π orb.
+// observatory-orb: the keyboard-focusable shark mark.
 //
 // A pi-tui Component that renders the observatory splash in its selected
 // state and turns arrow/tab/enter/escape into a single terminal result. It

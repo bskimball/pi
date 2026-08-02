@@ -1,4 +1,4 @@
-// mono-ui: compact built-in tool chrome and monochrome interactive layout.
+// apex-ui: compact built-in tool chrome and monochrome interactive layout.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -35,7 +35,7 @@ import {
   renderDiffLines,
   resultDiff,
 } from "./lib/edit-diff.ts";
-// Re-export so callers that still look for installMcpPresentation on mono-ui
+// Re-export so callers that still look for installMcpPresentation on apex-ui
 // keep working; preferred import is ./lib/mcp-presentation.ts.
 export { installMcpPresentation } from "./lib/mcp-presentation.ts";
 import {
@@ -66,6 +66,8 @@ import {
   createObservatoryOrb,
   type ObservatoryOrbResult,
 } from "./lib/observatory-orb.ts";
+import { DiveView } from "./lib/dive.ts";
+import { renderReentry, type Reentry } from "./lib/reentry.ts";
 import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
 
 type BuiltinName = "read" | "bash" | "edit" | "write";
@@ -336,6 +338,11 @@ function taskCount(status: string | undefined): number {
   return match ? Number(match[1]) : 0;
 }
 
+/** Widget slot for the compaction dive. */
+const DIVE_WIDGET_KEY = "apex.dive";
+/** Widget slot for the session re-entry line. */
+const REENTRY_WIDGET_KEY = "apex.reentry";
+
 const RANDOM_INDICATOR_FRAME_COUNT = 256;
 const RANDOM_INDICATOR_INTERVAL_MS = 120;
 
@@ -476,10 +483,10 @@ function applyRandomWorkingIndicator(
 }
 
 export default function (pi: ExtensionAPI) {
-  // PI_MONO_UI=0 remains an emergency opt-out. The extension stays enabled by
+  // PI_APEX_UI=0 remains an emergency opt-out. The extension stays enabled by
   // default and uses dependency-free tool/footer rendering plus Pi's built-in
   // editor and working indicator.
-  if (process.env.PI_MONO_UI === "0") return;
+  if (process.env.PI_APEX_UI === "0") return;
 
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
@@ -500,6 +507,39 @@ export default function (pi: ExtensionAPI) {
   let observatory: Observatory | undefined;
   let observatoryCtx: ExtensionContext | undefined;
 
+  /** Context usage as 0..1, or undefined when Pi cannot report it yet. */
+  function contextFill(ctx: ExtensionContext): number | undefined {
+    try {
+      const percent = ctx.getContextUsage()?.percent;
+      return typeof percent === "number" ? percent / 100 : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // ------------------------------------------------------------------- dive
+
+  // Pi builds its own compaction spinner internally and exposes no way to
+  // restyle it, so the dive is an additional widget bracketed by the same two
+  // events. It is created on descent and cleared on the next input, so the
+  // result line survives long enough to be read but does not become chrome.
+  let dive: DiveView | undefined;
+  let diveCtx: ExtensionContext | undefined;
+  let reentryCtx: ExtensionContext | undefined;
+
+  function clearDive(): void {
+    if (!dive) return;
+    const ctx = diveCtx;
+    dive.dispose();
+    dive = undefined;
+    diveCtx = undefined;
+    try {
+      ctx?.ui.setWidget(DIVE_WIDGET_KEY, undefined);
+    } catch {
+      // A teardown failure must never propagate into Pi's event loop.
+    }
+  }
+
   function clearObservatory(): void {
     const ctx = observatoryCtx;
     observatory = undefined;
@@ -515,7 +555,7 @@ export default function (pi: ExtensionAPI) {
   function showObservatory(piApi: ExtensionAPI, ctx: ExtensionContext): void {
     let view: Observatory;
     try {
-      view = buildObservatory(piApi.getCommands(), ctx.cwd);
+      view = buildObservatory(piApi.getCommands(), ctx.cwd, contextFill(ctx));
     } catch (error) {
       reportRenderFailure("observatory", error);
       return;
@@ -623,15 +663,15 @@ export default function (pi: ExtensionAPI) {
     let view: Observatory;
     try {
       // Rebuilt per invocation so the orb always reflects current inventory.
-      view = buildObservatory(pi.getCommands(), ctx.cwd);
+      view = buildObservatory(pi.getCommands(), ctx.cwd, contextFill(ctx));
     } catch (error) {
       reportRenderFailure("observatory", error);
       return;
     }
     if (
       view.pathways.length === 0 &&
-      view.instruments.length === 0 &&
-      view.specialists.length === 0
+      view.specialists.length === 0 &&
+      view.skillCount === 0
     ) {
       ctx.ui.notify("No prompts, skills, or specialists are available.", "info");
       return;
@@ -678,7 +718,9 @@ export default function (pi: ExtensionAPI) {
       }
       // Always present the visual portal when the command is invoked.
       if (!observatory) showObservatory(pi, ctx);
-      const view = observatory ?? buildObservatory(pi.getCommands(), ctx.cwd);
+      const view =
+        observatory ??
+        buildObservatory(pi.getCommands(), ctx.cwd, contextFill(ctx));
       if (!observatory) observatory = view;
 
       const options = selectorOptions(view);
@@ -728,26 +770,143 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Real user submits end the landing screen; the command above bypasses this.
-  pi.on("input", () => clearObservatory());
-  pi.on("session_shutdown", () => clearObservatory());
+  pi.on("input", () => {
+    clearObservatory();
+    // The surfaced line has been on screen since the dive ended; the next
+    // thing the user does is what retires it. Same for the re-entry line.
+    clearDive();
+    clearReentry();
+  });
+  pi.on("session_shutdown", () => {
+    clearObservatory();
+    clearDive();
+    clearReentry();
+  });
+
+  pi.on("session_before_compact", (_event, ctx) => {
+    // Component-factory widgets are honoured only by the interactive TUI; RPC
+    // mode reports hasUI but ignores factories, so gate on the mode itself.
+    if (ctx.mode !== "tui") return;
+    diveCtx = ctx;
+    try {
+      ctx.ui.setWidget(
+        DIVE_WIDGET_KEY,
+        (tui, theme) => {
+          dive = new DiveView(theme, () => tui.requestRender());
+          dive.start();
+          return dive;
+        },
+        { placement: "aboveEditor" },
+      );
+    } catch (error) {
+      reportRenderFailure("dive", error);
+      dive = undefined;
+    }
+  });
+
+  // A cancelled or failed compaction never emits session_compact, so the
+  // descent would otherwise animate forever. Settling ends the turn either
+  // way; if the dive is still descending by then, the compaction did not
+  // succeed and the widget is removed rather than left mid-dive.
+  pi.on("agent_settled", () => {
+    if (dive?.descending) clearDive();
+  });
+
+  pi.on("session_compact", (event) => {
+    if (!dive) return;
+    // Only tokensBefore is knowable here: Pi computes estimatedTokensAfter but
+    // omits it from this event, and getContextUsage() returns null until the
+    // next assistant response. Reporting a made-up "after" would be worse than
+    // reporting one true number.
+    const before =
+      typeof event.compactionEntry?.tokensBefore === "number"
+        ? event.compactionEntry.tokensBefore
+        : undefined;
+    dive.surface(before);
+  });
 
   pi.on("session_start", (event, ctx) => {
     // Always drop a prior session's header/widget/model before any guard so
     // new/resume/reload/fork never inherits a stale observatory.
     clearObservatory();
+    clearDive();
+    clearReentry();
     installLayout(pi, ctx);
     // Rebuild only for a conversation-blank new/initial startup chat.
     // Ignore model_change / thinking_level_change / session_info seeds that
     // the SDK appends before session_start on every fresh session.
     if (!ctx.hasUI) return;
-    if (event.reason !== "new" && event.reason !== "startup") return;
+    let blank: boolean;
     try {
-      if (!isConversationBlank(ctx.sessionManager.getEntries())) return;
+      blank = isConversationBlank(ctx.sessionManager.getEntries());
     } catch {
       return;
     }
-    showObservatory(pi, ctx);
+    if (event.reason === "new" || event.reason === "startup") {
+      if (blank) showObservatory(pi, ctx);
+      return;
+    }
+    // Resuming an existing conversation: the splash stays reserved for a fresh
+    // chat, but re-entry still deserves orientation.
+    if (!blank && (event.reason === "resume" || event.reason === "fork")) {
+      showReentry(ctx);
+    }
   });
+
+  function clearReentry(): void {
+    const ctx = reentryCtx;
+    reentryCtx = undefined;
+    if (!ctx) return;
+    try {
+      ctx.ui.setWidget(REENTRY_WIDGET_KEY, undefined);
+    } catch {
+      // A teardown failure must never propagate into Pi's event loop.
+    }
+  }
+
+  function showReentry(ctx: ExtensionContext): void {
+    if (ctx.mode !== "tui") return;
+    let view: Reentry;
+    try {
+      const entries = ctx.sessionManager.getEntries();
+      let messages = 0;
+      let lastAt: number | undefined;
+      for (const entry of entries) {
+        if (entry.type === "message") messages++;
+        const stamp = Date.parse(
+          (entry as { timestamp?: string }).timestamp ?? "",
+        );
+        if (Number.isFinite(stamp)) lastAt = stamp;
+      }
+      view = {
+        workspace: cleanInline(path.basename(ctx.cwd || ""), 40),
+        seed: ctx.cwd || "",
+        messages,
+        sinceMs: lastAt === undefined ? undefined : Date.now() - lastAt,
+        contextFill: contextFill(ctx),
+      };
+    } catch (error) {
+      reportRenderFailure("reentry", error);
+      return;
+    }
+
+    try {
+      ctx.ui.setWidget(
+        REENTRY_WIDGET_KEY,
+        (_tui, theme) =>
+          new WidthText(
+            (width) =>
+              renderReentry((key, text) => theme.fg(key, text), width, view),
+            "[resumed]",
+          ),
+        { placement: "aboveEditor" },
+      );
+      reentryCtx = ctx;
+    } catch (error) {
+      reportRenderFailure("reentry", error);
+      reentryCtx = undefined;
+    }
+  }
 
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
@@ -755,11 +914,11 @@ export default function (pi: ExtensionAPI) {
 
     // Collapsed reasoning is otherwise a bare italic sentence that reads like
     // narration. The shared quiet glyph marks it as the assistant's private
-    // channel without adding a row and matches Mono's restrained glyph set.
+    // channel without adding a row and matches Apex's restrained glyph set.
     // Pi paints and italicises this label itself.
     ctx.ui.setHiddenThinkingLabel("\u00b7 thinking");
 
-    class MonoEditor extends CustomEditor {
+    class ApexEditor extends CustomEditor {
       constructor(
         tui: TUI,
         theme: EditorTheme,
@@ -771,7 +930,7 @@ export default function (pi: ExtensionAPI) {
       render(width: number): string[] {
         try {
           // Pi colors both input borders from the thinking level (and bash mode).
-          // Mono keeps the chrome quiet: only the footer thinking label carries
+          // Apex keeps the chrome quiet: only the footer thinking label carries
           // that hue. Force the border painter before super.render so the bottom
           // rule and scroll indicators stay muted too, not just the top line.
           this.borderColor = (str: string) =>
@@ -810,7 +969,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     ctx.ui.setEditorComponent(
-      (tui, theme, keybindings) => new MonoEditor(tui, theme, keybindings),
+      (tui, theme, keybindings) => new ApexEditor(tui, theme, keybindings),
     );
 
     // Token totals are O(session length) to compute; cache them and only
@@ -1085,7 +1244,7 @@ export default function (pi: ExtensionAPI) {
             );
           } catch (error) {
             reportRenderFailure("footer", error);
-            return [fallbackTruncateToWidth("mono-ui", width)];
+            return [fallbackTruncateToWidth("apex-ui", width)];
           }
         },
       };

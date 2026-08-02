@@ -14,14 +14,23 @@ import {
   type AgentDef,
 } from "./agent-discovery.ts";
 import { cleanInline } from "./ui-common.ts";
+import {
+  SHARK_PIXELS_MID,
+  SHARK_PIXELS_MID_WIDTH,
+  SHARK_PIXELS_WIDE,
+  SHARK_PIXELS_WIDE_WIDTH,
+} from "./shark-art.ts";
+import { TRUECOLOR, pixelRows } from "./pixel-art.ts";
+import { starFieldRow } from "./star-field.ts";
 import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "./safe-text-layout.ts";
 
 /**
  * The observatory is installed as Pi's startup header, which has no line cap.
  * With quiet startup the header is the entire opening screen, so the
- * composition is a full splash: an even vertical rhythm inside 22 rows.
+ * composition is a full splash. The budget covers the 10-row truecolor mark
+ * plus the signal, the inventory, and the threshold chrome beneath it.
  */
-export const OBSERVATORY_MAX_LINES = 22;
+export const OBSERVATORY_MAX_LINES = 25;
 export const NEUTRAL_SIGNAL = "AWAITING A SIGNAL";
 
 type Fg = (key: any, text: string) => string;
@@ -52,8 +61,11 @@ export interface Observatory {
   signal: string;
   /** True when the signal came from a real workspace/project resource. */
   hasProject: boolean;
+  /** Seeds this workspace's own constellation. Stable across launches. */
+  seed: string;
+  /** Context usage 0..1 when known; burns stars out of the sky as it fills. */
+  contextFill?: number;
   pathways: FeaturedEntry[];
-  instruments: FeaturedEntry[];
   specialists: FeaturedEntry[];
   promptCount: number;
   skillCount: number;
@@ -243,6 +255,7 @@ function sortPool(
 export function buildObservatory(
   commands: readonly SlashCommandInfo[],
   cwd: string,
+  contextFill?: number,
 ): Observatory {
   const { pool, scopeOf } = collectPool(commands);
   const agents = collectAgents(cwd);
@@ -268,9 +281,15 @@ export function buildObservatory(
   return {
     signal,
     hasProject,
-    pathways: sortPool(prompts, scopeOf).slice(0, 3),
-    instruments: sortPool(skills, scopeOf).slice(0, 3),
-    specialists: sortPool(specialists, agents.scopeOf).slice(0, 3),
+    // The path, not the basename: two checkouts of the same repo are different
+    // places and should not share a sky.
+    seed: cwd || "",
+    contextFill,
+    // Caps leave room for the constellation layout: prompts stay short on the
+    // left, agents fill both sub-columns (up to all nine specialists). Skills
+    // stay countable and browsable, but are not featured on the landing.
+    pathways: sortPool(prompts, scopeOf).slice(0, 6),
+    specialists: sortPool(specialists, agents.scopeOf).slice(0, 9),
     promptCount: prompts.length,
     skillCount: skills.length,
     agentCount: specialists.length,
@@ -296,55 +315,85 @@ export function listInventory(
 }
 
 /**
- * Optical cap for the whole composition. A portal that stretches to 200
- * columns stops reading as a portal, so the block stays dense and centered.
+ * Optical cap for the whole composition. A mark that stretches to 200
+ * columns stops reading as a mark, so the block stays dense and centered.
  */
 const PORTAL_MAX_SPAN = 64;
-/** Full logo + twin constellation columns need this much room. */
-const FULL_MIN = 44;
-/** Below this only the singularity glyph, the signal and the threshold remain. */
+/** The 56-column full shark + twin constellation columns need this much room. */
+const FULL_MIN = 62;
+/** Below this only the minimal dorsal-fin mark, the signal and the threshold remain. */
 const MINIMAL_MIN = 20;
 
 /**
- * The centrepiece: a hand-authored block-art π, 7 rows × 28 columns. Two-row
- * crossbar overhanging two splayed legs, with the glyph weight (█ ▓ ▒ ░)
- * carrying the fall-off from the luminous bar to the dim leg extremities.
- * Every glyph is narrow BMP box/block art, so the block is exactly 28 cells
- * wide on every terminal. Row 0 is a halo, row 6 is its shadow.
+ * Width needed for the 66-cell truecolor mark, and for the 39-cell one. Below
+ * the smaller of the two the glyph art takes over again.
  */
-const PI_LOGO: readonly string[] = [
-  "  ░░░░░░░░░░░░░░░░░░░░░░░░  ",
-  "████████████████████████████",
-  "████████████████████████████",
-  "    ▓▓▓▓            ▓▓▓▓    ",
-  "    ▓▓▓▓            ▓▓▓▓    ",
-  "   ▒▒▒▒              ▒▒▒▒   ",
-  "  ░░░░                ░░░░  ",
+const PIXEL_WIDE_MIN = SHARK_PIXELS_WIDE_WIDTH + 2;
+const PIXEL_MID_MIN = SHARK_PIXELS_MID_WIDTH + 2;
+
+/**
+ * The centrepiece: a hand-authored side-profile great white, 7 rows × 56
+ * columns, swimming left. Half blocks (▀ ▄) double the vertical resolution, so
+ * the silhouette is drawn on a 14 × 56 sub-grid: pointed snout at column 1,
+ * eye notch, dropped open jaw, three gill slits, a long torpedo trunk that is
+ * deepest under the dorsal, a tall triangular dorsal about a third back from
+ * the snout, a pectoral fin raked down and back, a long rear taper into a
+ * visibly narrow peduncle, and a large asymmetric crescent tail whose long
+ * swept upper lobe overhangs the short lower one across a deep notch.
+ *
+ * Counter-shading is carried by colour rather than by glyph noise: the back is
+ * violet, the lateral line burns violet→cyan→violet, the belly is pale. Every
+ * glyph is narrow BMP block art (█ ▓ ▒ ▀ ▄), so the block is exactly 56 cells
+ * wide on every terminal. Row 0 rides the star field, row 6 carries the fins.
+ */
+const SHARK_LOGO: readonly string[] = [
+  "                  ▄██▄                              ▄███",
+  "                ▄██████▄                         ▄████▀ ",
+  "     ▄▄▄▄█████████████████████████▄▄▄▄        ▄█████▀   ",
+  " ▄▓██▒█████▓█▓█▓████████████████████████▄▄▄▄▄▄██████    ",
+  "  ▀▀ ▓▓▓▓██████████████████████▀▀▀▀▀▀▀▀         ▄████   ",
+  "      ▀▀▀▀███████▀▀▀▀                             ▀███▀ ",
+  "             ▀▀██▄▄                                     ",
 ];
-const PI_LOGO_WIDTH = 28;
-/** Per-row colour; `null` means the horizontal violet→cyan→violet crossbar. */
-const PI_LOGO_KEYS: readonly (string | null)[] = [
-  "borderMuted",
-  null,
-  null,
+const SHARK_LOGO_WIDTH = 56;
+/**
+ * Per-row colour: dark back → luminous flank → pale belly → wake. `null` marks
+ * the lateral line, the one row that takes the horizontal gradient.
+ */
+const SHARK_LOGO_KEYS: readonly (string | null)[] = [
   "customMessageLabel",
   "customMessageLabel",
-  "dim",
-  "borderMuted",
+  "customMessageLabel",
+  null,
+  "text",
+  "text",
+  "muted",
 ];
 
-/** Narrow-terminal π: same silhouette at 3 rows × 14 columns. */
-const PI_COMPACT: readonly string[] = [
-  "██████████████",
-  "  ▓▓      ▓▓  ",
-  " ▒▒        ▒▒ ",
+/**
+ * Narrow-terminal shark: the same silhouette cut down to the cues that still
+ * read at 18 columns — triangular dorsal, tapered snout, thick trunk, raked
+ * pectoral and crescent tail — at 4 rows × 18 columns.
+ */
+const SHARK_COMPACT: readonly string[] = [
+  "     ▄██▄       ▄█",
+  " ▄▄███████▄▄▄▄▄██▀",
+  "▀████████████▀▀██▄",
+  "  ▀▀▀▀███       ▀█",
 ];
-const PI_COMPACT_WIDTH = 14;
-const PI_COMPACT_KEYS: readonly (string | null)[] = [
-  null,
+const SHARK_COMPACT_WIDTH = 18;
+const SHARK_COMPACT_KEYS: readonly (string | null)[] = [
   "customMessageLabel",
-  "dim",
+  null,
+  "text",
+  "muted",
 ];
+
+/**
+ * Sub-minimal mark for terminals too narrow for any block art: a lone dorsal
+ * fin breaking the surface. Single-cell BMP, like {@link SELECTION_POINTER}.
+ */
+const SHARK_MINIMAL = "▴";
 
 /**
  * Leading marker and filled glyph for the focused constellation entry. The
@@ -355,13 +404,16 @@ const PI_COMPACT_KEYS: readonly (string | null)[] = [
 const SELECTION_POINTER = "▸";
 const SELECTED_GLYPH = "◆";
 
-/** Quiet star fields that open and could seal the composition. Even widths. */
-const STARFIELD_WIDE = "·         ⋆                    ⋆         ·";
-const STARFIELD_NARROW = "·      ⋆    ⋆      ·";
+/**
+ * The sky is as wide as the mark it frames, so the constellation reads as one
+ * composition with the shark rather than a full-width band behind it.
+ */
+const STARFIELD_WIDE_SPAN = 42;
+const STARFIELD_NARROW_SPAN = 20;
 
 /**
- * Center a styled row on the portal's single optical axis, which is the column
- * the π occupies: `floor((width - 1) / 2)`.
+ * Center a styled row on the composition's single optical axis, which is the column
+ * the shark's dorsal fin occupies: `floor((width - 1) / 2)`.
  */
 function center(text: string, width: number): string {
   const visible = safeVisibleWidth(text);
@@ -408,10 +460,12 @@ function evenSpan(span: number): number {
 }
 
 /**
- * The crossbar's horizontal gradient: violet at the overhanging tips, cyan
- * through the core, so the bar reads as luminous rather than as a flat slab.
+ * The lateral line's horizontal gradient: violet at the snout and the tail,
+ * cyan through the core, so the flank reads as luminous rather than as a flat
+ * slab. The cyan core also sits where a shark's countershading actually
+ * catches the light.
  */
-function gradientBar(art: string, fg: Fg): string {
+function lateralLine(art: string, fg: Fg): string {
   const edge = Math.max(1, Math.round(art.length * 0.22));
   return (
     fg("customMessageLabel", art.slice(0, edge)) +
@@ -420,40 +474,44 @@ function gradientBar(art: string, fg: Fg): string {
   );
 }
 
-/** The π logo, sized to the terminal. Returns rows plus their shared width. */
+/**
+ * The shark mark, sized to the terminal.
+ *
+ * Four tiers, widest first: the truecolor bitmap at two sizes, then the
+ * hand-authored glyph shark, then a lone dorsal fin. The bitmap tiers are
+ * skipped entirely without 24-bit colour so the mark never degrades into
+ * banded mush.
+ */
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
   if (width < MINIMAL_MIN) {
-    return { rows: [fg("accent", "π")], blockWidth: 1 };
+    return { rows: [fg("accent", SHARK_MINIMAL)], blockWidth: 1 };
+  }
+  if (TRUECOLOR && width >= PIXEL_WIDE_MIN) {
+    return {
+      rows: pixelRows(SHARK_PIXELS_WIDE),
+      blockWidth: SHARK_PIXELS_WIDE_WIDTH,
+    };
+  }
+  if (TRUECOLOR && width >= PIXEL_MID_MIN) {
+    return {
+      rows: pixelRows(SHARK_PIXELS_MID),
+      blockWidth: SHARK_PIXELS_MID_WIDTH,
+    };
   }
   const full = width >= FULL_MIN;
-  const art = full ? PI_LOGO : PI_COMPACT;
-  const keys = full ? PI_LOGO_KEYS : PI_COMPACT_KEYS;
+  const art = full ? SHARK_LOGO : SHARK_COMPACT;
+  const keys = full ? SHARK_LOGO_KEYS : SHARK_COMPACT_KEYS;
   const rows = art.map((row, index) => {
     const key = keys[index];
     if (key !== null && key !== undefined) return fg(key, row);
-    // Focused: the crossbar burns to a single live accent instead of the
+    // Focused: the lateral line burns to a single live accent instead of the
     // resting violet→cyan gradient. Colour only; the geometry never moves.
-    return active ? fg("accent", row) : gradientBar(row, fg);
+    return active ? fg("accent", row) : lateralLine(row, fg);
   });
-  return { rows, blockWidth: full ? PI_LOGO_WIDTH : PI_COMPACT_WIDTH };
+  return { rows, blockWidth: full ? SHARK_LOGO_WIDTH : SHARK_COMPACT_WIDTH };
 }
 
-/** A single quiet star row; glyphs are tinted individually for depth. */
-function starField(fg: Fg, width: number): string {
-  const pattern = width >= FULL_MIN ? STARFIELD_WIDE : STARFIELD_NARROW;
-  let out = "";
-  let run = "";
-  for (const character of pattern) {
-    if (character === " ") {
-      run += character;
-      continue;
-    }
-    out += run;
-    run = "";
-    out += fg(character === "·" ? "borderMuted" : "dim", character);
-  }
-  return out;
-}
+
 
 /**
  * The signal, letter-spaced into a small-caps feel when there is room for it.
@@ -572,117 +630,27 @@ interface Block {
   blockWidth: number;
 }
 
-/**
- * Twin constellation columns: PATHWAYS | INSTRUMENTS, composed as one
- * fixed-width unit whose gutter straddles the π column.
- */
-function twinColumns(
-  view: Observatory,
-  fg: Fg,
-  span: number,
-  maxRows: number,
-  selection: ObservatorySelection | undefined,
-): Block {
-  const pointer = selection?.active === true;
-  const gutter = 6;
-  const limit = Math.max(12, Math.floor((span - gutter) / 2));
-  // Size both cells to the widest thing either column actually holds, so the
-  // block is no wider than its content and its gutter lands on the π axis.
-  const content = [
-    ...view.pathways.slice(0, maxRows - 1),
-    ...view.instruments.slice(0, maxRows - 1),
-    ...view.specialists.slice(0, maxRows - 1),
-  ].reduce(
-    (widest, entry) =>
-      Math.max(widest, safeVisibleWidth(entry.label) + 2 + (pointer ? 2 : 0)),
-    0,
-  );
-  const columnWidth = Math.max(11, Math.min(limit, content));
-  const gap = " ".repeat(gutter);
-  // Prefer the classic pathway/instrument twin columns when both exist.
-  // Specialists join the twin layout only when one of those is empty, so the
-  // dense two-column rhythm stays intact on full-width terminals.
-  const leftEntries =
-    view.pathways.length > 0
-      ? view.pathways
-      : view.specialists;
-  const rightEntries =
-    view.instruments.length > 0
-      ? view.instruments
-      : view.pathways.length > 0
-        ? view.specialists
-        : [];
-  const offsetOf = (entries: readonly FeaturedEntry[]): number => {
-    if (entries === view.pathways) return 0;
-    if (entries === view.instruments) return view.pathways.length;
-    return view.pathways.length + view.instruments.length;
-  };
-  const leftOffset = offsetOf(leftEntries);
-  const rightOffset = offsetOf(rightEntries);
-  const leftTitle =
-    leftEntries === view.specialists
-      ? "SPECIALISTS"
-      : leftEntries === view.instruments
-        ? "INSTRUMENTS"
-        : "PATHWAYS";
-  const rightTitle =
-    rightEntries === view.specialists
-      ? "SPECIALISTS"
-      : rightEntries === view.instruments
-        ? "INSTRUMENTS"
-        : "PATHWAYS";
-  const leftGlyph =
-    leftEntries === view.specialists
-      ? "◎"
-      : leftEntries === view.instruments
-        ? "◈"
-        : "◇";
-  const rightGlyph =
-    rightEntries === view.specialists
-      ? "◎"
-      : rightEntries === view.instruments
-        ? "◈"
-        : "◇";
-  const rows: string[] = [
-    padCell(fg("customMessageLabel", leftTitle), columnWidth) +
-      gap +
-      fg("customMessageLabel", rightTitle),
-  ];
-  const depth = Math.min(
-    maxRows - 1,
-    Math.max(leftEntries.length, rightEntries.length),
-  );
-  for (let index = 0; index < depth; index++) {
-    const left = constellationCell(leftEntries[index], leftGlyph, fg, columnWidth, {
-      pointer,
-      selected: pointer && selection?.index === leftOffset + index,
-    });
-    const right = constellationCell(
-      rightEntries[index],
-      rightGlyph,
-      fg,
-      columnWidth,
-      {
-        pointer,
-        selected: pointer && selection?.index === rightOffset + index,
-      },
-    );
-    const row = right
-      ? padCell(left, columnWidth) + gap + right
-      : left;
-    rows.push(row);
-  }
-  // Center on the block's real ink, not its nominal cells: the right column is
-  // ragged, and centering on the nominal width pulls the unit off the π axis.
-  const ink = rows.reduce((widest, row) => Math.max(widest, safeVisibleWidth(row)), 0);
-  return { rows, blockWidth: evenSpan(ink + 1) };
+/** Pathway / agent glyphs — same family the prior constellation used. */
+const GLYPH_PROMPT = "◇";
+const GLYPH_AGENT = "◎";
+
+/** Column-major split so CUSTOM AGENTS reads down the left, then the right. */
+function splitAgentColumns(
+  agents: readonly FeaturedEntry[],
+): [readonly FeaturedEntry[], readonly FeaturedEntry[]] {
+  if (agents.length <= 1) return [agents, []];
+  const leftCount = Math.ceil(agents.length / 2);
+  return [agents.slice(0, leftCount), agents.slice(leftCount)];
 }
 
 /**
- * Single stacked constellation for narrow terminals, or when only one of the
- * two groups exists. Still centered as one fixed-width unit.
+ * Wide constellation: CUSTOM PROMPTS | CUSTOM AGENTS, where agents may use two
+ * sub-columns so all nine specialists fit.
+ *
+ * Featured index order matches visual order: prompts → agents (left column
+ * top-to-bottom, then right).
  */
-function stackedColumns(
+function inventoryColumns(
   view: Observatory,
   fg: Fg,
   span: number,
@@ -690,49 +658,225 @@ function stackedColumns(
   selection: ObservatorySelection | undefined,
 ): Block {
   const pointer = selection?.active === true;
-  const columnWidth = Math.max(12, Math.min(34, span));
-  // `offset` keeps the stacked layout on the same featured index order as
-  // featuredAt(): pathways, instruments, specialists.
+  const selectedIndex = pointer ? selection?.index : undefined;
+  const prompts = view.pathways;
+  const agents = view.specialists;
+  const promptOffset = 0;
+  const agentOffset = prompts.length;
+
+  const rows: string[] = [];
+  const hasPrompts = prompts.length > 0;
+  const hasAgents = agents.length > 0;
+
+  // All constellation rows belong to prompts + agents now that skills are gone,
+  // so the agent pair columns can run to their full depth.
+  const useAgentPair = hasAgents && agents.length > 3 && span >= 48;
+  const [agentLeft, agentRight] = useAgentPair
+    ? splitAgentColumns(agents)
+    : [agents, [] as FeaturedEntry[]];
+  const topBudget = maxRows;
+
+  if (topBudget > 0 && (hasPrompts || hasAgents)) {
+    const agentGutter = 3;
+    const groupGutter = 6;
+    // Three content columns when prompts + paired agents; otherwise two or one.
+    const contentColumns = hasPrompts && useAgentPair ? 3 : hasPrompts && hasAgents ? 2 : 1;
+    const gutters =
+      contentColumns === 3 ? groupGutter + agentGutter : contentColumns === 2 ? groupGutter : 0;
+    const cellLimit = Math.max(
+      10,
+      Math.floor((span - gutters) / Math.max(1, contentColumns)),
+    );
+    const labelExtra = 2 + (pointer ? 2 : 0);
+    const widestLabel = [...prompts, ...agents].reduce(
+      (widest, entry) => Math.max(widest, safeVisibleWidth(entry.label) + labelExtra),
+      0,
+    );
+    // Headings are longer than most labels; never clip "CUSTOM PROMPTS".
+    const titleFloor = Math.max(
+      safeVisibleWidth("CUSTOM PROMPTS"),
+      safeVisibleWidth("CUSTOM AGENTS"),
+    );
+    const colW = Math.max(
+      titleFloor,
+      Math.min(cellLimit, Math.max(widestLabel, titleFloor)),
+    );
+
+    // Heading row.
+    if (hasPrompts && hasAgents) {
+      const leftHead = padCell(fg("customMessageLabel", "CUSTOM PROMPTS"), colW);
+      const rightHead = fg("customMessageLabel", "CUSTOM AGENTS");
+      rows.push(leftHead + " ".repeat(groupGutter) + rightHead);
+    } else if (hasPrompts) {
+      rows.push(fg("customMessageLabel", "CUSTOM PROMPTS"));
+    } else {
+      rows.push(fg("customMessageLabel", "CUSTOM AGENTS"));
+    }
+
+    const bodyRows = Math.max(0, topBudget - 1);
+    const depth = Math.min(
+      bodyRows,
+      Math.max(prompts.length, agentLeft.length, agentRight.length),
+    );
+    const groupGap = " ".repeat(groupGutter);
+    const agentGap = " ".repeat(agentGutter);
+
+    for (let index = 0; index < depth; index++) {
+      let promptCell = "";
+      if (hasPrompts) {
+        promptCell = padCell(
+          constellationCell(prompts[index], GLYPH_PROMPT, fg, colW, {
+            pointer,
+            selected:
+              pointer &&
+              prompts[index] !== undefined &&
+              selectedIndex === promptOffset + index,
+          }),
+          colW,
+        );
+      }
+
+      let agentCell = "";
+      if (hasAgents) {
+        if (useAgentPair) {
+          const left = constellationCell(agentLeft[index], GLYPH_AGENT, fg, colW, {
+            pointer,
+            selected:
+              pointer &&
+              agentLeft[index] !== undefined &&
+              selectedIndex === agentOffset + index,
+          });
+          const right = constellationCell(agentRight[index], GLYPH_AGENT, fg, colW, {
+            pointer,
+            selected:
+              pointer &&
+              agentRight[index] !== undefined &&
+              selectedIndex === agentOffset + agentLeft.length + index,
+          });
+          agentCell = right ? padCell(left, colW) + agentGap + right : left;
+        } else {
+          agentCell = constellationCell(agents[index], GLYPH_AGENT, fg, colW, {
+            pointer,
+            selected:
+              pointer &&
+              agents[index] !== undefined &&
+              selectedIndex === agentOffset + index,
+          });
+        }
+      }
+
+      let row = "";
+      if (hasPrompts && hasAgents) row = promptCell + groupGap + agentCell;
+      else if (hasPrompts) row = promptCell;
+      else row = agentCell;
+      // Skip pure-empty trailing rows when one side ran out first.
+      if (safeVisibleWidth(row) > 0) rows.push(row);
+    }
+  }
+
+  const ink = rows.reduce((widest, row) => Math.max(widest, safeVisibleWidth(row)), 0);
+  return { rows: rows.slice(0, maxRows), blockWidth: evenSpan(Math.max(ink, 12) + 1) };
+}
+
+/**
+ * Narrow constellation: stack CUSTOM PROMPTS then CUSTOM AGENTS.
+ * Same featured index order as {@link inventoryColumns} / {@link featuredEntries}.
+ */
+function inventoryStacked(
+  view: Observatory,
+  fg: Fg,
+  span: number,
+  maxRows: number,
+  selection: ObservatorySelection | undefined,
+): Block {
+  const pointer = selection?.active === true;
+  const selectedIndex = pointer ? selection?.index : undefined;
+  const columnWidth = Math.max(12, Math.min(40, span));
+  const prompts = view.pathways;
+  const agents = view.specialists;
+
+  // Even stacked, nine specialists only fit when they pair into two columns.
+  const pairAgents = agents.length > 3 && columnWidth >= 28;
+  const [agentLeft, agentRight] = pairAgents
+    ? splitAgentColumns(agents)
+    : [agents, [] as readonly FeaturedEntry[]];
+
   const groups: {
     title: string;
     entries: readonly FeaturedEntry[];
+    right?: readonly FeaturedEntry[];
     glyph: string;
     offset: number;
-  }[] = [
-    { title: "PATHWAYS", entries: view.pathways, glyph: "◇", offset: 0 },
-    {
-      title: "INSTRUMENTS",
-      entries: view.instruments,
-      glyph: "◈",
-      offset: view.pathways.length,
-    },
-    {
-      title: "SPECIALISTS",
-      entries: view.specialists,
-      glyph: "◎",
-      offset: view.pathways.length + view.instruments.length,
-    },
-  ].filter((group) => group.entries.length > 0);
-  // Each present group gets a heading; the remaining rows go to entries.
-  const perGroup = Math.max(
-    1,
-    Math.floor((maxRows - groups.length) / Math.max(1, groups.length)),
-  );
+  }[] = [];
+  if (prompts.length > 0) {
+    groups.push({
+      title: "CUSTOM PROMPTS",
+      entries: prompts,
+      glyph: GLYPH_PROMPT,
+      offset: 0,
+    });
+  }
+  if (agents.length > 0) {
+    groups.push({
+      title: "CUSTOM AGENTS",
+      entries: agentLeft,
+      right: pairAgents ? agentRight : undefined,
+      glyph: GLYPH_AGENT,
+      offset: prompts.length,
+    });
+  }
+
   const rows: string[] = [];
-  for (const group of groups) {
+  // Weight: agents deserve the most rows, prompts a few.
+  const weights = groups.map((group) => (group.glyph === GLYPH_AGENT ? 3 : 2));
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  // Each group with entries needs a heading row when we have room.
+  const headingCost = groups.length;
+  const entryBudget = Math.max(0, maxRows - headingCost);
+
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
     if (rows.length >= maxRows) break;
+    const group = groups[groupIndex]!;
     rows.push(fg("customMessageLabel", group.title));
-    const depth = Math.min(perGroup, group.entries.length);
+    if (rows.length >= maxRows) break;
+
+    const share = Math.max(
+      1,
+      Math.floor((entryBudget * (weights[groupIndex] ?? 1)) / weightSum),
+    );
+    // Last group consumes whatever remains so we do not waste budget.
+    const isLast = groupIndex === groups.length - 1;
+    const room = maxRows - rows.length;
+    const depth = Math.min(
+      group.entries.length,
+      isLast ? room : Math.min(share, room),
+    );
+
+    const cellWidth = group.right
+      ? Math.max(10, Math.floor((columnWidth - 2 - 2) / 2))
+      : columnWidth - 2;
+
     for (let index = 0; index < depth; index++) {
       if (rows.length >= maxRows) break;
-      rows.push(
-        `  ${constellationCell(group.entries[index], group.glyph, fg, columnWidth - 2, {
-          pointer,
-          selected: pointer && selection?.index === group.offset + index,
-        })}`,
-      );
+      const left = constellationCell(group.entries[index], group.glyph, fg, cellWidth, {
+        pointer,
+        selected: pointer && selectedIndex === group.offset + index,
+      });
+      if (!group.right) {
+        rows.push(`  ${left}`);
+        continue;
+      }
+      const right = constellationCell(group.right[index], group.glyph, fg, cellWidth, {
+        pointer,
+        selected:
+          pointer &&
+          group.right[index] !== undefined &&
+          selectedIndex === group.offset + group.entries.length + index,
+      });
+      rows.push(right ? `  ${padCell(left, cellWidth)}  ${right}` : `  ${left}`);
     }
   }
+
   const blockWidth = rows.reduce(
     (widest, row) => Math.max(widest, safeVisibleWidth(row)),
     0,
@@ -746,34 +890,26 @@ function constellationBlock(
   fg: Fg,
   width: number,
   span: number,
+  maxRows: number,
   selection: ObservatorySelection | undefined,
 ): Block | undefined {
   if (width < MINIMAL_MIN) return undefined;
-  if (
-    view.pathways.length === 0 &&
-    view.instruments.length === 0 &&
-    view.specialists.length === 0
-  ) {
+  if (view.pathways.length === 0 && view.specialists.length === 0) {
     return undefined;
   }
+  if (maxRows <= 0) return undefined;
   const full = width >= FULL_MIN;
-  // Row budget = 22 minus the eleven fixed rows minus the logo's own height.
-  const maxRows = full ? 4 : 8;
-  // Twin columns need two populated sides. Prefer pathway|instrument; fall back
-  // to pathway|specialist or specialist|instrument when one side is empty.
-  const hasTwinPair =
-    (view.pathways.length > 0 && view.instruments.length > 0) ||
-    (view.pathways.length > 0 && view.specialists.length > 0) ||
-    (view.instruments.length > 0 && view.specialists.length > 0);
-  if (full && hasTwinPair) {
-    return twinColumns(view, fg, span, maxRows, selection);
+  // Wide terminals: side-by-side CUSTOM PROMPTS | CUSTOM AGENTS.
+  // Narrow / single-group: stacked sections with the same index order.
+  if (full && (view.pathways.length > 0 || view.specialists.length > 0)) {
+    return inventoryColumns(view, fg, span, maxRows, selection);
   }
-  return stackedColumns(view, fg, span, full ? maxRows : 8, selection);
+  return inventoryStacked(view, fg, span, maxRows, selection);
 }
 
 /**
  * Keyboard focus state for the interactive orb. `index` addresses the featured
- * entries in the same 0..5 order as {@link featuredAt}.
+ * entries in the same order as {@link featuredAt} (prompts → agents).
  */
 export interface ObservatorySelection {
   index: number;
@@ -781,7 +917,7 @@ export interface ObservatorySelection {
 }
 
 /**
- * Render the splash: star field → π logo → signal → constellations → meta →
+ * Render the splash: star field → shark mark → signal → constellations → meta →
  * threshold → horizon, on one optical axis with an even single-row rhythm.
  * Installed as Pi's startup header, so 22 rows is the budget, not 9.
  */
@@ -797,27 +933,48 @@ export function renderObservatory(
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
 
+  // Dense fixed chrome (no blank under the star or under the mark) so the
+  // inventory can hold all nine agents inside the line budget.
   if (inner >= MINIMAL_MIN) {
-    lines.push(center(starField(fg, inner), inner));
-    lines.push("");
+    const skySpan = Math.min(
+      inner,
+      inner >= FULL_MIN ? STARFIELD_WIDE_SPAN : STARFIELD_NARROW_SPAN,
+    );
+    lines.push(
+      center(
+        starFieldRow(fg, skySpan, view.seed, view.contextFill),
+        inner,
+      ),
+    );
   }
 
   const logo = logoBlock(fg, inner, active);
   for (const row of logo.rows) lines.push(indent(row, logo.blockWidth, inner));
 
-  lines.push("");
   lines.push(center(signalLine(view, fg, inner), inner));
 
-  const constellations = constellationBlock(view, fg, inner, span, selection);
+  // Trailing chrome after the constellation: optional meta, invitation, horizon.
+  // Keep blanks around invitation/horizon so the threshold still breathes.
+  const trailing =
+    inner >= MINIMAL_MIN
+      ? 1 /* meta */ + 1 /* blank */ + 1 /* invitation */ + 1 /* blank */ + 1 /* horizon */
+      : 1 /* invitation */;
+  const maxConstellationRows = Math.max(0, OBSERVATORY_MAX_LINES - lines.length - trailing);
+  const constellations = constellationBlock(
+    view,
+    fg,
+    inner,
+    span,
+    maxConstellationRows,
+    selection,
+  );
   if (constellations) {
-    lines.push("");
     for (const row of constellations.rows) {
       lines.push(indent(row, constellations.blockWidth, inner));
     }
   }
 
   if (inner >= MINIMAL_MIN) {
-    lines.push("");
     lines.push(center(metaLine(view, fg, inner, active), inner));
   }
 
@@ -850,26 +1007,17 @@ function featuredRow(entry: FeaturedEntry, kind: string): string {
 }
 
 /**
- * Featured rows shown for keyboard/select launch. When pathways and instruments
- * both occupy the twin constellation, specialists stay available via
- * "All specialists…" rather than as invisible featured targets.
+ * Featured rows shown for keyboard/select launch. Order matches the landing
+ * layout exactly: CUSTOM PROMPTS, then CUSTOM AGENTS (left column then right).
  */
 export function featuredEntries(view: Observatory): FeaturedEntry[] {
-  if (view.pathways.length > 0 && view.instruments.length > 0) {
-    return [...view.pathways, ...view.instruments];
-  }
-  return [...view.pathways, ...view.instruments, ...view.specialists];
+  return [...view.pathways, ...view.specialists];
 }
 
 export function selectorOptions(view: Observatory): string[] {
   const featured = featuredEntries(view);
   const rows: string[] = featured.map((entry) => {
-    const kind =
-      entry.source === "skill"
-        ? "instrument"
-        : entry.source === "agent"
-          ? "specialist"
-          : "pathway   ";
+    const kind = entry.source === "agent" ? "specialist" : "pathway   ";
     return featuredRow(entry, kind);
   });
   if (view.promptCount > 0) {
@@ -976,7 +1124,7 @@ function escapeXml(value: string): string {
 
 export async function expandFeatured(entry: FeaturedEntry): Promise<string> {
   if (entry.source === "extension") {
-    // Native commands need their executable pre-steps; mono-ui launches them
+    // Native commands need their executable pre-steps; apex-ui launches them
     // through the shared handler instead of inlining a template body.
     throw new Error(
       `/${entry.name} is a native command and cannot be expanded as a prompt template`,

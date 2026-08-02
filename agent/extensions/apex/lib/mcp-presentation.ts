@@ -1,8 +1,8 @@
-// mcp-presentation: Mono receipt chrome for MCP proxy/direct tools.
+// mcp-presentation: Apex receipt chrome for MCP proxy/direct tools.
 //
 // Installed on the *same* ExtensionAPI as pi-mcp-adapter (see
-// agent/extensions/mcp-adapter.ts). Lives in mono/lib so the adapter entry
-// does not load mono-ui's default-export side-effect graph.
+// agent/extensions/mcp-adapter.ts). Lives in apex/lib so the adapter entry
+// does not load apex-ui's default-export side-effect graph.
 
 import type {
   ExtensionAPI,
@@ -186,10 +186,10 @@ function wrapMcpTool(
 }
 
 /**
- * Monkey-patch `pi.registerTool` so MCP proxy/direct tools get Mono's stable
+ * Monkey-patch `pi.registerTool` so MCP proxy/direct tools get Apex's stable
  * renderer. Must run on the *same* ExtensionAPI instance that `pi-mcp-adapter`
  * uses — each Pi extension gets its own API/tool map, so calling this from
- * mono-ui itself cannot intercept tools registered by another extension.
+ * apex-ui itself cannot intercept tools registered by another extension.
  *
  * Prefer `agent/extensions/mcp-adapter.ts`, which installs this wrapper then
  * boots the adapter on that API.
@@ -199,7 +199,7 @@ export function installMcpPresentation(pi: ExtensionAPI): void {
   (pi as ExtensionAPI & {
     registerTool: typeof pi.registerTool;
   }).registerTool = ((def: ToolDefinition<any, any, any>) => {
-    // Built-ins already use mono renderers (`renderShell: "self"`). Only restyle
+    // Built-ins already use apex renderers (`renderShell: "self"`). Only restyle
     // MCP proxy/direct tools that still ship the package's Text-based chrome.
     if (isMcpToolDefinition(def) && def.renderShell !== "self") {
       return originalRegisterTool(wrapMcpTool(def));

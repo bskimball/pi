@@ -9,7 +9,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
   discoverAgents,
@@ -23,6 +26,10 @@ import {
   missionFromPrompt,
 } from "./lib/task-view.ts";
 import { RpcClient } from "./lib/rpc-client.ts";
+import {
+  FleetWaterline,
+  type FleetSwimmer,
+} from "./lib/fleet-waterline.ts";
 import {
   killProcessTree,
   killProcessTreeSync,
@@ -79,6 +86,7 @@ import {
   type StatusKind,
 } from "./lib/status-view.ts";
 import { noticeComponent, type NoticeRow } from "./lib/notice-view.ts";
+import { reportRenderFailure } from "./lib/tool-receipt.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -94,6 +102,9 @@ const DEFAULT_MAX_TURNS = 30;
 
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
+
+/** Widget slot for the live-worker waterline above the editor. */
+const FLEET_WIDGET_KEY = "apex.fleet";
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
@@ -623,6 +634,72 @@ export default function (pi: ExtensionAPI) {
 
   const liveCount = () => countLiveWorkers(workers.values());
 
+  // ---------------------------------------------------------- fleet surface
+
+  // The waterline widget is created on the first live worker and torn down
+  // with the last one, so an idle session carries no widget and no timer.
+  let fleet: FleetWaterline | undefined;
+  let fleetCtx: ExtensionContext | undefined;
+
+  const clearFleet = () => {
+    if (!fleet) return;
+    const ctx = fleetCtx;
+    fleet.dispose();
+    fleet = undefined;
+    fleetCtx = undefined;
+    try {
+      ctx?.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+    } catch {
+      // Teardown failures must never propagate into worker event handling.
+    }
+  };
+
+  /**
+   * Push the live worker set onto the waterline. A worker counts as moving
+   * while it has produced an event recently; the fin speed is the difference,
+   * so a stalled worker is visible without reading any text.
+   */
+  const syncFleet = () => {
+    const ctx = fleetCtx;
+    if (!ctx) return;
+    const swimmers: FleetSwimmer[] = [];
+    for (const id of order) {
+      const worker = workers.get(id);
+      if (!worker || worker.closed) continue;
+      if (!isLiveLifecycle(worker.lifecycle)) continue;
+      swimmers.push({
+        id: worker.id,
+        agent: worker.agent,
+        lastEventAt: worker.lastEventAt ?? worker.createdAt,
+        waiting: worker.pendingUi.size > 0,
+      });
+    }
+
+    if (swimmers.length === 0) {
+      clearFleet();
+      return;
+    }
+
+    if (!fleet) {
+      try {
+        ctx.ui.setWidget(
+          FLEET_WIDGET_KEY,
+          (tui, theme) => {
+            fleet = new FleetWaterline(theme, () => tui.requestRender());
+            fleet.setSwimmers(swimmers);
+            return fleet;
+          },
+          { placement: "aboveEditor" },
+        );
+      } catch (error) {
+        reportRenderFailure("fleet-waterline", error);
+        fleet = undefined;
+      }
+      return;
+    }
+    fleet.setSwimmers(swimmers);
+  };
+
   const pruneSettled = () => {
     const settled = order
       .map((id) => workers.get(id))
@@ -646,6 +723,9 @@ export default function (pi: ExtensionAPI) {
   };
 
   const notifySubscribers = (worker: Worker) => {
+    // Every worker state change funnels through here, so this is also where the
+    // fleet surface learns who is live and whether they are moving.
+    syncFleet();
     if (worker.pinnedInvalidate) {
       try {
         worker.pinnedInvalidate();
@@ -1513,6 +1593,9 @@ export default function (pi: ExtensionAPI) {
         } catch {
           // ignore
         }
+        // The worker never became live; drop its fin now rather than waiting
+        // for an RPC event that will never arrive.
+        syncFleet();
         return {
           error: `${id} prompt rejected: ${response.error ?? "unknown"}`,
         };
@@ -1523,6 +1606,7 @@ export default function (pi: ExtensionAPI) {
       worker.countsTowardCap = false;
       worker.lifecycle = "failed";
       pushError(worker, message);
+      syncFleet();
       // Leave metadata for diagnosis; process will exit via kill.
       return { error: `${id} failed to accept prompt: ${message}` };
     }
@@ -2861,6 +2945,9 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         );
       }
       worker.pendingUi.delete(requestId);
+      // The fin holds station while a worker waits on a reply; releasing it
+      // here means it resumes immediately rather than at the next RPC event.
+      notifySubscribers(worker);
       const answer = params.cancelled
         ? "cancelled"
         : pending.method === "confirm"
@@ -2952,9 +3039,20 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   // ------------------------------------------------------------ lifecycle
 
+  // The fleet surface needs a UI context to install its widget; every event
+  // carries one, and the newest is the one that owns the current screen.
+  pi.on("session_start", (_event, ctx) => {
+    clearFleet();
+    // Only the interactive TUI honours component-factory widgets; RPC mode
+    // reports hasUI but ignores them.
+    fleetCtx = ctx.mode === "tui" ? ctx : undefined;
+  });
+
   // Busy gate is start → settled only (same pattern as bg-process).
-  pi.on("agent_start", () => {
+  pi.on("agent_start", (_event, ctx) => {
+    if (ctx.mode === "tui") fleetCtx = ctx;
     agentBusy = true;
+    syncFleet();
   });
   pi.on("agent_settled", () => {
     agentBusy = false;
@@ -2963,6 +3061,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   pi.on("session_shutdown", () => {
     shuttingDown = true;
+    clearFleet();
     try {
       for (const id of [...order]) {
         const worker = workers.get(id);

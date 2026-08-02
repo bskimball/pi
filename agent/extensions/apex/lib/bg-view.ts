@@ -1,4 +1,4 @@
-// bg-view: Mono receipts for the bg_* background-job tools.
+// bg-view: Apex receipts for the bg_* background-job tools.
 //
 // Presentation only. Everything is built from the structured `details.bg`
 // payload that bg-process.ts attaches to each tool result, so no renderer ever

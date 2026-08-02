@@ -1,4 +1,4 @@
-// amp-task: Mono Missions task tool and subagent execution.
+// amp-task: Apex Missions task tool and subagent execution.
 //
 // One `task` tool. Each task spawns a separate `pi --mode json -p` process with
 // the agent's system prompt from ~/.pi/agent/agents/*.md. Child lifetime remains
@@ -30,6 +30,10 @@ import {
   type AgentDef,
 } from "./lib/agent-discovery.ts";
 import { missionFromPrompt, shortArgs } from "./lib/task-view.ts";
+import {
+  boundText,
+  extractAssistantText,
+} from "./lib/text-bounds.ts";
 import {
   padStartToWidth,
   safeTruncateToWidth,
@@ -65,7 +69,7 @@ const ansiFg = (hex: string, text: string) => {
 // be flagged as invalid in editors even though the runtime validator currently
 // accepts them. Staying in `vars` keeps the theme file schema-clean. Every step
 // below is guarded; any failure falls back to this built-in set, which matches
-// the shipped pi-dark values.
+// the shipped apex-dark values.
 const DEFAULT_AGENT_HUES: Record<string, string> = {
   advisor: "#39c5cf",
   artisan: "#d2a8ff",
@@ -875,9 +879,24 @@ export default function (pi: ExtensionAPI) {
           let idleTimer: NodeJS.Timeout | undefined;
           let buffer = "";
           let assistantText = "";
+          // Streamed partial text only — used when message_end/turn_end/agent_end
+          // never yield usable completed assistant content (some providers).
+          let streamedAssistantText = "";
           let assistantError: string | undefined;
           let stderrTail = "";
           let attemptTurns = 0;
+          // Cap recovered report text so a runaway stream cannot blow the parent
+          // context. Canonical message_end content stays full-size as before.
+          const STREAM_ASSISTANT_CAP = 12_000;
+          const STREAM_ASSISTANT_LINES = 200;
+          const takeCompletedAssistant = (message: unknown): string =>
+            extractAssistantText(message);
+          const takeStreamedAssistant = (message: unknown): string => {
+            const text = extractAssistantText(message);
+            if (!text) return "";
+            return boundText(text, STREAM_ASSISTANT_CAP, STREAM_ASSISTANT_LINES)
+              .text;
+          };
           // Tools may legitimately stay quiet longer than model turns, but
           // still need an idle bound below the hard process timeout. The
           // running-activity maps decide the phase, so overlapping calls
@@ -1005,20 +1024,46 @@ export default function (pi: ExtensionAPI) {
                     event.type === "message_end" &&
                     event.message?.role === "assistant"
                   ) {
+                    // Canonical path: finalized assistant message.
                     const message = event.message;
                     assistantError =
                       message.stopReason === "error" || message.errorMessage
                         ? String(message.errorMessage ?? "provider/model error")
                         : undefined;
-                    if (Array.isArray(message.content)) {
-                      const text = message.content
-                        .filter((item: any) => item.type === "text")
-                        .map((item: any) => item.text)
-                        .join("\n")
-                        .trim();
-                      if (text) assistantText = text;
+                    const text = takeCompletedAssistant(message);
+                    if (text) assistantText = text;
+                    resetIdle();
+                  } else if (
+                    event.type === "turn_end" &&
+                    event.message?.role === "assistant"
+                  ) {
+                    // Completed turn message — prefer over partial stream text.
+                    const text = takeCompletedAssistant(event.message);
+                    if (text) assistantText = text;
+                    resetIdle();
+                  } else if (event.type === "agent_end") {
+                    // Last assistant message in the run, if message_end was missed.
+                    const messages = Array.isArray(event.messages)
+                      ? event.messages
+                      : [];
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                      const msg = messages[i];
+                      if (!msg || msg.role !== "assistant") continue;
+                      const text = takeCompletedAssistant(msg);
+                      if (text) {
+                        assistantText = text;
+                        break;
+                      }
                     }
                     resetIdle();
+                  } else if (
+                    event.type === "message_update" &&
+                    event.message?.role === "assistant"
+                  ) {
+                    // Bounded partial stream only; never overrides completed text.
+                    const text = takeStreamedAssistant(event.message);
+                    if (text) streamedAssistantText = text;
+                    // High-frequency: idle still reset by raw stdout path above.
                   }
                 } catch {}
               }
@@ -1085,6 +1130,10 @@ export default function (pi: ExtensionAPI) {
             killReason || exitCode !== 0 ? "error" : "completed",
           );
           run.child = undefined;
+          // Prefer completed assistant content; fall back to bounded stream text.
+          if (!assistantText && streamedAssistantText) {
+            assistantText = streamedAssistantText;
+          }
           finalExitCode = exitCode;
           finalAssistantText = assistantText;
           emit();

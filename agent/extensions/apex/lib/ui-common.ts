@@ -1,4 +1,4 @@
-// ui-common: rendering helpers shared by amp-task and mono-ui.
+// ui-common: rendering helpers shared by amp-task and apex-ui.
 
 import type { Component } from "@earendil-works/pi-tui";
 import {

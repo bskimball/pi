@@ -1,5 +1,5 @@
 // tool-receipt: presentation primitives and the unified receipt engine shared
-// by every Mono tool receipt (built-ins, MCP, and the local web tools).
+// by every Apex tool receipt (built-ins, MCP, and the local web tools).
 //
 // These deliberately avoid pi-tui `Text`/`Markdown`/`Container` and the
 // Intl.Segmenter width path; everything clips through safe-text-layout.
@@ -34,7 +34,7 @@ export function reportRenderFailure(surface: string, error: unknown): void {
   const key = `${surface}:${message}`;
   if (reportedRenderFailures.has(key)) return;
   reportedRenderFailures.add(key);
-  const entry = `\n=== mono-ui ${surface} render fallback at ${new Date().toISOString()} ===\n${message}\n`;
+  const entry = `\n=== apex-ui ${surface} render fallback at ${new Date().toISOString()} ===\n${message}\n`;
   void fs
     .appendFile(path.join(os.homedir(), ".pi", "agent", "pi-render.log"), entry)
     .catch(() => {});

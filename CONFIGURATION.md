@@ -66,9 +66,9 @@ obviously-fake literals.
 
 **Loaded by:** `agent/extensions/mcp-adapter.ts`, which wraps the
 `pi-mcp-adapter` npm package (`node_modules/pi-mcp-adapter`) on the same
-`ExtensionAPI` as Mono's MCP presentation layer. Do not also add
+`ExtensionAPI` as Apex's MCP presentation layer. Do not also add
 `pi-mcp-adapter` to `agent/settings.json` `packages` — that would load a second,
-unwrapped instance and bypass Mono's receipts.
+unwrapped instance and bypass Apex's receipts.
 
 **Location:** `<Pi agent dir>/mcp.json` (`agent/mcp.json` here). This is one of
 several files `pi-mcp-adapter` merges; see the package's own file-precedence
@@ -325,8 +325,8 @@ This repo's tracked `agent/settings.json` sets: `defaultModel`,
 ## Agent markdown (`agent/agents/*.md`, local custom)
 
 **Not an upstream Pi format.** Parsed entirely by this repo's
-`agent/extensions/mono/lib/agent-discovery.ts` (`parseAgentFile`), consumed by
-`mono/amp-task.ts` (sync `task` tool) and `mono/async-task.ts` (async
+`agent/extensions/apex/lib/agent-discovery.ts` (`parseAgentFile`), consumed by
+`apex/amp-task.ts` (sync `task` tool) and `apex/async-task.ts` (async
 `task_*` tools).
 
 **Locations (project overrides global on name collision):**
@@ -481,8 +481,8 @@ plus the optional `export` block and 4 supported color-value formats (hex,
 256-color index, `vars` reference, `""` for terminal default). Not
 reproduced here; read the doc when authoring or editing a theme.
 
-**Location used here:** `agent/themes/pi-dark.json`, selected via
-`agent/settings.json` `"theme": "pi-dark"`. Root shape: `{ "$schema"?, "name",
+**Location used here:** `agent/themes/apex-dark.json`, selected via
+`agent/settings.json` `"theme": "apex-dark"`. Root shape: `{ "$schema"?, "name",
 "vars"?, "colors", "export"? }`. Hot-reloads when the *currently active*
 custom theme file is edited.
 
@@ -498,11 +498,11 @@ reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
 `mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
-`crash-logger.ts`) and `agent/extensions/mono/` (a directory-style extension:
-`mono-ui.ts`, `amp-task.ts`, `async-task.ts` plus a shared `lib/` of helper
+`crash-logger.ts`) and `agent/extensions/apex/` (a directory-style extension:
+`apex-ui.ts`, `amp-task.ts`, `async-task.ts` plus a shared `lib/` of helper
 modules that are imported directly rather than loaded as separate
 extensions). See `CONTEXT.md` for the local architecture (seams, tool
-receipts, agent catalog, sync-vs-async task tools, Mono UI stability rules) —
+receipts, agent catalog, sync-vs-async task tools, Apex UI stability rules) —
 that file documents *how these extensions are built*, complementary to this
 file's focus on *config/markdown parameter shapes*.
 

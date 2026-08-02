@@ -3,8 +3,8 @@
 // Tools: bg_start, bg_status, bg_list, bg_kill.
 //
 // Results stay plain bounded text for the model, and every result also carries
-// a structured `details.bg` payload that the Mono receipts in
-// mono/lib/bg-view.ts render. Presentation is flat and width-aware; there are
+// a structured `details.bg` payload that the Apex receipts in
+// apex/lib/bg-view.ts render. Presentation is flat and width-aware; there are
 // no render timers and no pi-tui layout primitives on this path.
 
 import {
@@ -25,19 +25,19 @@ import {
   bgListCard,
   bgPayload,
   type BgJobView,
-} from "./mono/lib/bg-view.ts";
+} from "./apex/lib/bg-view.ts";
 import {
   WidthText,
   textContent,
   type ToolRenderContext,
-} from "./mono/lib/ui-common.ts";
-import { noticeComponent, type NoticeRow } from "./mono/lib/notice-view.ts";
+} from "./apex/lib/ui-common.ts";
+import { noticeComponent, type NoticeRow } from "./apex/lib/notice-view.ts";
 import {
   bgStatusKind,
   finiteNumber,
   metaText,
   safeLine,
-} from "./mono/lib/status-view.ts";
+} from "./apex/lib/status-view.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -269,7 +269,7 @@ function textResult(text: string, isError = false, details: unknown = {}) {
 
 /**
  * Structured presentation payload for one job. Kept separate from the text
- * body so the Mono receipt never has to re-parse human-readable output.
+ * body so the Apex receipt never has to re-parse human-readable output.
  * `withOutput` is false in listings, where per-job tails would be unbounded.
  */
 function jobView(job: BgJob, withOutput: boolean): BgJobView {
@@ -300,7 +300,7 @@ function jobView(job: BgJob, withOutput: boolean): BgJobView {
 
 export default function (pi: ExtensionAPI) {
   /**
-   * Shared Mono receipt wiring for one bg tool.
+   * Shared Apex receipt wiring for one bg tool.
    *
    * `card` builds the flat, width-aware body from the structured payload; the
    * call row is blanked as soon as a result exists so a single receipt

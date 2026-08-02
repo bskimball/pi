@@ -1,4 +1,4 @@
-// edit-diff: numbered contextual diffs for mono edit/write tool receipts.
+// edit-diff: numbered contextual diffs for apex edit/write tool receipts.
 //
 // Stability: dependency-free width clipping only (safe-text-layout). No
 // pi-tui Text/Markdown/Container and no render timers.

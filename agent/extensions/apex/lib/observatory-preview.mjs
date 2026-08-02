@@ -1,6 +1,6 @@
 // Preview harness for the Observatory landing screen.
-//   node --experimental-transform-types agent/extensions/mono/lib/observatory-preview.mjs
-// Renders every scenario at several widths with pi-dark colors approximated,
+//   node --experimental-transform-types agent/extensions/apex/lib/observatory-preview.mjs
+// Renders every scenario at several widths with apex-dark colors approximated,
 // so composition can be judged without launching the TUI.
 
 import { buildObservatory, renderObservatory, OBSERVATORY_MAX_LINES } from "./observatory.ts";

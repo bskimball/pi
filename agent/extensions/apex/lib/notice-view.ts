@@ -1,4 +1,4 @@
-// notice-view: Mono chrome for background *notifications* injected into the
+// notice-view: Apex chrome for background *notifications* injected into the
 // transcript by extensions (async task settlement, background job settlement).
 //
 // These messages are not conversation. Without chrome they render as a raw

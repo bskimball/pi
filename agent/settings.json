@@ -1,7 +1,7 @@
 {
   "defaultModel": "claude-opus-5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "high",
   "lastChangelogVersion": "0.83.0",
   "packages": [
     "npm:pi-sticky-input"
@@ -13,5 +13,5 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "pi-dark"
+  "theme": "apex-dark"
 }

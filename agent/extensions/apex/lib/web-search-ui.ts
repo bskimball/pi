@@ -1,4 +1,4 @@
-// web-search-ui: Mono tool receipts for the local web_search / fetch_content /
+// web-search-ui: Apex tool receipts for the local web_search / fetch_content /
 // get_search_content tools.
 //
 // Presentation only: web-specific specs + secret scrub + formatters. The
