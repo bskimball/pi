@@ -64,6 +64,11 @@ Custom TUI and orchestration extensions live in `agent/extensions/`:
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
 - **`todo-list.ts`** — the session plan (`todo_write`, `todo_read`). `todo_write` replaces the whole list on each call and enforces at most one `in_progress` item; `todo_read` reads it back so the plan survives compaction. Scoped to the lead agent: specialists run non-interactively and report once, and no agent definition grants them these tools. The threshold for writing a plan lives in `agent/SYSTEM.md`.
 - **`crash-logger.ts`** — records exits, shutdown reasons, and unhandled rejections to `agent/pi-crash.log`, distinguishing main and sub-agent processes.
+- **`lsp/`** — a single on-demand `lsp` tool for semantic navigation (`definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `diagnostics`, `read_symbol`) backed by language servers already on `PATH` (TypeScript/JavaScript, Python, Go, PHP). It never installs servers and runs no always-on analysis; servers spawn per session and are disposed on `session_shutdown`. Bare commands resolve on `PATH` only — never from the project directory — so an untrusted repo can't inject a binary. Optional config at `agent/lsp.json` or a trusted `.pi/lsp.json`.
+
+One extension is loaded as an npm package via `agent/settings.json` `packages` rather than from `agent/extensions/`:
+
+- **`pi-sticky-input`** — pins the input box to the bottom of the terminal with a split footer renderer and alternate-screen buffer, so scrollback stays navigable while the prompt stays put. Configured in `agent/extensions/pi-sticky-input/config.json` (keyboard scroll, viewport line limits, mouse-scroll opt-outs).
 
 ## Slash commands
 

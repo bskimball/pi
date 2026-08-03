@@ -1,7 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import {
-  basename,
   dirname,
   extname,
   isAbsolute,
@@ -176,8 +175,4 @@ export function configSearchPaths(cwd: string): string[] {
     join(cwd, ".pi", "lsp.json"),
     join(agentDir, "lsp.json"),
   ];
-}
-
-export function basenameOf(filePath: string): string {
-  return basename(filePath);
 }

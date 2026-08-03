@@ -507,10 +507,11 @@ that file documents *how these extensions are built*, complementary to this
 file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
-`agent/extensions/` is used. `agent/settings.json` `packages: []` is
-currently empty — no npm/git extension packages are loaded that way; MCP
-integration instead composes `pi-mcp-adapter` directly inside
-`mcp-adapter.ts` (see the mcp.json section above for why).
+`agent/extensions/` is used. `agent/settings.json` `packages` currently
+loads one npm extension package, `npm:pi-sticky-input` (configured via
+`agent/extensions/pi-sticky-input/config.json`). MCP integration is
+deliberately *not* loaded that way — it composes `pi-mcp-adapter` directly
+inside `mcp-adapter.ts` (see the mcp.json section above for why).
 
 ---
 

@@ -147,34 +147,6 @@ export function externalToLsp(
   return { line, character: characterOf(text, line, jsIndex, encoding) };
 }
 
-export function lspToExternal(
-  text: string,
-  pos: Position,
-  encoding: PositionEncoding = "utf-16",
-): { line: number; column: number } {
-  const line = (pos?.line ?? 0) + 1;
-  if (encoding === "utf-16") {
-    return { line, column: (pos?.character ?? 0) + 1 };
-  }
-  const offset = offsetOf(text, pos.line, pos.character, encoding);
-  const lineStart = offsetOf(text, pos.line, 0, "utf-16");
-  const jsIndex = Math.max(0, offset - lineStart);
-  return { line, column: jsIndex + 1 };
-}
-
-/** Pick position encoding from initialize result general.positionEncodings. */
-export function pickPositionEncoding(serverCapabilities: unknown): PositionEncoding {
-  const general = (serverCapabilities as { positionEncoding?: string } | undefined);
-  // LSP 3.17: result.capabilities does not carry encoding; it is on InitializeResult.capabilities? No —
-  // positionEncodings is a client capability; server returns selected encoding via
-  // InitializeResult.capabilities is wrong; it's InitializeResult.serverInfo? Actually:
-  // InitializeResult has optional `capabilities` and the negotiated encoding is in
-  // `InitializeResult` field `positionEncoding`? Spec: InitializeResult.capabilities is ServerCapabilities.
-  // ServerCapabilities has no encoding. The field is InitializeResult.positionEncoding (3.17).
-  void general;
-  return "utf-16";
-}
-
 export function pickEncodingFromInitializeResult(result: unknown): PositionEncoding {
   const encoding = (result as { positionEncoding?: string } | null)?.positionEncoding;
   if (encoding === "utf-8") return "utf-8";

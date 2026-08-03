@@ -289,14 +289,6 @@ export function wrapPlainText(
   return lines.length ? lines.slice(0, maxLines) : [""];
 }
 
-/** Pad plain text on the right to an exact visible width (for column alignment). */
-export function padToWidth(value: unknown, width: number): string {
-  const target = normalizedWidth(width);
-  const current = fallbackVisibleWidth(value);
-  if (current >= target) return fallbackTruncateToWidth(value, target);
-  return `${safeString(value)}${" ".repeat(target - current)}`;
-}
-
 /** Pad plain text on the left to an exact visible width (right-aligned columns). */
 export function padStartToWidth(value: unknown, width: number): string {
   const target = normalizedWidth(width);

@@ -42,11 +42,6 @@ export function shortArgs(args: unknown): string {
   }
 }
 
-/** Flat one-line mission preview (list/status caps). */
-export function missionPreview(prompt: string, max = 100): string {
-  return cleanInline(prompt, max);
-}
-
 /** JSON-shaped args summary for activity logs that need the full payload. */
 export function argsSummary(args: unknown, max = 120): string {
   try {
