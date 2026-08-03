@@ -1,8 +1,8 @@
 // pixel-art: the shared decoder for packed half-block truecolor sprites.
 //
-// Both the landing mark (shark-art.ts) and the fleet fin (fin-art.ts) are
-// emitted by the same Python encoders in the same packed cell format, so the
-// decoding, the truecolor gate and the failure behaviour live here once.
+// The landing mark (shark-art.ts) is emitted by the Python encoder in this
+// packed cell format, so the decoding, the truecolor gate and the failure
+// behaviour live here once.
 //
 // Cell encoding, comma-separated per row:
 //   "rrggbbRRGGBB"  both halves lit -> `▀`, foreground top, background bottom

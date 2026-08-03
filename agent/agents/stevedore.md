@@ -4,7 +4,7 @@ description: Fast, cheap ops specialist for deploys and CLI chores: lint, format
 tools: read, grep, find, ls, bash, edit
 model: local-proxy/gpt-5.6-luna
 fallbackModels:
-  - local-proxy/gemini-3.6-flash-high
+  - local-proxy/gemini-3-flash-agent
   - local-proxy/grok-composer-2.5-fast
 thinking: medium
 inheritSkills: true

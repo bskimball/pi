@@ -1,9 +1,8 @@
-// Preview harness for the star field, the re-entry line and the dive.
+// Preview harness for the star field and the re-entry line.
 //   node --experimental-transform-types agent/extensions/apex/lib/sky-preview.mjs
 
 import { starFieldRow } from "./star-field.ts";
 import { renderReentry } from "./reentry.ts";
-import { DiveView } from "./dive.ts";
 
 const ANSI = {
   accent: "\x1b[38;2;125;211;252m",
@@ -14,7 +13,6 @@ const ANSI = {
   borderMuted: "\x1b[38;2;71;85;105m",
 };
 const fg = (key, text) => `${ANSI[key] ?? ANSI.text}${text}\x1b[0m`;
-const theme = { fg };
 
 const WIDTH = Number(process.argv[2] ?? 74);
 const rule = () => console.log(fg("borderMuted", "\u2500".repeat(WIDTH)));
@@ -53,17 +51,3 @@ for (const view of [
   for (const row of renderReentry(fg, WIDTH, view)) console.log(row);
   console.log();
 }
-
-console.log("\x1b[1mDIVE\x1b[0m");
-rule();
-const dive = new DiveView(theme, () => {});
-dive.start("threshold");
-for (let frame = 0; frame < 16; frame++) {
-  dive.tick();
-  if (frame % 4 !== 3) continue;
-  for (const row of dive.render(WIDTH)) console.log(row);
-  console.log();
-}
-dive.surface(148_000, 42_000);
-for (const row of dive.render(WIDTH)) console.log(row);
-dive.dispose();

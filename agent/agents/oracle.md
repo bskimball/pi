@@ -5,7 +5,7 @@ model: local-proxy/gpt-5.6-sol
 fallbackModels:
   - local-proxy/claude-fable-5
   - local-proxy/grok-4.5
-  - local-proxy/gemini-3.1-pro-low
+  - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
 tools: read, grep, find, ls, bash, edit, write, task

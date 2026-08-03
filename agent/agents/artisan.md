@@ -3,7 +3,7 @@ name: artisan
 description: Bold visual-design and frontend specialist for substantial UI work, diagrams, slides, data visualization, and polished human-facing artifacts.
 model: local-proxy/claude-opus-5
 fallbackModels:
-  - local-proxy/gemini-3.1-pro-low
+  - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
 tools: read, grep, find, ls, bash, edit, write, task

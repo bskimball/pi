@@ -118,22 +118,19 @@ Skills live in `agent/skills/` and are freeform directories beyond the required 
 
 ## The shark
 
-The configuration has one visual identity — a shark in deep space — and it is used to carry information, not as decoration.
+The configuration has one visual identity — a shark in deep space — used as the Observatory landing mark, not as a live animation during work.
 
-The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. `tools/shark-art/encode-fin.py` crops that *same* design down to its first dorsal fin, so the small sprite and the large mark can never drift apart. Both emit generated TypeScript (`lib/shark-art.ts`, `lib/fin-art.ts`) — regenerate them, never hand-edit. `lib/pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
+The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. It emits generated TypeScript (`lib/shark-art.ts`) — regenerate it, never hand-edit. `lib/pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
 
-Four surfaces use it:
+Surfaces that still use the identity:
 
 | Surface | What it shows |
 | --- | --- |
 | **Observatory splash** (`lib/observatory.ts`) | The full mark, on a fresh chat only. |
-| **Fleet waterline** (`lib/fleet-waterline.ts`) | One dorsal fin per live async worker, cruising above the editor. Fin speed is that worker's event rate, so the 3-worker cap and a stalled worker are legible at a glance instead of via `task_list`. A worker waiting on a reply holds station. |
 | **Star field** (`lib/star-field.ts`) | Two facts in one row: the *shape* is seeded from the workspace path, so every project has its own constellation that is stable across launches; the *density* is context usage, with stars burning out faintest-first as the window fills. |
-| **Dive** (`lib/dive.ts`) and **re-entry** (`lib/reentry.ts`) | Compaction as a descent that surfaces with the one figure that is actually known (`surfaced · carried 148k down`), and a one-line orientation row when an existing session is resumed. |
+| **Re-entry** (`lib/reentry.ts`) | A one-line orientation row when an existing session is resumed. |
 
-Pi constructs its own compaction spinner internally and exposes no API to restyle it, so the dive renders **alongside** that spinner rather than replacing it; matching it fully needs an upstream change. Pi's spinner therefore owns the words and the dive carries no label of its own. The mark bobs and sways mid-water instead of landing on a floor: compaction has no honest percentage, and a mark that came to rest would read as finished while the work was still running.
-
-These two motion surfaces are the only sanctioned `setInterval` clocks in Apex (see the exception in [CONTEXT.md](CONTEXT.md#apex-stability-constraints)); each starts on demand, `unref()`s, and is disposed with its widget.
+Compaction uses Pi's built-in spinner only. Live async workers show through the normal task status cards and `task_*` tools. Apex keeps no extension-owned animation clocks for either surface (see [CONTEXT.md](CONTEXT.md#apex-stability-constraints)).
 
 ## Example and template files
 

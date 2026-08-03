@@ -58,23 +58,19 @@ Both respect concurrency caps and exclude nested task tools in children.
 
 ## Shark identity surfaces
 
-The mark is not decoration confined to the splash; it carries state on four surfaces.
+The mark is the Observatory splash identity, not a live animation during work.
 
-- **Pixel art**: `lib/pixel-art.ts` owns the packed half-block cell decoder (`pixelCell`, `pixelRows`, `pixelCells`) and the truecolor gate, shared by every sprite. `lib/shark-art.ts` (landing mark) and `lib/fin-art.ts` (dorsal fin) are both **generated** — regenerate with `tools/shark-art/encode-shark.py` and `tools/shark-art/encode-fin.py`, never hand-edit. The fin is a crop of the mark's own first-dorsal polygon, so the two can never drift apart stylistically.
-- **Fleet waterline** (`lib/fleet-waterline.ts`): one fin per live async worker, so the 3-worker cap and a stalled worker are visible without running `task_list`. Fin speed is worker event rate; a worker awaiting a UI reply holds station. Fed from `syncFleet()` in `async-task.ts`, called from `notifySubscribers` — the single chokepoint for worker state change.
+- **Pixel art**: `lib/pixel-art.ts` owns the packed half-block cell decoder (`pixelCell`, `pixelRows`, `pixelCells`) and the truecolor gate for the landing mark. `lib/shark-art.ts` is **generated** — regenerate with `tools/shark-art/encode-shark.py`, never hand-edit.
 - **Star field** (`lib/star-field.ts`): shape is the *project* (deterministically seeded from cwd, so a repo's constellation is stable across launches); density is the *context* (stars burn out as the window fills, faintest first, never to an empty sky).
-- **Dive** (`lib/dive.ts`) and **re-entry** (`lib/reentry.ts`): compaction as a descent that surfaces with the pre-compaction size (the only figure knowable at that point), and a one-line orientation row when an existing session is resumed. Both are `setWidget` surfaces retired on the next user input.
+- **Re-entry** (`lib/reentry.ts`): a one-line orientation row when an existing session is resumed. It is a `setWidget` surface retired on the next user input.
 
-Pi builds its own compaction spinner internally (`CompactionStatusIndicator`) and exposes **no** API to restyle it, so the dive is an additional widget alongside it, not a replacement. Restyling it requires an upstream change. Because that spinner already carries the words, the dive renders no text while descending.
+Compaction uses Pi's built-in spinner only. Live async workers are surfaced through the normal task status cards and `task_*` tools, not an ornamental widget.
 
 ## Apex stability constraints
 
 When changing Apex UI / task / receipt rendering:
 
-1. No custom `setInterval` render loops; no extension-owned `tui.requestRender()` timers — **except the two motion surfaces below**, which are the only sanctioned clocks in Apex. Do not add a third without the same justification.
-   - `lib/fleet-waterline.ts` — per-worker fin positions; nothing in Pi drives them. Starts on the first live worker, cleared when the live set empties, on `dispose()`, and on `session_shutdown`.
-   - `lib/dive.ts` — compaction descent. Starts on `session_before_compact`, stopped on `session_compact`; the surfaced result row is static and holds no clock. The descent has no terminal state: real compactions run tens of seconds, so the mark bobs and sways indefinitely rather than landing, and bubbles rise past it. Verify changes over a full 30s budget, not just the first second.
-   - Both `unref()` their interval so an ornament never holds the process open, and both are reached only through `ctx.ui.setWidget`, so Pi's widget teardown calls `dispose()`.
+1. No custom `setInterval` render loops; no extension-owned `tui.requestRender()` timers.
 2. Editor may only repaint an existing border or replace padding cells — no inserted editor rows, no cursor/width math changes.
 3. High-frequency surfaces: do **not** use pi-tui `Text`, `Markdown`, `Container`, `visibleWidth()`, or `truncateToWidth()` without proving Windows crash independence. Prefer `safe-text-layout` + `tool-receipt`.
 4. Bound large tool/task output by line **and** character count.

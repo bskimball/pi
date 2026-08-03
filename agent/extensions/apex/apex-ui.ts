@@ -66,7 +66,6 @@ import {
   createObservatoryOrb,
   type ObservatoryOrbResult,
 } from "./lib/observatory-orb.ts";
-import { DiveView } from "./lib/dive.ts";
 import { renderReentry, type Reentry } from "./lib/reentry.ts";
 import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
 
@@ -338,8 +337,6 @@ function taskCount(status: string | undefined): number {
   return match ? Number(match[1]) : 0;
 }
 
-/** Widget slot for the compaction dive. */
-const DIVE_WIDGET_KEY = "apex.dive";
 /** Widget slot for the session re-entry line. */
 const REENTRY_WIDGET_KEY = "apex.reentry";
 
@@ -517,28 +514,7 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // ------------------------------------------------------------------- dive
-
-  // Pi builds its own compaction spinner internally and exposes no way to
-  // restyle it, so the dive is an additional widget bracketed by the same two
-  // events. It is created on descent and cleared on the next input, so the
-  // result line survives long enough to be read but does not become chrome.
-  let dive: DiveView | undefined;
-  let diveCtx: ExtensionContext | undefined;
   let reentryCtx: ExtensionContext | undefined;
-
-  function clearDive(): void {
-    if (!dive) return;
-    const ctx = diveCtx;
-    dive.dispose();
-    dive = undefined;
-    diveCtx = undefined;
-    try {
-      ctx?.ui.setWidget(DIVE_WIDGET_KEY, undefined);
-    } catch {
-      // A teardown failure must never propagate into Pi's event loop.
-    }
-  }
 
   function clearObservatory(): void {
     const ctx = observatoryCtx;
@@ -772,64 +748,18 @@ export default function (pi: ExtensionAPI) {
   // Real user submits end the landing screen; the command above bypasses this.
   pi.on("input", () => {
     clearObservatory();
-    // The surfaced line has been on screen since the dive ended; the next
-    // thing the user does is what retires it. Same for the re-entry line.
-    clearDive();
+    // The re-entry line stays until the next user action so it can be read.
     clearReentry();
   });
   pi.on("session_shutdown", () => {
     clearObservatory();
-    clearDive();
     clearReentry();
-  });
-
-  pi.on("session_before_compact", (_event, ctx) => {
-    // Component-factory widgets are honoured only by the interactive TUI; RPC
-    // mode reports hasUI but ignores factories, so gate on the mode itself.
-    if (ctx.mode !== "tui") return;
-    diveCtx = ctx;
-    try {
-      ctx.ui.setWidget(
-        DIVE_WIDGET_KEY,
-        (tui, theme) => {
-          dive = new DiveView(theme, () => tui.requestRender());
-          dive.start();
-          return dive;
-        },
-        { placement: "aboveEditor" },
-      );
-    } catch (error) {
-      reportRenderFailure("dive", error);
-      dive = undefined;
-    }
-  });
-
-  // A cancelled or failed compaction never emits session_compact, so the
-  // descent would otherwise animate forever. Settling ends the turn either
-  // way; if the dive is still descending by then, the compaction did not
-  // succeed and the widget is removed rather than left mid-dive.
-  pi.on("agent_settled", () => {
-    if (dive?.descending) clearDive();
-  });
-
-  pi.on("session_compact", (event) => {
-    if (!dive) return;
-    // Only tokensBefore is knowable here: Pi computes estimatedTokensAfter but
-    // omits it from this event, and getContextUsage() returns null until the
-    // next assistant response. Reporting a made-up "after" would be worse than
-    // reporting one true number.
-    const before =
-      typeof event.compactionEntry?.tokensBefore === "number"
-        ? event.compactionEntry.tokensBefore
-        : undefined;
-    dive.surface(before);
   });
 
   pi.on("session_start", (event, ctx) => {
     // Always drop a prior session's header/widget/model before any guard so
     // new/resume/reload/fork never inherits a stale observatory.
     clearObservatory();
-    clearDive();
     clearReentry();
     installLayout(pi, ctx);
     // Rebuild only for a conversation-blank new/initial startup chat.

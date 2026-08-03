@@ -33,6 +33,7 @@ import { missionFromPrompt, shortArgs } from "./lib/task-view.ts";
 import {
   boundText,
   extractAssistantText,
+  extractAssistantThinking,
 } from "./lib/text-bounds.ts";
 import {
   padStartToWidth,
@@ -883,14 +884,55 @@ export default function (pi: ExtensionAPI) {
           // never yield usable completed assistant content (some providers).
           let streamedAssistantText = "";
           let assistantError: string | undefined;
+          // Diagnostic only: last empty completed assistant turn (stopReason +
+          // content block types + thinking preview). Gemini often exits with
+          // thinking-only content and no visible text.
+          let emptyAssistantDiag: string | undefined;
           let stderrTail = "";
           let attemptTurns = 0;
           // Cap recovered report text so a runaway stream cannot blow the parent
           // context. Canonical message_end content stays full-size as before.
           const STREAM_ASSISTANT_CAP = 12_000;
           const STREAM_ASSISTANT_LINES = 200;
-          const takeCompletedAssistant = (message: unknown): string =>
-            extractAssistantText(message);
+          const describeEmptyAssistant = (message: unknown): string | undefined => {
+            if (!message || typeof message !== "object") return undefined;
+            const m = message as {
+              role?: string;
+              stopReason?: string;
+              content?: unknown;
+            };
+            if (m.role && m.role !== "assistant") return undefined;
+            if (extractAssistantText(message)) return undefined;
+            const types: string[] = [];
+            if (Array.isArray(m.content)) {
+              for (const item of m.content) {
+                if (item && typeof item === "object") {
+                  types.push(String((item as { type?: string }).type ?? "?"));
+                }
+              }
+            } else if (m.content == null) {
+              types.push("(no content)");
+            } else {
+              types.push(typeof m.content);
+            }
+            const thinking = extractAssistantThinking(message);
+            const typeLabel = types.length ? types.join("+") : "empty";
+            const stop = m.stopReason ? ` stop=${m.stopReason}` : "";
+            if (thinking) {
+              return `thinking-only (${typeLabel}${stop}): ${cleanInline(thinking, 160)}`;
+            }
+            return `no visible text (${typeLabel}${stop})`;
+          };
+          const takeCompletedAssistant = (message: unknown): string => {
+            const text = extractAssistantText(message);
+            if (!text) {
+              const diag = describeEmptyAssistant(message);
+              if (diag) emptyAssistantDiag = diag;
+            } else {
+              emptyAssistantDiag = undefined;
+            }
+            return text;
+          };
           const takeStreamedAssistant = (message: unknown): string => {
             const text = extractAssistantText(message);
             if (!text) return "";
@@ -1146,7 +1188,11 @@ export default function (pi: ExtensionAPI) {
               : exitCode !== 0
                 ? exitedFailure(modelLabel, exitCode, stderrTail)
                 : !assistantText
-                  ? `${modelLabel}: completed without an assistant result`
+                  ? `${modelLabel}: completed without an assistant result${
+                      emptyAssistantDiag
+                        ? ` — ${emptyAssistantDiag}`
+                        : ""
+                    }`
                   : undefined;
           if (retryFailure) {
             attemptFailures.push(retryFailure);

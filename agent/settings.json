@@ -1,5 +1,5 @@
 {
-  "defaultModel": "claude-sonnet-5",
+  "defaultModel": "grok-4.5",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.83.0",

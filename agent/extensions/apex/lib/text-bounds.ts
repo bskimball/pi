@@ -39,6 +39,7 @@ export function formatAge(ms: number): string {
   return `${min}m${String(rem).padStart(2, "0")}s`;
 }
 
+/** Visible assistant text only (content blocks with type === "text"). */
 export function extractAssistantText(message: unknown): string {
   if (!message || typeof message !== "object") return "";
   const m = message as { role?: string; content?: unknown };
@@ -54,5 +55,27 @@ export function extractAssistantText(message: unknown): string {
     )
     .map((item) => String(item.text ?? ""))
     .join("\n")
+    .trim();
+}
+
+/**
+ * Assistant thinking/reasoning blocks only. Used for diagnostics when a model
+ * (notably Gemini via local-proxy) exits stop with thinking and zero visible
+ * text — the common cause of "completed without an assistant result".
+ */
+export function extractAssistantThinking(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const m = message as { role?: string; content?: unknown };
+  if (m.role && m.role !== "assistant") return "";
+  if (!Array.isArray(m.content)) return "";
+  return m.content
+    .filter(
+      (item): item is { type: string; thinking?: string } =>
+        !!item &&
+        typeof item === "object" &&
+        (item as { type?: string }).type === "thinking",
+    )
+    .map((item) => String(item.thinking ?? ""))
+    .join("\n\n")
     .trim();
 }
