@@ -1,7 +1,7 @@
 {
-  "defaultModel": "claude-opus-5",
+  "defaultModel": "claude-sonnet-5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.83.0",
   "packages": [
     "npm:pi-sticky-input"
