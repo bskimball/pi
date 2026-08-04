@@ -1,6 +1,6 @@
 {
   "defaultModel": "grok-4.5",
-  "defaultProvider": "local-proxy",
+  "defaultProvider": "xai",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.83.0",
   "packages": [
@@ -13,5 +13,19 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "apex-dark"
+  "theme": "apex-dark",
+  "enabledModels": [
+    "local-proxy/*",
+    "openai-codex/*",
+    "github-copilot/*",
+    "xai/*",
+    "google/*",
+    "google-gemini-cli/*",
+    "ollama/*"
+  ],
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  }
 }
