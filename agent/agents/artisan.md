@@ -1,6 +1,6 @@
 ---
 name: artisan
-description: Bold visual-design and frontend specialist for substantial UI work, diagrams, slides, data visualization, and polished human-facing artifacts.
+description: Frontend and UI engineer for any user-facing visual surface — screens, components, styling, layout, design systems, interaction states — plus diagrams, slides, and data visualization.
 model: local-proxy/claude-opus-5
 fallbackModels:
   - local-proxy/gemini-pro-agent

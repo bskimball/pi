@@ -1629,12 +1629,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_start",
     label: "Task Start",
-    description: `Start an asynchronous specialist sub-agent via pi --mode rpc with an isolated persistent session. The lead delegates all multi-file implementation and broad investigation through this tool; inline work is for single known-file edits only. Returns immediately with a stable worker id (task_N) after the initial prompt is accepted. Use when you need to keep working while the specialist runs, send steer/follow-up later, or collect results with task_wait. Prefer the synchronous \`task\` tool when you need a single bounded result in-line.
+    description: `Start an asynchronous specialist sub-agent in an isolated session. The lead delegates all multi-file implementation and broad investigation through this tool; inline work is for single known-file edits only. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
 
 Available agents:
 ${agentList}
 
-Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent workers count against the cap until task_close. task_start rejects with a clear capacity message when full.`,
+At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     promptSnippet:
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
@@ -1645,7 +1645,7 @@ Concurrency: at most ${MAX_LIVE_WORKERS} live RPC worker processes. Persistent w
     ],
     parameters: Type.Object({
       agent: Type.String({
-        description: `Agent to run. One of: ${[...agents.keys()].join(", ")}`,
+        description: `Agent to run. One of: ${[...agents.keys()].join(", ")}. Route UI/frontend/styling/layout work to artisan; non-visual code to machinist.`,
       }),
       prompt: Type.String({
         description:

@@ -551,7 +551,7 @@ export default function (pi: ExtensionAPI) {
 
   const TaskParams = Type.Object({
     agent: Type.String({
-      description: `Agent to run. One of: ${[...agents.keys()].join(", ")}`,
+      description: `Agent to run. One of: ${[...agents.keys()].join(", ")}. Route UI/frontend/styling/layout work to artisan; non-visual code to machinist.`,
     }),
     prompt: Type.String({
       description:
