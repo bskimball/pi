@@ -128,7 +128,6 @@ Surfaces that still use the identity:
 | --- | --- |
 | **Observatory splash** (`lib/observatory.ts`) | The full mark, on a fresh chat only. |
 | **Star field** (`lib/star-field.ts`) | Two facts in one row: the *shape* is seeded from the workspace path, so every project has its own constellation that is stable across launches; the *density* is context usage, with stars burning out faintest-first as the window fills. |
-| **Re-entry** (`lib/reentry.ts`) | A one-line orientation row when an existing session is resumed. |
 
 Compaction uses Pi's built-in spinner only. Live async workers show through the normal task status cards and `task_*` tools. Apex keeps no extension-owned animation clocks for either surface (see [CONTEXT.md](CONTEXT.md#apex-stability-constraints)).
 

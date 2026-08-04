@@ -62,7 +62,6 @@ The mark is the Observatory splash identity, not a live animation during work.
 
 - **Pixel art**: `lib/pixel-art.ts` owns the packed half-block cell decoder (`pixelCell`, `pixelRows`, `pixelCells`) and the truecolor gate for the landing mark. `lib/shark-art.ts` is **generated** — regenerate with `tools/shark-art/encode-shark.py`, never hand-edit.
 - **Star field** (`lib/star-field.ts`): shape is the *project* (deterministically seeded from cwd, so a repo's constellation is stable across launches); density is the *context* (stars burn out as the window fills, faintest first, never to an empty sky).
-- **Re-entry** (`lib/reentry.ts`): a one-line orientation row when an existing session is resumed. It is a `setWidget` surface retired on the next user input.
 
 Compaction uses Pi's built-in spinner only. Live async workers are surfaced through the normal task status cards and `task_*` tools, not an ornamental widget.
 
