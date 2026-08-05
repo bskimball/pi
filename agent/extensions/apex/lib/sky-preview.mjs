@@ -1,8 +1,7 @@
-// Preview harness for the star field and the re-entry line.
+// Preview harness for the star field.
 //   node --experimental-transform-types agent/extensions/apex/lib/sky-preview.mjs
 
 import { starFieldRow } from "./star-field.ts";
-import { renderReentry } from "./reentry.ts";
 
 const ANSI = {
   accent: "\x1b[38;2;125;211;252m",
@@ -39,15 +38,4 @@ rule();
 for (const fill of [0, 0.25, 0.5, 0.7, 0.85, 0.95]) {
   const sky = starFieldRow(fg, 42, "C:/Users/me/dev/apex", fill);
   console.log(`${sky.padEnd(60)} ${fg("dim", `${Math.round(fill * 100)}% full`)}`);
-}
-
-console.log("\n\x1b[1mRE-ENTRY\x1b[0m");
-rule();
-for (const view of [
-  { workspace: "apex", seed: "C:/Users/me/dev/apex", messages: 48, sinceMs: 7_400_000, contextFill: 0.3 },
-  { workspace: "pi", seed: "C:/Users/me/.pi", messages: 1, sinceMs: 45_000, contextFill: 0.05 },
-  { workspace: "long-project-name", seed: "/tmp/scratch", messages: 312, sinceMs: 400_000_000, contextFill: 0.8 },
-]) {
-  for (const row of renderReentry(fg, WIDTH, view)) console.log(row);
-  console.log();
 }

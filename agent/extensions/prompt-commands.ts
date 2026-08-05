@@ -1,4 +1,5 @@
-// Native implementations for /browser and /deploy, which require executable pre-steps.
+// Native implementations for /browser and /deploy (executable pre-steps) and
+// /orchestrate (sticky per-turn system-prompt mode).
 // Portable: no personal absolute paths, shell scripts, or prompt-template package.
 
 import { existsSync, readFileSync } from "node:fs";
@@ -18,6 +19,24 @@ const BROWSER_CONNECT_TIMEOUT_MS = 90_000;
 const GIT_TIMEOUT_MS = 30_000;
 const SKILL_BODY_CHARS = 24_000;
 const SKILL_BODY_LINES = 400;
+
+const ORCHESTRATE_ENTRY_TYPE = "orchestrate-mode";
+
+const ORCHESTRATE_SYSTEM_BLOCK = `
+
+## Strict orchestrator mode (active)
+
+The user has switched this session into strict orchestrator mode. This overrides the inline-by-default coordination model above: the inline allowance is revoked until the user turns this mode off (/orchestrate off). You are the lead: you decide the split, write the work orders, integrate results, verify, and answer — you do not do the detailed work yourself.
+
+- Do not write or edit code yourself, even single-file edits. Every implementation unit goes to machinist (non-visual) or artisan (UI/visual), however small. The only exceptions are trivial mechanical fixes to a specialist's just-returned diff (a typo, a missed import) where a dispatch round-trip is clearly wasteful — note it in your report when you do.
+- Do not read broadly yourself. Handle direct symbol/path lookups with \`rg\`; everything wider goes to scout. Keep your context for coordination state: scope, assignments, returned evidence, blockers, verification status.
+- Every task meeting the todo threshold gets a \`todo_write\` plan before the first dispatch, with one item per delegable unit.
+- Prefer \`task_start\` and keep useful lead work going while specialists run; parallelize independent read-only units, serialize writers per worktree, and \`task_close\` finished workers.
+- Every implementation diff gets a fresh-eyes review — oracle for risky, tricky, or multi-file work; a fresh reviewing agent otherwise. The implementer's self-review never closes a unit.
+- Verification is yours to own: run the combined validation yourself or delegate a fresh verification pass and inspect its result before reporting done.
+- Consult advisor before consequential approach choices or when specialists return conflicting findings; use librarian when a unit depends on external/dependency internals.
+
+The non-negotiable gates apply with zero inline exemptions: in this mode "tiny task" is not a reason to skip delegation. If a unit truly cannot be delegated (credentials, interactive auth, user-only decisions), surface it to the user instead of doing it silently.`;
 
 function cleanText(value: string): string {
   return value.replace(/\u0000/g, "");
@@ -549,6 +568,74 @@ export async function runFeaturedExtensionCommand(
 }
 
 export default function (pi: ExtensionAPI): void {
+  let orchestrateMode = false;
+
+  const setOrchestrateMode = (
+    enabled: boolean,
+    ctx: ExtensionContext,
+  ): void => {
+    if (orchestrateMode === enabled) {
+      notify(
+        ctx,
+        `Orchestrator mode already ${enabled ? "on" : "off"}.`,
+        "info",
+      );
+      return;
+    }
+    orchestrateMode = enabled;
+    pi.appendEntry(ORCHESTRATE_ENTRY_TYPE, { enabled });
+    if (ctx.hasUI) {
+      ctx.ui.setStatus(
+        "orchestrate",
+        enabled ? "orchestrator" : undefined,
+      );
+    }
+    notify(
+      ctx,
+      enabled
+        ? "Strict orchestrator mode ON — lead delegates all implementation."
+        : "Strict orchestrator mode OFF — inline allowance restored.",
+      "info",
+    );
+  };
+
+  pi.registerCommand("orchestrate", {
+    description:
+      "Toggle strict orchestrator mode (no inline edits; delegate everything)",
+    handler: async (args, ctx) => {
+      const arg = args.trim().toLowerCase();
+      if (arg === "on") setOrchestrateMode(true, ctx);
+      else if (arg === "off") setOrchestrateMode(false, ctx);
+      else if (arg === "" || arg === "toggle") {
+        setOrchestrateMode(!orchestrateMode, ctx);
+      } else {
+        notify(ctx, "Usage: /orchestrate [on|off]", "warning");
+      }
+    },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (
+        entry.type === "custom" &&
+        entry.customType === ORCHESTRATE_ENTRY_TYPE
+      ) {
+        const data = entry.data as { enabled?: boolean } | undefined;
+        orchestrateMode = data?.enabled === true;
+      }
+    }
+    if (orchestrateMode && ctx.hasUI) {
+      ctx.ui.setStatus("orchestrate", "orchestrator");
+    }
+  });
+
+  pi.on("before_agent_start", async (event) => {
+    if (!orchestrateMode) return undefined;
+    return {
+      systemPrompt: event.systemPrompt + ORCHESTRATE_SYSTEM_BLOCK,
+    };
+  });
+
   pi.registerCommand("browser", {
     description:
       "Attach to dedicated authenticated debug Chrome (no Allow spam)",

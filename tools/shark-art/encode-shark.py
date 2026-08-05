@@ -9,14 +9,16 @@ mottled shading — read as noise at cell resolution. What remains of the photo
 is proportion: the silhouette below was designed against it, then simplified.
 
 The shape is a parametric side profile built from smooth dorsal/ventral body
-curves plus straight-edged fin polygons: pointed snout, tall triangular first
-dorsal, small second dorsal, raked pectoral, pelvic, narrow peduncle and a
-crescent caudal fin with a longer upper lobe — the cues that make a silhouette
-read as "shark" at a glance.
+curves plus many-vertex fin polygons: conical snout tapering to an apex, tall
+first dorsal with a convex leading edge and a concave trailing edge running out
+to a free rear tip, small second dorsal, long falcate pectoral, pelvic and anal,
+narrow keeled peduncle and a crescentic caudal fin with a deep fork — the cues
+that make a silhouette read as "great white" at a glance.
 
-Colour is flat posterized bands driven by body depth alone: dark back, violet
-flank, one cyan lateral line, pale belly. Thin geometry (fins, tail) shifts one
-band darker so it separates from the trunk. No texture, no gradients.
+Colour is flat posterized bands driven by body depth alone: dark slate back,
+mid-slate flank, one lighter lateral line, pale belly. Thin geometry (fins,
+tail) shifts one band darker so it separates from the trunk. No texture, no
+gradients.
 
 Usage:
     python encode-shark.py preview <cols> <rows>   # ANSI to stdout
@@ -48,31 +50,39 @@ THIN_SCALE = 46.0
 THIN_BANDS_SHIFT = 1.2
 
 # Flat bands from back to belly, applied by index rather than blended, so the
-# mark reads as a few solid shapes instead of a gradient. The cyan band is the
-# lateral line: the one accent that keeps the mark from being a flat fish.
+# mark reads as a few solid shapes instead of a gradient. Classic great-white
+# countershading in slate/gray: dark dorsal, mid-slate flank, pale belly.
 BANDS = [
-    (24, 18, 56),  # back
-    (58, 38, 126),  # upper flank
-    (125, 211, 252),  # lateral line
-    (150, 180, 224),  # lower flank
-    (214, 232, 248),  # belly
+    (30, 41, 59),  # back (slate 800)
+    (71, 85, 105),  # upper flank (slate 600)
+    (100, 116, 139),  # lateral line (slate 500)
+    (203, 213, 225),  # lower flank (slate 300)
+    (241, 245, 249),  # belly (slate 50)
 ]
 
 # Where each band ends, as a fraction of body depth from the dorsal edge.
-BAND_EDGES = [0.45, 0.58, 0.68, 0.85, 1.0]
+BAND_EDGES = [0.50, 0.66, 0.78, 0.90, 1.0]
 
 # Band depth is measured against the analytic body curves, not the rasterized
-# outline, so fins never distort where the bands sit on the trunk. Pixels above
-# the dorsal curve (fins) clip to depth 0 = back tone; pixels below the ventral
-# curve clip to 1 and are then pushed dark again by the thin-geometry shift.
+# outline, so fins never distort where the bands sit on the trunk. Fin pixels
+# outside the trunk don't get a meaningful body depth at all — above the dorsal
+# curve they clip to 0, below the ventral curve to 1 — which would paint the
+# pectoral and the lower caudal lobe in belly white and lose them entirely.
+# Instead out-of-trunk fin pixels are pinned to a fixed depth per side: fins
+# above the back stay in the dark dorsal tone so the first dorsal reads as one
+# shape with the spine, and fins below the belly take a mid-slate so the
+# pectoral, pelvic and lower caudal lobe don't vanish into the white underside.
+FIN_DEPTH_ABOVE = 0.10
+FIN_DEPTH_BELOW = 0.72
 
 # Counter-shade sweep: a perfectly level split reads as a sea horizon, not a
 # body. Real counter-shading swoops — the pale belly rides high on the jaw,
 # dips under the trunk, and pinches out at the peduncle where the tail goes
 # all dark. Values shift every band edge at that x (in depth units).
 SWEEP = [
-    (0.00, -0.16),
-    (0.18, -0.06),
+    (0.00, -0.04),
+    (0.12, -0.06),
+    (0.22, -0.04),
     (0.45, 0.00),
     (0.70, 0.06),
     (0.88, 0.16),
@@ -80,68 +90,120 @@ SWEEP = [
 ]
 
 # Face marks, the difference between a shape and a creature. Design coords.
-EYE_CENTER = (0.085, 0.10)
-EYE_RADIUS = 0.009  # of body length
-EYE_COLOR = (232, 242, 250)
-GILL_XS = (0.235, 0.27, 0.305)  # three slits ahead of the pectoral
-GILL_DEPTH = (0.26, 0.55)  # vertical span in depth units, ending at the flank
-GILL_WIDTH = 0.009  # of body length
-MOUTH = ((0.045, -0.30), (0.115, -0.42))  # jaw slit under the snout
-MOUTH_WIDTH = 0.007
+EYE_CENTER = (0.108, 0.078)  # just above and behind the mouth corner
+EYE_RADIUS = 0.008  # of body length
+EYE_COLOR = (248, 250, 252)
+GILL_XS = (0.196, 0.217, 0.238, 0.259, 0.280)  # five slits ahead of the pectoral
+GILL_DEPTH = (0.22, 0.62)  # vertical span in depth units, ending at the flank
+GILL_WIDTH = 0.006  # of body length
+MOUTH = ((0.034, -0.10), (0.142, -0.30))  # jaw slit under the conical snout
+MOUTH_WIDTH = 0.006
 
 # --- the drawing ------------------------------------------------------------
 # All coordinates are design units: x runs 0 (snout tip) to 1 (tail tip), y is
 # height above the midline. The shark swims left.
 
-# Dorsal (top) body outline, snout to peduncle. The body is deep: it, not the
-# fins, carries the mark, and the counter-shading bands need room to read.
+# Dorsal (top) body outline, snout to peduncle.
 TOP_PROFILE = [
-    (0.000, 0.03),
-    (0.060, 0.34),
-    (0.160, 0.52),
-    (0.340, 0.64),
-    (0.520, 0.62),
-    (0.700, 0.42),
-    (0.860, 0.16),
+    (0.000, 0.020),
+    (0.015, 0.090),
+    (0.035, 0.170),
+    (0.065, 0.270),
+    (0.110, 0.370),
+    (0.170, 0.460),
+    (0.250, 0.540),
+    (0.340, 0.590),
+    (0.430, 0.610),
+    (0.520, 0.590),
+    (0.620, 0.520),
+    (0.720, 0.400),
+    (0.810, 0.250),
+    (0.880, 0.130),
+    (0.920, 0.050),
 ]
 
 # Ventral (bottom) body outline, snout to peduncle.
 BOTTOM_PROFILE = [
-    (0.000, -0.03),
-    (0.060, -0.34),
-    (0.160, -0.52),
-    (0.300, -0.60),
-    (0.500, -0.55),
-    (0.680, -0.36),
-    (0.860, -0.14),
+    (0.000, -0.015),
+    (0.015, -0.070),
+    (0.035, -0.130),
+    (0.065, -0.220),
+    (0.110, -0.320),
+    (0.170, -0.420),
+    (0.250, -0.500),
+    (0.350, -0.550),
+    (0.450, -0.520),
+    (0.550, -0.450),
+    (0.650, -0.350),
+    (0.750, -0.230),
+    (0.840, -0.120),
+    (0.920, -0.040),
 ]
 
-# Fin polygons, drawn over the body. Each is a list of (x, y) vertices. Fin
-# sizes sit near real great-white proportions (dorsal height ~ half the body
-# depth); anything larger reads as a sailfish, anything smaller as a tuna.
+# Fin polygons, drawn over the body. Each is a list of (x, y) vertices; edges
+# are straight, so curvature is carried by vertex density — leading edges bow
+# outside their chord, trailing edges cut inside it, which is what makes a fin
+# read as falcate rather than triangular.
 FINS = [
-    # First dorsal: tall triangle, slightly raked.
-    [(0.36, 0.60), (0.46, 1.30), (0.49, 0.92), (0.56, 0.56)],
-    # Second dorsal, small.
-    [(0.72, 0.36), (0.77, 0.62), (0.785, 0.32)],
-    # Pectoral: long, raked down and back.
-    [(0.22, -0.50), (0.42, -1.18), (0.38, -0.42)],
-    # Pelvic, small.
-    [(0.56, -0.48), (0.62, -0.78), (0.64, -0.42)],
-    # Anal, small.
-    [(0.73, -0.30), (0.77, -0.54), (0.79, -0.27)],
-    # Caudal: crescent, longer upper lobe, deep fork. Lobes kept wide enough
-    # to survive downsampling as solid shapes.
+    # First dorsal: base 0.38-0.56 on the deepest part of the trunk, convex
+    # leading edge, rounded apex just past x=0.47, concave trailing edge
+    # sweeping to a free rear tip that settles back onto the dorsal ridge.
     [
-        (0.840, 0.20),
-        (0.920, 0.62),
-        (1.000, 1.00),
-        (0.965, 0.28),
-        (0.935, 0.02),
-        (0.950, -0.22),
-        (0.995, -0.62),
-        (0.915, -0.42),
-        (0.840, -0.18),
+        (0.390, 0.600),
+        (0.415, 0.780),
+        (0.445, 0.940),
+        (0.470, 1.040),
+        (0.485, 1.080),
+        (0.495, 1.070),
+        (0.500, 0.980),
+        (0.510, 0.850),
+        (0.525, 0.700),
+        (0.545, 0.580),
+        (0.570, 0.520),
+        (0.535, 0.550),
+        (0.450, 0.605),
+    ],
+    # Second dorsal: small, raked, with its own little rear tip.
+    [(0.742, 0.238), (0.766, 0.412), (0.790, 0.272), (0.814, 0.196)],
+    # Pectoral: long falcate sickle originating just behind the fifth gill
+    # slit, sweeping down and back, trailing edge concave, tip tapered.
+    [
+        (0.278, -0.465),
+        (0.318, -0.625),
+        (0.362, -0.790),
+        (0.410, -0.940),
+        (0.456, -1.055),
+        (0.485, -1.110),
+        (0.495, -1.070),
+        (0.482, -0.950),
+        (0.470, -0.850),
+        (0.452, -0.735),
+        (0.428, -0.590),
+        (0.402, -0.470),
+    ],
+    # Pelvic: small, set between the dorsal fins on the ventral line.
+    [(0.592, -0.400), (0.634, -0.582), (0.658, -0.608), (0.672, -0.436), (0.694, -0.340)],
+    # Anal: small, mirrors the second dorsal just behind it.
+    [(0.752, -0.208), (0.778, -0.372), (0.800, -0.246), (0.822, -0.168)],
+    # Caudal: lamnid crescent — narrow peduncle, upper lobe slightly longer
+    # than the lower, both trailing edges concave into a deep fork notch.
+    [
+        (0.882, 0.050),
+        (0.908, 0.310),
+        (0.936, 0.600),
+        (0.964, 0.830),
+        (0.990, 0.985),
+        (0.982, 0.780),
+        (0.970, 0.470),
+        (0.960, 0.210),
+        (0.950, 0.010),
+        (0.962, -0.230),
+        (0.980, -0.470),
+        (0.996, -0.660),
+        (0.965, -0.620),
+        (0.940, -0.510),
+        (0.915, -0.320),
+        (0.882, -0.050),
     ],
 ]
 
@@ -177,11 +239,13 @@ def draw_mask(sweep_scale=1.0):
     outline = [to_px(x, float(top(x))) for x in xs]
     outline += [to_px(x, float(bottom(x))) for x in xs[::-1]]
     draw.polygon(outline, fill=1)
+    body = np.asarray(im, dtype=bool).copy()
 
     for fin in FINS:
         draw.polygon([to_px(x, y) for x, y in fin], fill=1)
 
     mask = np.asarray(im, dtype=bool)
+    fin_only = mask & ~body
     unit = CANVAS_W - 2 * pad  # design-length → pixels
 
     # Analytic depth field over the full canvas, from the same design curves,
@@ -196,6 +260,10 @@ def draw_mask(sweep_scale=1.0):
     depth = (rows_px - top_y[None, :]) / span[None, :]
     sweep = np.interp(design_x, [x for x, _ in SWEEP], [s for _, s in SWEEP])
     depth = np.clip(depth - sweep_scale * sweep[None, :], 0.0, 1.0)
+    below = rows_px > (top_y + bot_y)[None, :] / 2.0
+    depth = np.where(
+        fin_only, np.where(below, FIN_DEPTH_BELOW, FIN_DEPTH_ABOVE), depth
+    )
 
     # Face marks on separate layers, drawn in the same canvas space.
     eye_im = Image.new("1", (CANVAS_W, CANVAS_H), 0)
@@ -360,6 +428,8 @@ def preview(cols, rows):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
     mode = sys.argv[1]
     cols, rows = int(sys.argv[2]), int(sys.argv[3])
     if mode == "preview":

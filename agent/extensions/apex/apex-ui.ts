@@ -66,7 +66,6 @@ import {
   createObservatoryOrb,
   type ObservatoryOrbResult,
 } from "./lib/observatory-orb.ts";
-import { renderReentry, type Reentry } from "./lib/reentry.ts";
 import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
 
 type BuiltinName = "read" | "bash" | "edit" | "write";
@@ -337,9 +336,6 @@ function taskCount(status: string | undefined): number {
   return match ? Number(match[1]) : 0;
 }
 
-/** Widget slot for the session re-entry line. */
-const REENTRY_WIDGET_KEY = "apex.reentry";
-
 const RANDOM_INDICATOR_FRAME_COUNT = 256;
 const RANDOM_INDICATOR_INTERVAL_MS = 120;
 
@@ -514,8 +510,6 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  let reentryCtx: ExtensionContext | undefined;
-
   function clearObservatory(): void {
     const ctx = observatoryCtx;
     observatory = undefined;
@@ -539,7 +533,7 @@ export default function (pi: ExtensionAPI) {
 
     // The startup header is the real opening surface: with quiet startup there
     // is nothing above it, so it IS the splash screen. Unlike an above-editor
-    // widget it has no line cap, hence OBSERVATORY_MAX_LINES = 22.
+    // widget it has no line cap, hence OBSERVATORY_MAX_LINES = 25.
     try {
       ctx.ui.setHeader((_tui, theme) =>
         new WidthText(
@@ -745,22 +739,17 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Real user submits end the landing screen; the command above bypasses this.
   pi.on("input", () => {
     clearObservatory();
-    // The re-entry line stays until the next user action so it can be read.
-    clearReentry();
   });
   pi.on("session_shutdown", () => {
     clearObservatory();
-    clearReentry();
   });
 
   pi.on("session_start", (event, ctx) => {
     // Always drop a prior session's header/widget/model before any guard so
     // new/resume/reload/fork never inherits a stale observatory.
     clearObservatory();
-    clearReentry();
     installLayout(pi, ctx);
     // Rebuild only for a conversation-blank new/initial startup chat.
     // Ignore model_change / thinking_level_change / session_info seeds that
@@ -776,67 +765,7 @@ export default function (pi: ExtensionAPI) {
       if (blank) showObservatory(pi, ctx);
       return;
     }
-    // Resuming an existing conversation: the splash stays reserved for a fresh
-    // chat, but re-entry still deserves orientation.
-    if (!blank && (event.reason === "resume" || event.reason === "fork")) {
-      showReentry(ctx);
-    }
   });
-
-  function clearReentry(): void {
-    const ctx = reentryCtx;
-    reentryCtx = undefined;
-    if (!ctx) return;
-    try {
-      ctx.ui.setWidget(REENTRY_WIDGET_KEY, undefined);
-    } catch {
-      // A teardown failure must never propagate into Pi's event loop.
-    }
-  }
-
-  function showReentry(ctx: ExtensionContext): void {
-    if (ctx.mode !== "tui") return;
-    let view: Reentry;
-    try {
-      const entries = ctx.sessionManager.getEntries();
-      let messages = 0;
-      let lastAt: number | undefined;
-      for (const entry of entries) {
-        if (entry.type === "message") messages++;
-        const stamp = Date.parse(
-          (entry as { timestamp?: string }).timestamp ?? "",
-        );
-        if (Number.isFinite(stamp)) lastAt = stamp;
-      }
-      view = {
-        workspace: cleanInline(path.basename(ctx.cwd || ""), 40),
-        seed: ctx.cwd || "",
-        messages,
-        sinceMs: lastAt === undefined ? undefined : Date.now() - lastAt,
-        contextFill: contextFill(ctx),
-      };
-    } catch (error) {
-      reportRenderFailure("reentry", error);
-      return;
-    }
-
-    try {
-      ctx.ui.setWidget(
-        REENTRY_WIDGET_KEY,
-        (_tui, theme) =>
-          new WidthText(
-            (width) =>
-              renderReentry((key, text) => theme.fg(key, text), width, view),
-            "[resumed]",
-          ),
-        { placement: "aboveEditor" },
-      );
-      reentryCtx = ctx;
-    } catch (error) {
-      reportRenderFailure("reentry", error);
-      reentryCtx = undefined;
-    }
-  }
 
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     if (!ctx.hasUI) return;

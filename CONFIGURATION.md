@@ -429,7 +429,9 @@ has one prompt template, `agent/prompts/brainstorm.md`
 `/deploy` are **not** prompt templates — they are native commands registered
 in code by `agent/extensions/prompt-commands.ts` via `pi.registerCommand()`
 because they need executable pre-steps (git snapshotting, a deterministic
-browser-connect step) that plain template expansion can't do. The previous
+browser-connect step) that plain template expansion can't do. `/orchestrate`
+is likewise native: it is a sticky per-turn system-prompt mode toggle
+(`before_agent_start` + persisted custom entry), not a one-shot template. The previous
 README wording implying `/browser`/`/deploy` are "registered in
 `agent/settings.json` and defined under `agent/prompts/`" was inaccurate and
 has been corrected (see README changes).

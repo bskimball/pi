@@ -1,6 +1,6 @@
 {
-  "defaultModel": "grok-4.5",
-  "defaultProvider": "xai",
+  "defaultModel": "gemini-3-flash-agent",
+  "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.83.0",
   "packages": [
@@ -21,11 +21,7 @@
     "xai/*",
     "google/*",
     "google-gemini-cli/*",
-    "ollama/*"
-  ],
-  "compaction": {
-    "enabled": true,
-    "reserveTokens": 16384,
-    "keepRecentTokens": 20000
-  }
+    "ollama/*",
+    "cloudflare-workers-ai/*"
+  ]
 }

@@ -74,6 +74,8 @@ One extension is loaded as an npm package via `agent/settings.json` `packages` r
 
 `/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
+`/orchestrate [on|off]` is also native, registered by the same extension: it toggles a **sticky strict-orchestrator mode**. While on, every turn's system prompt gets an appended block (via `before_agent_start`) that revokes the lead's inline allowance — no self-written edits (machinist/artisan own all implementation), no broad self-reading (scout owns discovery), mandatory fresh-eyes review, and the non-negotiable gates with zero inline exemptions. The toggle persists across session resume via a custom session entry and shows an `orchestrator` footer status while active. A one-shot prompt template couldn't do this because template expansion only rides on a single message.
+
 `agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
 
 ### `/browser`
