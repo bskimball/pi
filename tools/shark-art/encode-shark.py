@@ -71,9 +71,14 @@ BAND_EDGES = [0.50, 0.66, 0.78, 0.90, 1.0]
 # Instead out-of-trunk fin pixels are pinned to a fixed depth per side: fins
 # above the back stay in the dark dorsal tone so the first dorsal reads as one
 # shape with the spine, and fins below the belly take a mid-slate so the
-# pectoral, pelvic and lower caudal lobe don't vanish into the white underside.
+# pelvic and lower caudal lobe don't vanish into the white underside (the
+# pectoral fin is pinned to PECTORAL_DEPTH so it matches the flank above it).
 FIN_DEPTH_ABOVE = 0.10
 FIN_DEPTH_BELOW = 0.72
+
+# The pectoral is its own case: pinned to the upper-flank band so it continues
+# the tone of the flank it grows out of rather than the near-black spine.
+PECTORAL_DEPTH = 0.58
 
 # Counter-shade sweep: a perfectly level split reads as a sea horizon, not a
 # body. Real counter-shading swoops — the pale belly rides high on the jaw,
@@ -144,6 +149,18 @@ BOTTOM_PROFILE = [
 # are straight, so curvature is carried by vertex density — leading edges bow
 # outside their chord, trailing edges cut inside it, which is what makes a fin
 # read as falcate rather than triangular.
+PECTORAL_INDEX = 2
+
+# Shoulder wedge: the patch of trunk that carries the dark back tone down to
+# the pectoral root so the fin grows out of the flank instead of floating under
+# the belly. Widest at the insertion, raked forward and narrowing as it climbs.
+PECTORAL_SHOULDER = [
+    (0.272, -0.520),
+    (0.408, -0.440),
+    (0.386, -0.250),
+    (0.300, -0.205),
+]
+
 FINS = [
     # First dorsal: base 0.38-0.56 on the deepest part of the trunk, convex
     # leading edge, rounded apex just past x=0.47, concave trailing edge
@@ -165,8 +182,7 @@ FINS = [
     ],
     # Second dorsal: small, raked, with its own little rear tip.
     [(0.742, 0.238), (0.766, 0.412), (0.790, 0.272), (0.814, 0.196)],
-    # Pectoral: long falcate sickle originating just behind the fifth gill
-    # slit, sweeping down and back, trailing edge concave, tip tapered.
+    # Pectoral fin:
     [
         (0.278, -0.465),
         (0.318, -0.625),
@@ -241,11 +257,19 @@ def draw_mask(sweep_scale=1.0):
     draw.polygon(outline, fill=1)
     body = np.asarray(im, dtype=bool).copy()
 
+    # Draw pectoral fin separately so we can identify its pixels
+    pectoral_im = Image.new("1", (CANVAS_W, CANVAS_H), 0)
+    pectoral_draw = ImageDraw.Draw(pectoral_im)
+    pectoral_draw.polygon([to_px(x, y) for x, y in FINS[PECTORAL_INDEX]], fill=1)
+    pectoral_mask = np.asarray(pectoral_im, dtype=bool)
+
     for fin in FINS:
         draw.polygon([to_px(x, y) for x, y in fin], fill=1)
 
     mask = np.asarray(im, dtype=bool)
     fin_only = mask & ~body
+    # Pectoral fin pixels that are not part of the body
+    pectoral_fin_only = fin_only & pectoral_mask
     unit = CANVAS_W - 2 * pad  # design-length → pixels
 
     # Analytic depth field over the full canvas, from the same design curves,
@@ -261,9 +285,29 @@ def draw_mask(sweep_scale=1.0):
     sweep = np.interp(design_x, [x for x, _ in SWEEP], [s for _, s in SWEEP])
     depth = np.clip(depth - sweep_scale * sweep[None, :], 0.0, 1.0)
     below = rows_px > (top_y + bot_y)[None, :] / 2.0
+    # The pectoral takes the upper-flank tone rather than the mid-slate the
+    # other ventral fins get, so it reads as the shaded top surface of the fin.
     depth = np.where(
-        fin_only, np.where(below, FIN_DEPTH_BELOW, FIN_DEPTH_ABOVE), depth
+        fin_only,
+        np.where(
+            pectoral_fin_only,
+            PECTORAL_DEPTH,
+            np.where(below, FIN_DEPTH_BELOW, FIN_DEPTH_ABOVE),
+        ),
+        depth,
     )
+    depth = np.where(pectoral_mask & body, PECTORAL_DEPTH, depth)
+
+    # A dark fin rooted in the pale belly reads as a detached blade. On a real
+    # shark the flank dips down over the pectoral insertion, so carry the flank
+    # tone into the body as a wedge: wide at the fin root, narrowing as it
+    # climbs forward to the shoulder, so the belly still reads fore and aft.
+    shoulder_im = Image.new("1", (CANVAS_W, CANVAS_H), 0)
+    ImageDraw.Draw(shoulder_im).polygon(
+        [to_px(x, y) for x, y in PECTORAL_SHOULDER], fill=1
+    )
+    shoulder = np.asarray(shoulder_im, dtype=bool) & body
+    depth = np.where(shoulder, PECTORAL_DEPTH, depth)
 
     # Face marks on separate layers, drawn in the same canvas space.
     eye_im = Image.new("1", (CANVAS_W, CANVAS_H), 0)

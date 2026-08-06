@@ -1,5 +1,5 @@
 {
-  "defaultModel": "gemini-3-flash-agent",
+  "defaultModel": "claude-opus-5",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.83.0",
