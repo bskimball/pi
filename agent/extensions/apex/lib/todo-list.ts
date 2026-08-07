@@ -34,12 +34,18 @@ const MAX_ITEMS = 200;
 const TITLE_CHARS = 200;
 const NOTE_CHARS = 200;
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TodoStatus =
+  | "pending"
+  | "in_progress"
+  | "blocked"
+  | "completed"
+  | "cancelled";
 
 /** Narrow BMP glyphs only: every row is exactly one cell wide in the gutter. */
 const TODO_GLYPHS: Record<TodoStatus, string> = {
   pending: "\u25cb", // ○
   in_progress: "\u25cf", // ●
+  blocked: "\u2298", // ⊘
   completed: "\u2713", // ✓
   cancelled: "\u00d7", // ×
 };
@@ -47,6 +53,7 @@ const TODO_GLYPHS: Record<TodoStatus, string> = {
 const TODO_TONES: Record<TodoStatus, string> = {
   pending: "muted",
   in_progress: "warning",
+  blocked: "text",
   completed: "success",
   cancelled: "dim",
 };
@@ -55,6 +62,7 @@ const TODO_TONES: Record<TodoStatus, string> = {
 const TITLE_TONES: Record<TodoStatus, string> = {
   pending: "muted",
   in_progress: "text",
+  blocked: "muted",
   completed: "dim",
   cancelled: "dim",
 };
@@ -79,6 +87,12 @@ export interface TodoListView {
   done: number;
   /** Index of the first in-progress item in `items`, or -1. */
   activeIndex: number;
+  /**
+   * Index used to center the collapsed window so open work stays visible.
+   * Prefers first in_progress, else first blocked, else first pending, else -1.
+   * Distinct from `activeIndex` so blocked/pending rows are not styled as active.
+   */
+  anchorIndex: number;
   /** Items dropped by the hard input cap, so the header can stay truthful. */
   dropped: number;
 }
@@ -125,6 +139,8 @@ function toStatus(value: unknown): TodoStatus {
     case "doing":
     case "running":
       return "in_progress";
+    case "blocked":
+      return "blocked";
     case "completed":
     case "complete":
     case "done":
@@ -181,6 +197,7 @@ export function buildTodoList(
   const counts: Record<TodoStatus, number> = {
     pending: 0,
     in_progress: 0,
+    blocked: 0,
     completed: 0,
     cancelled: 0,
   };
@@ -200,13 +217,23 @@ export function buildTodoList(
         undefined,
     });
   }
+  const activeIndex = items.findIndex((item) => item.status === "in_progress");
+  // Window on open work when nothing is in progress (e.g. all remaining is blocked).
+  let anchorIndex = activeIndex;
+  if (anchorIndex < 0) {
+    anchorIndex = items.findIndex((item) => item.status === "blocked");
+  }
+  if (anchorIndex < 0) {
+    anchorIndex = items.findIndex((item) => item.status === "pending");
+  }
   return {
     title: safeText(readProp(options, "title"), 80),
     items,
     counts,
     total: items.length,
     done: counts.completed + counts.cancelled,
-    activeIndex: items.findIndex((item) => item.status === "in_progress"),
+    activeIndex,
+    anchorIndex,
     dropped: Math.max(0, sourceLength - kept.length),
   };
 }
@@ -312,6 +339,7 @@ export function renderTodoList(
   const expanded = options.expanded === true;
   const meta = metaText([
     view.counts.in_progress ? `${view.counts.in_progress} in progress` : undefined,
+    view.counts.blocked ? `${view.counts.blocked} blocked` : undefined,
     view.counts.pending ? `${view.counts.pending} pending` : undefined,
     view.counts.cancelled ? `${view.counts.cancelled} cancelled` : undefined,
     view.dropped ? `${view.dropped} not tracked` : undefined,
@@ -334,7 +362,7 @@ export function renderTodoList(
   const header = fitLine(headerLeft, right, inner);
 
   const limit = expanded ? ROWS_EXPANDED : ROWS_COLLAPSED;
-  const { start, end } = windowFor(view.total, limit, view.activeIndex);
+  const { start, end } = windowFor(view.total, limit, view.anchorIndex);
   const rows: TreeRow[] = [];
   // Truthful: the skipped head is whatever precedes the window, which is not
   // necessarily completed work.

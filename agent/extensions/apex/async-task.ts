@@ -1340,15 +1340,12 @@ export default function (pi: ExtensionAPI) {
       prompt: string;
       cwd: string;
       model?: string;
-      timeoutSec?: number;
-      maxTurns?: number;
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
     const id = `task_${nextId++}`;
     const sessionDir = ensureSessionDir(id);
-    const timeoutMs =
-      (params.timeoutSec ?? def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
-    const maxTurns = params.maxTurns ?? def.maxTurns ?? DEFAULT_MAX_TURNS;
+    const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+    const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
     const attempts = modelAttempts(def, params.model);
     // v1: use first model only for spawn; fallbacks can be retried on hard fail later.
     const model = attempts[0];
@@ -1662,18 +1659,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
             "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider.",
         }),
       ),
-      timeoutSec: Type.Optional(
-        Type.Number({
-          description:
-            "Omit to use the agent's configured time budget. Never lower it to constrain scope; put scope in the prompt.",
-        }),
-      ),
-      maxTurns: Type.Optional(
-        Type.Number({
-          description:
-            "Omit to use the agent's configured turn budget. Never lower it to constrain scope; a starved worker is killed mid-task and loses its report. Raise only for genuinely larger-than-normal work.",
-        }),
-      ),
     }),
     executionMode: "parallel",
     renderShell: "self",
@@ -1702,8 +1687,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         prompt: params.prompt,
         cwd,
         model: params.model,
-        timeoutSec: params.timeoutSec,
-        maxTurns: params.maxTurns,
       });
       if (error || !worker) {
         return textResult(error ?? "Failed to start worker.", true);
@@ -1737,7 +1720,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         phase: "none",
         generation: 1,
         turns: 0,
-        maxTurns: args.maxTurns ?? def?.maxTurns ?? DEFAULT_MAX_TURNS,
+        maxTurns: def?.maxTurns ?? DEFAULT_MAX_TURNS,
         createdAt: context.state.startedAt,
         pendingSteer: 0,
         pendingFollowUp: 0,

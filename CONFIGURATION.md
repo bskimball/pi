@@ -500,7 +500,8 @@ reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
 `mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
-`crash-logger.ts`) and `agent/extensions/apex/` (a directory-style extension:
+`crash-logger.ts`, `todo-list.ts`, `continual-memory.ts`, `read-guard.ts`),
+`agent/extensions/lsp/` and `agent/extensions/apex/` (directory-style extensions:
 `apex-ui.ts`, `amp-task.ts`, `async-task.ts` plus a shared `lib/` of helper
 modules that are imported directly rather than loaded as separate
 extensions). See `CONTEXT.md` for the local architecture (seams, tool
@@ -509,10 +510,10 @@ that file documents *how these extensions are built*, complementary to this
 file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
-`agent/extensions/` is used. `agent/settings.json` `packages` currently
-loads one npm extension package, `npm:pi-sticky-input` (configured via
-`agent/extensions/pi-sticky-input/config.json`). MCP integration is
-deliberately *not* loaded that way — it composes `pi-mcp-adapter` directly
+`agent/extensions/` is used. `agent/settings.json` `packages` is currently
+empty — no npm extension packages are loaded. (`npm:pi-sticky-input` was
+dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.) MCP
+integration is deliberately *not* loaded that way — it composes `pi-mcp-adapter` directly
 inside `mcp-adapter.ts` (see the mcp.json section above for why).
 
 ---

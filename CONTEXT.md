@@ -77,6 +77,14 @@ When changing Apex UI / task / receipt rendering:
 6. Emergency opt-out: `PI_APEX_UI=0`.
 7. Renderer failures → `agent/pi-render.log` and degrade to short fallback text.
 
+## Session todo list
+
+- Tool registration and the model-visible payload: `agent/extensions/todo-list.ts`. Pure presentation: `agent/extensions/apex/lib/todo-list.ts`.
+- Statuses: `pending`, `in_progress`, `blocked`, `completed`, `cancelled`. `done` is `completed + cancelled` only — **`blocked` is open work** and must never count toward it.
+- Two distinct indices, deliberately not merged: `activeIndex` is the first `in_progress` item and drives emphasis/expansion styling; `anchorIndex` places the collapsed window and falls back `in_progress` → `blocked` → `pending`. Merging them would style blocked rows as active; reusing `activeIndex` for the window hides the only open item behind completed rows when nothing is in progress.
+- `todo_write` returns the short summary line; `todo_read` returns a bounded per-item serialization (status, exact content, note). The split is intentional: read results re-enter context on every later turn, so only the explicit read pays that cost. Extension `details` feed the TUI and are **not** model-visible — anything the agent must read has to be in `content`.
+- Render and boundedness guard: `agent/extensions/apex/lib/todo-list-preview.mjs`, run with `node --experimental-transform-types` (plain `node` fails on TS parameter properties). It asserts height/width caps, hostile-input tolerance, and blocked-item visibility.
+
 ## Continual memory
 
 - Extension: `agent/extensions/continual-memory.ts`.

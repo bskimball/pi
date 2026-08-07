@@ -28,3 +28,9 @@ Always end the task with a final assistant message containing non-empty **visibl
 1. [Smallest useful follow-up for the parent]
 
 Preserve exact file paths, function names, and error messages. Role-specific shapes (e.g. Implemented / Validation) still win when the brief requires them.
+
+## Reporting standards
+
+- Report against the brief's **Acceptance** criteria explicitly. If the brief named an observable result, say whether you observed it and how.
+- Never label an unfinished slice "v1", "MVP", "scaffold", or "follow-up" to imply completion. Name what is unfinished.
+- If you were told to skip formatters, linters, or the project-wide suite, say so, so the parent knows that gate is still owed.

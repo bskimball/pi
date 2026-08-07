@@ -568,18 +568,6 @@ export default function (pi: ExtensionAPI) {
           "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider. Declared fallback models remain enabled.",
       }),
     ),
-    timeoutSec: Type.Optional(
-      Type.Number({
-        description:
-          "Omit to use the agent's configured time budget. Never lower it to constrain scope; put scope in the prompt.",
-      }),
-    ),
-    maxTurns: Type.Optional(
-      Type.Number({
-        description:
-          "Omit to use the agent's configured turn budget. Never lower it to constrain scope; a starved agent is killed mid-task and loses its report. Raise only for genuinely larger-than-normal work.",
-      }),
-    ),
   });
 
   pi.registerTool({
@@ -632,10 +620,10 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const timeoutMs = (params.timeoutSec ?? def.timeoutSec ?? 1800) * 1000;
+      const timeoutMs = (def.timeoutSec ?? 1800) * 1000;
       const idleMs = 300_000;
       const toolIdleMs = 900_000;
-      const maxTurns = params.maxTurns ?? def.maxTurns ?? 30;
+      const maxTurns = def.maxTurns ?? 30;
       const attempts = modelAttempts(def, params.model);
 
       const activities: MissionActivity[] = [];

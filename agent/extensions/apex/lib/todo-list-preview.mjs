@@ -52,7 +52,15 @@ const SCENARIOS = {
       todo("Draft the builder and renderer", "completed"),
       todo("Render bounded rows", "in_progress", "blocked on theme keys"),
       todo("Add the preview harness", "pending"),
+      todo("Publish the release notes", "blocked", "waiting on the user's copy review"),
       todo("Wire it into the live UI", "cancelled", "out of scope"),
+    ],
+  },
+  "blocked behind completed work (anchor must reach the open item)": {
+    title: "All remaining work blocked",
+    raw: [
+      ...Array.from({ length: 8 }, (_, index) => todo(`Completed step ${index + 1}`, "completed")),
+      todo("Waiting on reviewer decision", "blocked", "needs design approval"),
     ],
   },
   "long text": {
@@ -235,6 +243,37 @@ try {
   const body = renderTodoList(theme, 80, view, {}).map(plain).join("\n");
   check("elision note omits 'done'", !body.includes("done earlier"), body.split("\n")[1]);
   check("elision note reads 'N earlier'", /\u251c\u2500 \d+ earlier/.test(body));
+}
+
+// (4) blocked is open work: never counted as done, and never windowed out of view.
+{
+  const view = buildTodoList([
+    ...Array.from({ length: 8 }, (_, index) => todo(`Completed step ${index + 1}`, "completed")),
+    todo("Waiting on reviewer decision", "blocked", "needs design approval"),
+  ]);
+  check("blocked is not counted as done", view.done === 8, `done=${view.done}`);
+  check("blocked is counted", view.counts.blocked === 1, `blocked=${view.counts.blocked}`);
+  check("activeIndex stays in-progress-only", view.activeIndex === -1, `activeIndex=${view.activeIndex}`);
+  check("anchor falls back to the blocked item", view.anchorIndex === 8, `anchorIndex=${view.anchorIndex}`);
+  for (const width of [60, 80, 120]) {
+    const body = renderTodoList(theme, width, view, {}).map(plain).join("\n");
+    check(
+      `blocked row is visible at ${width} cols`,
+      body.includes("Waiting on reviewer decision"),
+      body,
+    );
+    check(`blocked count is in the header at ${width} cols`, body.includes("1 blocked"));
+  }
+}
+
+// (5) the anchor prefers in_progress, then blocked, then pending.
+{
+  const anchorOf = (statuses) =>
+    buildTodoList(statuses.map((status, index) => todo(`Item ${index + 1}`, status))).anchorIndex;
+  check("anchor prefers in_progress", anchorOf(["completed", "blocked", "in_progress", "pending"]) === 2);
+  check("anchor falls back to blocked", anchorOf(["completed", "pending", "blocked"]) === 2);
+  check("anchor falls back to pending", anchorOf(["completed", "completed", "pending"]) === 2);
+  check("anchor is -1 with no open work", anchorOf(["completed", "cancelled"]) === -1);
 }
 
 // Worst-case height and pad: neither may exceed the caps.
