@@ -1,13 +1,13 @@
 ---
 name: advisor
 description: Strategic planner consulted before consequential approaches, when stuck, or when changing direction. Advisory only; does not implement.
-model: local-proxy/claude-fable-5
+model: local-proxy/claude-opus-5
 fallbackModels:
-  - local-proxy/claude-opus-5
   - local-proxy/gpt-5.6-sol
+  - local-proxy/claude-fable-5
   - local-proxy/grok-4.5
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
-thinking: high
+thinking: xhigh
 tools: read, grep, find, ls, edit, write, task
 inheritSkills: true
 maxTurns: 60
