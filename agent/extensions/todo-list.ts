@@ -305,6 +305,10 @@ export default function (pi: ExtensionAPI) {
             isError,
           );
         }
+        // In the interactive TUI the dock above the editor is the canonical
+        // todo surface. Keep successful writes out of the transcript so the
+        // same list is not shown twice; non-TUI modes retain the receipt.
+        if (currentCtx?.mode === "tui") return [];
         return renderTodoList(theme, width, view, {
           expanded: context.expanded || options.expanded,
           emptyHint: "todo_write to start a plan",
@@ -378,6 +382,7 @@ export default function (pi: ExtensionAPI) {
             }),
           ];
         }
+        if (currentCtx?.mode === "tui") return [];
         return renderTodoList(theme, width, view, {
           expanded: context.expanded || options.expanded,
           emptyHint: "todo_write to start a plan",
