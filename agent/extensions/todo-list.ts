@@ -78,6 +78,28 @@ function summarize(view: TodoListView): string {
   return active ? `${base} · ${active}` : base;
 }
 
+/** Cap on items serialized into the model-visible todo_read result. */
+const READ_ITEM_CAP = 50;
+/** Cap on each serialized item line (status + content + optional note). */
+const READ_LINE_CHARS = 240;
+
+/**
+ * Bounded plain-text dump of the retained list for todo_read. The model needs
+ * exact item content to refer to entries by text; summarize() alone is not enough.
+ */
+function serializeForRead(view: TodoListView): string {
+  const lines: string[] = [summarize(view)];
+  const limit = Math.min(view.items.length, READ_ITEM_CAP);
+  for (let i = 0; i < limit; i++) {
+    const item = view.items[i];
+    const note = item.note ? ` · ${item.note}` : "";
+    lines.push(safeLine(`[${item.status}] ${item.title}${note}`, READ_LINE_CHARS));
+  }
+  const omitted = view.items.length - limit;
+  if (omitted > 0) lines.push(`… ${omitted} more items`);
+  return lines.join("\n");
+}
+
 /** One-line call row shown while todo_write is in flight. */
 function todoCallLine(
   theme: StatusTheme,
@@ -128,15 +150,18 @@ export default function (pi: ExtensionAPI) {
     name: "todo_write",
     label: "Todo Write",
     description:
-      "Replace the session todo list with a full plan. Write the plan BEFORE the first edit whenever the task spans 3+ steps, touches more than one file, involves delegation, or bundles several user requests. Keep exactly one item in_progress and mark items completed as they finish. Each call replaces the entire list, so always send the complete set.",
+      "Replace the session todo list with a full plan. Write the plan BEFORE the first edit whenever the task spans 3+ steps, touches more than one file, involves delegation, or bundles several user requests. Keep at most one item in_progress, mark items blocked when waiting on something external, and mark items completed as they finish. Each call replaces the entire list, so always send the complete set.",
     promptSnippet:
-      "Plan multi-step work here before the first edit (3+ steps, multiple files, delegation, or several requests at once); one in_progress, complete promptly.",
+      "Plan multi-step work here before the first edit (3+ steps, multiple files, delegation, or several requests at once); one in_progress, blocked when waiting, complete promptly.",
     promptGuidelines: [
       "Call todo_write before the first edit when work spans three or more steps, touches more than one file, involves delegation, or bundles several user requests. This is a threshold, not a judgment call.",
       "Call todo_write with the complete list on every update; each call replaces the whole list rather than patching individual items.",
-      "Keep exactly one item in_progress, and mark work completed as it finishes rather than in a batch at the end.",
+      "Keep at most one item in_progress — normally exactly one while actionable work remains, and zero when every open item is blocked — and mark work completed as it finishes rather than in a batch at the end.",
       "Add newly discovered work as new items instead of silently widening an existing one, and mark abandoned work cancelled rather than deleting it.",
       "Never mark an item completed on the strength of an edit alone when it still needs verification; the list is a commitment to the user and must stay truthful.",
+      "Refer to an item by its exact content text rather than a positional id; call todo_read to recover the exact text instead of guessing from memory.",
+      "Mark an item blocked with the reason in its note when it is waiting on a user decision, another agent, or an external service; return it to pending when it becomes actionable again.",
+      "Batch the list update into the same message as the work it accompanies rather than spending a turn on the list alone; a solo update is fine when revising the plan is the only remaining state change.",
     ],
     parameters: Type.Object({
       todos: Type.Array(
@@ -145,10 +170,10 @@ export default function (pi: ExtensionAPI) {
             description: "Task text shown in the list (required).",
           }),
           status: StringEnum(
-            ["pending", "in_progress", "completed", "cancelled"] as const,
+            ["pending", "in_progress", "blocked", "completed", "cancelled"] as const,
             {
               description:
-                "pending | in_progress | completed | cancelled. Keep at most one in_progress.",
+                "pending | in_progress | blocked | completed | cancelled. Keep at most one in_progress; use blocked when waiting on a user decision, another agent, or an external service.",
             },
           ),
           id: Type.Optional(
@@ -158,7 +183,8 @@ export default function (pi: ExtensionAPI) {
           ),
           note: Type.Optional(
             Type.String({
-              description: "Short dim detail: owner, blocker, or follow-up (optional).",
+              description:
+                "Short dim detail: owner, blocker, or follow-up (optional). When status is blocked, put the blocking reason here.",
             }),
           ),
         }),
@@ -221,7 +247,7 @@ export default function (pi: ExtensionAPI) {
         if (item?.status === "in_progress") inProgress++;
       }
       if (inProgress > 1) {
-        const message = `todos may have at most one in_progress item (got ${inProgress}). Mark other active work completed/cancelled/pending first.`;
+        const message = `todos may have at most one in_progress item (got ${inProgress}). Mark other active work completed/blocked/cancelled/pending first.`;
         return textResult(message, true, { message });
       }
 
@@ -285,7 +311,7 @@ export default function (pi: ExtensionAPI) {
           "No todo list for this session yet. Use todo_write to create one.";
         return textResult(message, false, { message });
       }
-      return textResult(summarize(current), false, { view: current });
+      return textResult(serializeForRead(current), false, { view: current });
     },
   });
 }

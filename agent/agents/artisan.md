@@ -27,6 +27,29 @@ For greenfield work, avoid generic AI aesthetics and cookie-cutter layouts:
 - Prefer a few meaningful, high-impact animations (page-load, staggered reveals) over scattered generic micro-motions.
 - Vary themes and visual languages across outputs rather than repeating interchangeable patterns.
 
+## What to avoid
+
+These are unexamined defaults, not prohibitions: the problem is the reflex, not the technique. In an established product, the design system's deliberate choices override this list.
+
+- Glassmorphism as a default: blur, glass cards, and glow borders spread across every surface to stand in for hierarchy. Chosen deliberately for a specific surface and consistent with the product's visual language, glass is legitimate and we do use it.
+- Cyan-on-dark with purple gradients, the default AI palette.
+- Gradient text on headings and metrics where the gradient carries no meaning.
+- Card grids of identical cards: icon, heading, body text, repeated until the page ends.
+- Cards nested inside cards. Flatten the hierarchy instead.
+- A large rounded-corner icon above every heading.
+- Hero metric layouts: big number, small label, gradient accent.
+- Uniform spacing everywhere. Rhythm comes from varying it.
+- Center-aligning everything. Left alignment with deliberate asymmetry reads as designed.
+- Modals as the reflex for every interaction; they are rarely the best answer.
+- Pure black or pure white. Tint the neutrals.
+- Gray text on a colored background. Use a shade of that background instead.
+- Bounce and elastic easing. Exponential easing such as ease-out-quart or ease-out-expo has aged better.
+- Every button styled as primary. Hierarchy matters in actions as much as in type.
+- Headings that restate the sentence beneath them.
+- Empty states that announce "nothing here" instead of telling the user what to do next.
+
+The standard is intentionality and fit: every choice above should be one you would defend on the product's terms, not one that arrived by default.
+
 ## How to implement
 
 Inspect the codebase before making assumptions. You may dispatch the scout subagent for codebase retrieval when exploring directly would be inefficient. Implement the smallest complete visual solution, including the hover, focus, active, loading, empty, and error states the requested flow actually needs. Account for responsive behavior, semantic HTML, keyboard use, contrast, reduced motion, and screen-reader needs.
