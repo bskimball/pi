@@ -6,7 +6,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 
 | Path | Role |
 |------|------|
-| `agent/extensions/` | Pi extensions (Apex UI, tasks, web search, MCP) |
+| `agent/extensions/` | Pi extensions (Apex UI, tasks, web search, continual memory, MCP) |
 | `agent/extensions/apex/` | Apex package: UI, sync/async tasks, shared `lib/` |
 | `agent/agents/` | Specialist agent markdown catalog |
 | `agent/prompts/`, `agent/skills/`, `agent/themes/` | Prompts, skills, themes |
@@ -76,6 +76,15 @@ When changing Apex UI / task / receipt rendering:
 5. Preserve task activity visibility; do not collapse subagents to a one-line summary unless diagnosing.
 6. Emergency opt-out: `PI_APEX_UI=0`.
 7. Renderer failures → `agent/pi-render.log` and degrade to short fallback text.
+
+## Continual memory
+
+- Extension: `agent/extensions/continual-memory.ts`.
+- Tools: `memory_list`, `memory_write` (create/update/delete).
+- Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only).
+- Local store: session custom entry `continual-memory-local` (survives resume).
+- Global store: `agent/harness/global.json` (gitignored runtime state).
+- Injected each turn via `before_agent_start` as a compact overview; never rewrites `SYSTEM.md`.
 
 ## Intentionally deferred
 

@@ -1,6 +1,6 @@
 ---
 name: background-process
-description: Start, inspect, and stop long-running shell jobs (dev servers, watchers) with bg_start/bg_status/bg_list/bg_kill. Use when a command must keep running while the agent continues other work.
+description: Start, inspect, and stop long-running shell jobs (dev servers, watchers, bundlers) with bg_start/bg_status/bg_list/bg_kill. Use when a command must keep running while the agent continues other work; prefer bash for short finite builds and tests.
 ---
 
 # Background Process Tools

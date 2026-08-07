@@ -1,11 +1,9 @@
 {
   "defaultModel": "claude-opus-5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "0.83.0",
-  "packages": [
-    "npm:pi-sticky-input"
-  ],
+  "defaultThinkingLevel": "high",
+  "lastChangelogVersion": "0.84.1",
+  "packages": [],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
@@ -14,6 +12,7 @@
   },
   "editorPaddingX": 2,
   "theme": "apex-dark",
+  "tuiMode": "fullscreen",
   "enabledModels": [
     "local-proxy/*",
     "openai-codex/*",

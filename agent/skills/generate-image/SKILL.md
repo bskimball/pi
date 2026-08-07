@@ -1,6 +1,6 @@
 ---
 name: generate-image
-description: Generates images from text prompts via the local proxy image API (gpt-image-2, with automatic fallback to grok-imagine-image and gpt-image-1.5). Use when asked to create, generate, or draw an image, illustration, icon, logo, texture, or other visual asset from a description.
+description: Generates image files from text prompts via the local proxy image API (gpt-image-2, with automatic fallback to grok-imagine-image and gpt-image-1.5). Use when asked to create, generate, or draw an image, illustration, icon, logo, texture, concept art, or other visual asset file from a description — not for editing existing app UI code.
 ---
 
 # Generate Image
