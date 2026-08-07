@@ -299,6 +299,33 @@ for (const scenario of Object.values(SCENARIOS)) {
 }
 check("zero width renders nothing", renderTodoList(theme, 0, buildTodoList([todo("x", "pending")])).length === 0);
 
+// A collapsed dock is one truthful summary row and keeps its toggle affordance.
+{
+  const view = buildTodoList([
+    todo("Finished", "completed"),
+    todo("Current work", "in_progress"),
+    todo("Next work", "pending"),
+  ]);
+  for (const width of [20, 40, 80, 120]) {
+    const lines = renderTodoList(theme, width, view, {
+      collapsed: true,
+      toggleHint: "alt+t",
+    });
+    check(`collapsed dock is one line at ${width} cols`, lines.length === 1, lines.join("\n"));
+    check(
+      `collapsed dock fits at ${width} cols`,
+      lines.every((line) => fallbackVisibleWidth(line) <= width),
+      lines.map(plain).join("\n"),
+    );
+  }
+  const wide = renderTodoList(theme, 120, view, {
+    collapsed: true,
+    toggleHint: "alt+t",
+  }).map(plain).join("\n");
+  check("collapsed dock shows its toggle hint", wide.includes("alt+t"), wide);
+  check("collapsed dock omits item rows", !wide.includes("Current work"), wide);
+}
+
 const OVERRIDES = process.argv.slice(2).map(Number).filter(Boolean);
 const widths = OVERRIDES.length ? OVERRIDES : [40, 60, 80, 100, 120];
 
