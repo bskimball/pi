@@ -35,6 +35,50 @@ export interface CapWorker {
   closed: boolean;
 }
 
+export interface ModelFallbackState {
+  hasNextAttempt: boolean;
+  fallbackInProgress: boolean;
+  killReason?: string;
+  resultText?: string;
+  modelError?: string;
+  activitiesStarted: number;
+}
+
+const MODEL_FALLBACK_ERROR_PATTERN =
+  /\b(?:auth[_ -]?unavailable|no auth available|no api key(?: found)?|unauthori[sz]ed|forbidden|authentication(?: failed| unavailable)?|invalid api key|model (?:not found|unavailable)|provider (?:unavailable|returned (?:an )?error)|overloaded|rate.?limit(?:ed)?|too many requests|service.?unavailable|server.?error|internal.?error|(?:http\s*)?(?:429|500|502|503|504|524))\b/i;
+
+/** True only for terminal provider/model failures where another configured
+ * model can reasonably succeed. Tool, implementation, context, and control
+ * failures must remain attached to the attempted model and never be replayed.
+ */
+export function isModelFallbackError(message: string | undefined): boolean {
+  return !!message?.trim() && MODEL_FALLBACK_ERROR_PATTERN.test(message);
+}
+
+/**
+ * Retry only clean model/provider failures. Once a worker has produced visible
+ * output or started a tool, replaying its prompt could duplicate real work.
+ */
+export function shouldRetryModelFallback(state: ModelFallbackState): boolean {
+  return (
+    state.hasNextAttempt &&
+    !state.fallbackInProgress &&
+    !state.killReason &&
+    !state.resultText?.trim() &&
+    isModelFallbackError(state.modelError) &&
+    state.activitiesStarted === 0
+  );
+}
+
+export function splitQualifiedModel(
+  model: string | undefined,
+): { provider: string; modelId: string } | undefined {
+  if (!model) return undefined;
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) return undefined;
+  return { provider: model.slice(0, slash), modelId: model.slice(slash + 1) };
+}
+
 export function isLiveLifecycle(lifecycle: WorkerLifecycle): boolean {
   return (
     lifecycle === "starting" ||

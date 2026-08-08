@@ -115,7 +115,7 @@ export function isProjectAgentFile(file: string, cwd: string = process.cwd()): b
   );
 }
 
-/** Shared preamble (_shared.md) and handoff (_handoff.md); project overrides global. */
+/** Shared prompt fragments (_shared.md, _shared-sync.md, …); project overrides global. */
 export function readSharedFile(name: string, cwd: string = process.cwd()): string | undefined {
   for (const dir of [...agentDirs(cwd)].reverse()) {
     try {
@@ -126,6 +126,28 @@ export function readSharedFile(name: string, cwd: string = process.cwd()): strin
     }
   }
   return undefined;
+}
+
+export type SpecialistWorkerMode = "sync" | "async";
+
+/**
+ * Mode-correct shared specialist prompt pieces.
+ * Common norms (_shared.md) plus a small mode file (_shared-sync.md / _shared-async.md),
+ * with optional handoff (_handoff.md). Project copies override global per file.
+ */
+export function composeSpecialistSharedPrompts(
+  mode: SpecialistWorkerMode,
+  cwd: string = process.cwd(),
+): { systemPreamble?: string; appendSystemPrompt?: string } {
+  const modeFile = mode === "async" ? "_shared-async.md" : "_shared-sync.md";
+  const systemPreamble = [readSharedFile("_shared.md", cwd), readSharedFile(modeFile, cwd)]
+    .filter((part): part is string => !!part?.trim())
+    .join("\n\n");
+  const appendSystemPrompt = readSharedFile("_handoff.md", cwd);
+  return {
+    systemPreamble: systemPreamble || undefined,
+    appendSystemPrompt: appendSystemPrompt || undefined,
+  };
 }
 
 export function modelProvider(model: string | undefined): string | undefined {

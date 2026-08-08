@@ -22,10 +22,10 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentProvider,
+  composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
   qualifyModel,
-  readSharedFile,
   stderrDiagnostic,
   type AgentDef,
 } from "./lib/agent-discovery.ts";
@@ -832,13 +832,14 @@ export default function (pi: ExtensionAPI) {
           // Children are fire-and-forget: there is no mid-flight channel back
           // to the orchestrator, so agent prompts must escalate via their
           // final report rather than a live supervisor tool.
-          const sharedPreamble = readSharedFile("_shared.md");
-          const systemPrompt = [sharedPreamble, def.body]
+          const shared = composeSpecialistSharedPrompts("sync");
+          const systemPrompt = [shared.systemPreamble, def.body]
             .filter(Boolean)
             .join("\n\n");
           if (systemPrompt) args.push("--system-prompt", systemPrompt);
-          const handoff = readSharedFile("_handoff.md");
-          if (handoff) args.push("--append-system-prompt", handoff);
+          if (shared.appendSystemPrompt) {
+            args.push("--append-system-prompt", shared.appendSystemPrompt);
+          }
           args.push(params.prompt);
 
           let child: ChildProcessByStdio<null, Readable, Readable>;
