@@ -62,6 +62,10 @@ import {
   type WorkerPhase,
 } from "./lib/worker-runtime.ts";
 import {
+  getSharedModelCircuitBreaker,
+  isQualifyingCircuitFailure,
+} from "./lib/model-circuit-breaker.ts";
+import {
   activityGlyph,
   boundedRailTextLines,
   buildTreeLines,
@@ -197,6 +201,8 @@ interface Worker {
   modelAttempts: Array<string | undefined>;
   modelAttemptIndex: number;
   modelError?: string;
+  /** Attempt index whose qualifying failure was already persisted. */
+  circuitFailureAttempt?: number;
   modelAttemptUsedTools: boolean;
   fallbackReplaySafe: boolean;
   fallbackInProgress: boolean;
@@ -946,6 +952,37 @@ export default function (pi: ExtensionAPI) {
 
   type ModelFallbackResult = "retried" | "exhausted" | "cancelled";
 
+  /** Persist a clean provider/model availability failure for circuit breaking. */
+  const noteCircuitFailure = (worker: Worker) => {
+    if (
+      worker.killReason ||
+      worker.circuitFailureAttempt === worker.modelAttemptIndex ||
+      worker.modelAttemptUsedTools ||
+      !worker.fallbackReplaySafe ||
+      !!(worker.latestResult || worker.latestAssistantText)?.trim()
+    ) {
+      return;
+    }
+    const message = worker.modelError;
+    if (!isQualifyingCircuitFailure(message)) return;
+    try {
+      getSharedModelCircuitBreaker().recordFailure(worker.model, message);
+      worker.circuitFailureAttempt = worker.modelAttemptIndex;
+    } catch {
+      // Circuit state is advisory only.
+    }
+  };
+
+  /** Close the circuit after a successful settled generation. */
+  const noteCircuitSuccess = (worker: Worker) => {
+    if (worker.killReason || worker.modelError) return;
+    try {
+      getSharedModelCircuitBreaker().recordSuccess(worker.model);
+    } catch {
+      // Circuit state is advisory only.
+    }
+  };
+
   const retryModelFallback = async (
     worker: Worker,
   ): Promise<ModelFallbackResult> => {
@@ -966,8 +1003,25 @@ export default function (pi: ExtensionAPI) {
       return "exhausted";
     }
 
-    const nextIndex = worker.modelAttemptIndex + 1;
-    const nextModel = worker.modelAttempts[nextIndex];
+    // Count the clean failure against the model we are leaving, then consult
+    // persisted circuits so later tasks skip known-unhealthy candidates.
+    noteCircuitFailure(worker);
+
+    const decision = getSharedModelCircuitBreaker().selectAttempt(
+      worker.modelAttempts,
+      worker.modelAttemptIndex + 1,
+    );
+    if (decision.index >= worker.modelAttempts.length) {
+      return "exhausted";
+    }
+    const nextIndex = decision.index;
+    const nextModel = decision.model;
+    if (decision.skipped.length) {
+      pushError(
+        worker,
+        `circuit open; skipped ${decision.skipped.join(", ")}${decision.failSafe ? " (fail-safe retry)" : ""}`,
+      );
+    }
     const qualified = splitQualifiedModel(nextModel);
     if (!qualified) {
       const label = nextModel ?? "default model";
@@ -1118,6 +1172,13 @@ export default function (pi: ExtensionAPI) {
     if (opts?.killReason) worker.killReason = opts.killReason;
     if (!worker.latestResult && worker.latestAssistantText) {
       worker.latestResult = worker.latestAssistantText;
+    }
+    // Persist circuit outcomes only for clean attempt ends. Success closes the
+    // model circuit; clean availability failures feed the open threshold.
+    if (lifecycle === "settled" && !worker.killReason) {
+      noteCircuitSuccess(worker);
+    } else if (lifecycle === "failed") {
+      noteCircuitFailure(worker);
     }
     worker.updatedAt = Date.now();
     resolveWaiters(worker, generationSnapshot(worker));
@@ -1542,6 +1603,7 @@ export default function (pi: ExtensionAPI) {
     worker.turns = 0;
     worker.latestResult = "";
     worker.modelError = undefined;
+    worker.circuitFailureAttempt = undefined;
     worker.modelAttemptUsedTools = false;
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
@@ -1565,7 +1627,11 @@ export default function (pi: ExtensionAPI) {
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
     const attempts = modelAttempts(def, params.model);
-    const model = attempts[0];
+    // Skip known-unhealthy provider/model circuits before spawn. When every
+    // candidate is open, selectAttempt still returns a deterministic fail-safe
+    // without erasing circuit state.
+    const initial = getSharedModelCircuitBreaker().selectAttempt(attempts, 0);
+    const model = initial.model;
     const modelLabel = model ?? "default model";
 
     const worker: Worker = {
@@ -1577,7 +1643,8 @@ export default function (pi: ExtensionAPI) {
       thinking: def.thinking,
       initialPrompt: params.prompt,
       modelAttempts: attempts,
-      modelAttemptIndex: 0,
+      modelAttemptIndex: initial.index,
+      circuitFailureAttempt: undefined,
       modelAttemptUsedTools: false,
       fallbackReplaySafe: true,
       fallbackInProgress: false,
@@ -1612,6 +1679,12 @@ export default function (pi: ExtensionAPI) {
 
     workers.set(id, worker);
     order.push(id);
+    if (initial.skipped.length) {
+      pushError(
+        worker,
+        `circuit open; skipped ${initial.skipped.join(", ")}${initial.failSafe ? " (fail-safe primary)" : ""}`,
+      );
+    }
 
     const cliJs = process.argv[1];
     const args = [
