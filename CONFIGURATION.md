@@ -70,6 +70,13 @@ obviously-fake literals.
 `pi-mcp-adapter` to `agent/settings.json` `packages` — that would load a second,
 unwrapped instance and bypass Apex's receipts.
 
+Because the adapter is composed directly rather than loaded as a package, Pi
+does not auto-discover its bundled skill directory. Register it explicitly via
+`agent/settings.json` `skills` (this repo uses
+`../node_modules/pi-mcp-adapter/skills`, resolved relative to `agent/`). That
+exposes the authoritative `mcp-scripting` skill without installing a second
+adapter instance through `packages`.
+
 **Location:** `<Pi agent dir>/mcp.json` (`agent/mcp.json` here). This is one of
 several files `pi-mcp-adapter` merges; see the package's own file-precedence
 table in `node_modules/pi-mcp-adapter/README.md#file-layout` for the full list
@@ -317,7 +324,9 @@ wins). Not gitignored — contains no secrets, just preferences.
 This repo's tracked `agent/settings.json` sets: `defaultModel`,
 `defaultProvider`, `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
 (currently `[]` — MCP is loaded directly by `mcp-adapter.ts`, not via
-`packages`, see the mcp.json section above), `steeringMode`, `transport`,
+`packages`, see the mcp.json section above), `skills` (registers the
+`pi-mcp-adapter` bundled skill directory so `mcp-scripting` is discoverable
+without loading the adapter twice), `steeringMode`, `transport`,
 `terminal.showTerminalProgress`, `editorPaddingX`, `theme`.
 
 ---
@@ -470,10 +479,13 @@ files are ignored there).
 Unknown frontmatter fields are ignored. Name collisions across locations warn
 and keep the first skill found.
 
-This repo has two skills: `agent/skills/background-process/SKILL.md` and
-`agent/skills/generate-image/SKILL.md` (the latter ships a helper script,
-`generate_image.py`, alongside `SKILL.md` — skills are freeform directories
-beyond the required `SKILL.md`).
+This repo has three local skills under `agent/skills/`:
+`background-process/SKILL.md`, `generate-image/SKILL.md` (the latter ships a
+helper script, `generate_image.py`, alongside `SKILL.md` — skills are freeform
+directories beyond the required `SKILL.md`), and
+`mcp-scripting-recipes/SKILL.md` (server-agnostic local recipes that complement
+the adapter's authoritative `mcp-scripting` skill). The adapter skill itself is
+loaded via `settings.skills`, not by copying it into `agent/skills/`.
 
 ---
 

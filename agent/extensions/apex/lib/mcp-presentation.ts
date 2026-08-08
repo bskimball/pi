@@ -9,6 +9,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { cleanInline, type ToolRenderContext } from "./ui-common.ts";
+import { safeTruncateToWidth } from "./safe-text-layout.ts";
 import {
   toolRenderers,
   type ToolRenderState,
@@ -19,14 +20,56 @@ export function isMcpToolDefinition(
   def: ToolDefinition<any, any, any>,
 ): boolean {
   if (def.name === "mcp") return true;
+  if (def.name === "mcpScript") return true;
   if (typeof def.label === "string" && def.label.startsWith("MCP:"))
     return true;
   if (def.name.startsWith("mcp__") || def.name.startsWith("mcp_")) return true;
   return false;
 }
 
+/**
+ * mcpScript summary: code line count and a valid `timeoutMs` only (the
+ * pi-mcp-adapter 2.21.0 argument name). Source never appears on the header.
+ */
+function formatMcpScriptSummary(value: unknown, max: number): string {
+  let args = value;
+  if (typeof args === "string") {
+    const trimmed = args.trim();
+    if (!trimmed) return "";
+    try {
+      args = JSON.parse(trimmed);
+    } catch {
+      return "";
+    }
+  }
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const record = args as Record<string, unknown>;
+  const code = typeof record.code === "string" ? record.code : "";
+  const body = code.replace(/\r?\n$/, "");
+  const lines = body.length === 0 ? 0 : body.split(/\r?\n/).length;
+  const parts = [`code ${lines} ${lines === 1 ? "line" : "lines"}`];
+  // Only `timeoutMs` is supported; a bare `timeout` key is not in the
+  // adapter schema and must not surface on the header. The adapter schema
+  // requires `timeoutMs >= 1` and the runtime floors valid values before
+  // execution, so the header mirrors that normalization.
+  const timeoutMs = record.timeoutMs;
+  if (
+    typeof timeoutMs === "number" &&
+    Number.isFinite(timeoutMs) &&
+    timeoutMs >= 1
+  ) {
+    parts.push(`timeout=${Math.floor(timeoutMs)}ms`);
+  }
+  return safeTruncateToWidth(parts.join(" "), max);
+}
+
 /** Compact one-line summary of MCP args; never dumps full JSON on the header. */
-export function formatMcpArgSummary(value: unknown, max = 120): string {
+export function formatMcpArgSummary(
+  value: unknown,
+  max = 120,
+  toolName?: string,
+): string {
+  if (toolName === "mcpScript") return formatMcpScriptSummary(value, max);
   if (value === undefined || value === null) return "";
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -78,6 +121,7 @@ export function mcpToolTitle(
   args: any,
   details?: Record<string, unknown>,
 ): string {
+  if (def.name === "mcpScript") return "mcp script";
   const detailServer =
     typeof details?.server === "string"
       ? details.server
@@ -154,7 +198,7 @@ function wrapMcpTool(
   const ui = toolRenderers<any>({
     surface: "mcp",
     title: (args, details) => mcpToolTitle(def, args, details),
-    arg: (args, budget) => formatMcpArgSummary(args, budget),
+    arg: (args, budget) => formatMcpArgSummary(args, budget, def.name),
     // Default preview/body: engine bounds the textContent body.
     preview: (output) =>
       output

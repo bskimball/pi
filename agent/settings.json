@@ -4,6 +4,9 @@
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.1",
   "packages": [],
+  "skills": [
+    "../node_modules/pi-mcp-adapter/skills"
+  ],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
