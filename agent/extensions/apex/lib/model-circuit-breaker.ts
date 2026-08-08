@@ -11,12 +11,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { isModelFallbackError, splitQualifiedModel } from "./worker-runtime.ts";
-
-const require = createRequire(import.meta.url);
 
 /** Open the circuit after this many qualifying failures inside the window. */
 export const CIRCUIT_FAILURE_THRESHOLD = 2;
@@ -75,12 +73,9 @@ export interface AttemptDecision {
 }
 
 function defaultStorePath(): string {
-  // Lazy require keeps unit tests free of the full coding-agent package graph
-  // when callers inject `path` (all tests do).
-  const { getAgentDir } = require("@earendil-works/pi-coding-agent") as {
-    getAgentDir: () => string;
-  };
-  return join(getAgentDir(), "harness", "model-circuits.json");
+  const configuredAgentDir = process.env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = configuredAgentDir || join(homedir(), ".pi", "agent");
+  return join(agentDir, "harness", "model-circuits.json");
 }
 
 function emptyStore(): CircuitStoreFile {
