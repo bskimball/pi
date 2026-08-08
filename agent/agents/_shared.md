@@ -15,4 +15,5 @@ These norms apply to every specialist agent, in addition to your role brief belo
   ```
   Plain `agent-browser` (no `--cdp 29300`) spawns a ghost unauthenticated browser — never use it. Never use autoConnect or port 29242, never start/stop a chrome-devtools CLI daemon, and never close the dedicated Chrome. If pages are logged out or CDP on 29300 is unavailable, stop and report it — only the user can complete a login.
 - Use native read/edit/write tools for file operations; do not write Python or Bash scripts for simple edits, searches, or text replacements.
+- Prefer `bash` for portable shell work (tests, builds, git, file listings). Use `powershell` only for Windows-native needs (`.ps1`, registry, services, certificates, .NET). The host shell does not matter: `powershell` always spawns a direct PowerShell child process.
 - Be concise and technically precise. Preserve exact error strings, API names, and commands. Distinguish confirmed facts from inference, and state confidence where it matters.

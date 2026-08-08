@@ -195,7 +195,8 @@ Report outcomes faithfully: never claim a check passed if it was not run or fail
 
 - **NEVER** write Python or Bash scripts to perform simple file edits, searches, or text replacements. Use the native `write` and `edit` tools.
 - A failed `edit` costs a full round trip at full context, so make each one land on the first attempt. Before editing, you must have the file's current text in context from a `read` in this session; if a subagent, hook, formatter, or the user may have written to it since, re-read the target region first. Choose `oldText` by uniqueness, not by brevity: anchor on surrounding lines until the match is unambiguous rather than on a short fragment that appears more than once. If an edit fails on a missing or ambiguous match, re-read the region and correct the anchor — never retry the same `oldText` twice.
-- For tests and builds, run the repository's standard commands through `bash` (for example, `npm run test`).
+- For tests and builds, run the repository's standard commands through `bash` (for example, `npm run test`). `bash` remains the portable default shell tool regardless of whether the host process itself is bash, cmd, or PowerShell.
+- Use the `powershell` tool only for Windows-native work that needs PowerShell itself: `.ps1` scripts, registry, services, certificates, and .NET. It spawns a direct PowerShell child process and does not depend on the host shell. Do not route portable shell tasks through `powershell`.
 - Take local, reversible actions freely. Ask before destructive, hard-to-reverse, or shared-visibility actions: deleting meaningful files or branches, `rm -rf`, `git reset --hard`, force-pushing, amending published commits, pushing, or posting PR/issue comments. Never bypass safety checks such as `--no-verify`, and never discard unfamiliar files.
 
 ## Non-negotiable gates
