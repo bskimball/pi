@@ -15,9 +15,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
-  readSharedFile,
   stderrDiagnostic,
   type AgentDef,
 } from "./lib/agent-discovery.ts";
@@ -55,6 +55,8 @@ import {
   countLiveWorkers,
   hasActiveTools,
   isLiveLifecycle,
+  shouldRetryModelFallback,
+  splitQualifiedModel,
   workerStateLabel,
   type WorkerLifecycle,
   type WorkerPhase,
@@ -191,6 +193,15 @@ interface Worker {
   cwd: string;
   model?: string;
   thinking?: string;
+  initialPrompt: string;
+  modelAttempts: Array<string | undefined>;
+  modelAttemptIndex: number;
+  modelError?: string;
+  modelAttemptUsedTools: boolean;
+  fallbackReplaySafe: boolean;
+  fallbackInProgress: boolean;
+  fallbackAwaitingAgentStart: boolean;
+  fallbackEpoch: number;
   lifecycle: WorkerLifecycle;
   generation: number;
   createdAt: number;
@@ -721,6 +732,9 @@ export default function (pi: ExtensionAPI) {
   };
 
   const abortWorker = async (worker: Worker): Promise<{ cooperative: boolean, settled: boolean }> => {
+    worker.fallbackEpoch += 1;
+    worker.fallbackInProgress = false;
+    worker.fallbackAwaitingAgentStart = false;
     worker.lifecycle = "aborting";
     worker.killReason = worker.killReason ?? "abort requested";
     clearIdle(worker);
@@ -758,6 +772,9 @@ export default function (pi: ExtensionAPI) {
 
   const forceKillWorker = (worker: Worker, reason: string) => {
     if (worker.closed) return;
+    worker.fallbackEpoch += 1;
+    worker.fallbackInProgress = false;
+    worker.fallbackAwaitingAgentStart = false;
     worker.killReason = worker.killReason ?? reason;
     const pid = worker.pid ?? worker.client?.pid;
     if (pid != null) {
@@ -927,6 +944,148 @@ export default function (pi: ExtensionAPI) {
     cleanupMaxWorkers: worker.cleanupMaxWorkers,
   });
 
+  type ModelFallbackResult = "retried" | "exhausted" | "cancelled";
+
+  const retryModelFallback = async (
+    worker: Worker,
+  ): Promise<ModelFallbackResult> => {
+    if (
+      !shouldRetryModelFallback({
+        hasNextAttempt:
+          worker.fallbackReplaySafe &&
+          worker.modelAttemptIndex + 1 < worker.modelAttempts.length,
+        fallbackInProgress: worker.fallbackInProgress,
+        killReason: worker.killReason,
+        resultText: worker.latestResult || worker.latestAssistantText,
+        modelError: worker.modelError,
+        activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
+      }) ||
+      !worker.client ||
+      worker.client.isClosed
+    ) {
+      return "exhausted";
+    }
+
+    const nextIndex = worker.modelAttemptIndex + 1;
+    const nextModel = worker.modelAttempts[nextIndex];
+    const qualified = splitQualifiedModel(nextModel);
+    if (!qualified) {
+      const label = nextModel ?? "default model";
+      worker.modelAttemptIndex = nextIndex;
+      worker.model = label;
+      worker.modelError = `fallback model must be provider-qualified: ${label}`;
+      pushError(worker, worker.modelError);
+      notifySubscribers(worker);
+      if (nextIndex + 1 >= worker.modelAttempts.length) return "exhausted";
+      worker.modelError = "model unavailable";
+      return retryModelFallback(worker);
+    }
+
+    const client = worker.client;
+    const generation = worker.generation;
+    const fallbackEpoch = ++worker.fallbackEpoch;
+    const ownsFallback = () =>
+      !worker.closed &&
+      worker.client === client &&
+      !client.isClosed &&
+      worker.generation === generation &&
+      worker.fallbackEpoch === fallbackEpoch &&
+      worker.fallbackReplaySafe &&
+      !worker.killReason &&
+      worker.lifecycle !== "aborting" &&
+      worker.lifecycle !== "settled" &&
+      worker.lifecycle !== "failed" &&
+      worker.lifecycle !== "closed";
+    const cancelIfOwned = () => {
+      if (worker.fallbackEpoch !== fallbackEpoch) return;
+      worker.fallbackInProgress = false;
+      worker.fallbackAwaitingAgentStart = false;
+      notifySubscribers(worker);
+    };
+
+    worker.fallbackInProgress = true;
+    worker.fallbackAwaitingAgentStart = true;
+    worker.lifecycle = "retrying";
+    clearIdle(worker);
+    closeAllRunning(worker, "error");
+    const previousModel = worker.model ?? "default model";
+    const previousError = worker.modelError ?? "provider/model error";
+    pushError(
+      worker,
+      `${previousModel}: ${previousError}; trying fallback ${nextModel}`,
+    );
+    notifySubscribers(worker);
+
+    try {
+      const fresh = await client.request({ type: "new_session" }, 30_000);
+      if (!ownsFallback()) {
+        cancelIfOwned();
+        return "cancelled";
+      }
+      if (!fresh.success) {
+        throw new Error(fresh.error ?? "new session rejected");
+      }
+      const selected = await client.request(
+        {
+          type: "set_model",
+          provider: qualified.provider,
+          modelId: qualified.modelId,
+        },
+        30_000,
+      );
+      if (!ownsFallback()) {
+        cancelIfOwned();
+        return "cancelled";
+      }
+      if (!selected.success) {
+        throw new Error(selected.error ?? `model unavailable: ${nextModel}`);
+      }
+
+      worker.modelAttemptIndex = nextIndex;
+      worker.model = nextModel;
+      worker.modelError = undefined;
+      worker.modelAttemptUsedTools = false;
+      worker.latestAssistantText = "";
+      worker.latestResult = "";
+      worker.pendingUi.clear();
+      worker.pendingSteer = 0;
+      worker.pendingFollowUp = 0;
+      worker.lifecycle = "running";
+      touch(worker);
+
+      const response = await client.request(
+        { type: "prompt", message: worker.initialPrompt },
+        PROMPT_ACCEPT_TIMEOUT_MS,
+      );
+      if (!ownsFallback()) {
+        cancelIfOwned();
+        return "cancelled";
+      }
+      if (!response.success) {
+        throw new Error(response.error ?? "fallback prompt rejected");
+      }
+      worker.fallbackInProgress = false;
+      armIdle(worker);
+      notifySubscribers(worker);
+      return "retried";
+    } catch (error) {
+      if (!ownsFallback()) {
+        cancelIfOwned();
+        return "cancelled";
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      worker.modelAttemptIndex = nextIndex;
+      worker.model = nextModel;
+      worker.modelError = message;
+      worker.fallbackInProgress = false;
+      worker.lifecycle = "running";
+      pushError(worker, `${nextModel}: fallback setup failed: ${message}`);
+      armIdle(worker);
+      notifySubscribers(worker);
+      return retryModelFallback(worker);
+    }
+  };
+
   const settleGeneration = (
     worker: Worker,
     lifecycle: "settled" | "failed",
@@ -941,6 +1100,9 @@ export default function (pi: ExtensionAPI) {
       // Already settled this generation; ignore stale events.
       return;
     }
+    worker.fallbackEpoch += 1;
+    worker.fallbackInProgress = false;
+    worker.fallbackAwaitingAgentStart = false;
     clearIdle(worker);
     clearAbortTimer(worker);
     closeAllRunning(
@@ -1116,6 +1278,9 @@ export default function (pi: ExtensionAPI) {
 
     switch (type) {
       case "agent_start": {
+        if (worker.fallbackAwaitingAgentStart) {
+          worker.fallbackAwaitingAgentStart = false;
+        }
         if (worker.lifecycle === "starting" || worker.lifecycle === "settled") {
           // New generation may begin after follow-up.
           if (worker.lifecycle === "settled") {
@@ -1140,13 +1305,59 @@ export default function (pi: ExtensionAPI) {
         break;
       }
       case "agent_settled": {
-        // Gate completion notifications on true settlement only.
+        // Gate completion notifications on true settlement only. Clean
+        // provider/model failures advance through the configured model chain
+        // before this generation is exposed as settled.
         if (worker.lifecycle === "aborting") {
           settleGeneration(worker, "settled", {
             killReason: worker.killReason ?? "aborted",
           });
+        } else if (
+          worker.fallbackInProgress ||
+          worker.fallbackAwaitingAgentStart
+        ) {
+          // Session replacement can emit terminal events for the failed
+          // attempt. The fallback controller owns settlement until replay is
+          // accepted and the replacement attempt has actually started.
+          break;
         } else if (worker.lifecycle !== "failed") {
-          settleGeneration(worker, "settled");
+          if (
+            shouldRetryModelFallback({
+              hasNextAttempt:
+                worker.fallbackReplaySafe &&
+                worker.modelAttemptIndex + 1 < worker.modelAttempts.length,
+              fallbackInProgress: worker.fallbackInProgress,
+              killReason: worker.killReason,
+              resultText: worker.latestResult || worker.latestAssistantText,
+              modelError: worker.modelError,
+              activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
+            })
+          ) {
+            void retryModelFallback(worker).then((result) => {
+              if (
+                result === "exhausted" &&
+                worker.lifecycle !== "settled" &&
+                worker.lifecycle !== "failed" &&
+                worker.lifecycle !== "closed"
+              ) {
+                settleGeneration(worker, "failed", {
+                  error:
+                    worker.modelError ??
+                    "configured model fallbacks exhausted",
+                });
+              }
+            });
+          } else if (
+            worker.modelError &&
+            !worker.killReason &&
+            !worker.latestResult &&
+            !worker.latestAssistantText &&
+            !worker.modelAttemptUsedTools
+          ) {
+            settleGeneration(worker, "failed", { error: worker.modelError });
+          } else {
+            settleGeneration(worker, "settled");
+          }
         }
         break;
       }
@@ -1159,6 +1370,7 @@ export default function (pi: ExtensionAPI) {
         break;
       }
       case "tool_execution_start": {
+        worker.modelAttemptUsedTools = true;
         const callId =
           event.toolCallId == null ? undefined : String(event.toolCallId);
         const activity: Activity = {
@@ -1212,10 +1424,11 @@ export default function (pi: ExtensionAPI) {
               worker.latestResult = text;
             }
             if (m.stopReason === "error" || m.errorMessage) {
-              pushError(
-                worker,
-                String(m.errorMessage ?? "provider/model error"),
+              const message = String(
+                m.errorMessage ?? "provider/model error",
               );
+              worker.modelError = message;
+              pushError(worker, message);
             }
           }
         }
@@ -1328,6 +1541,11 @@ export default function (pi: ExtensionAPI) {
     worker.generationSettledAt = undefined;
     worker.turns = 0;
     worker.latestResult = "";
+    worker.modelError = undefined;
+    worker.modelAttemptUsedTools = false;
+    worker.fallbackInProgress = false;
+    worker.fallbackAwaitingAgentStart = false;
+    worker.fallbackEpoch += 1;
     worker.killReason = undefined;
     worker.lifecycle = "running";
     touch(worker);
@@ -1347,7 +1565,6 @@ export default function (pi: ExtensionAPI) {
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
     const attempts = modelAttempts(def, params.model);
-    // v1: use first model only for spawn; fallbacks can be retried on hard fail later.
     const model = attempts[0];
     const modelLabel = model ?? "default model";
 
@@ -1358,6 +1575,14 @@ export default function (pi: ExtensionAPI) {
       cwd: params.cwd,
       model: modelLabel,
       thinking: def.thinking,
+      initialPrompt: params.prompt,
+      modelAttempts: attempts,
+      modelAttemptIndex: 0,
+      modelAttemptUsedTools: false,
+      fallbackReplaySafe: true,
+      fallbackInProgress: false,
+      fallbackAwaitingAgentStart: false,
+      fallbackEpoch: 0,
       lifecycle: "starting",
       generation: 1,
       createdAt: Date.now(),
@@ -1422,14 +1647,16 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean);
       if (tools.length) args.push("--tools", tools.join(","));
     }
-    const sharedPreamble = readSharedFile("_shared.md");
-    // Async workers can receive follow-ups, so they are not strictly fire-and-
-    // forget; still prepend shared norms. Handoff guidance remains useful for
-    // structured final reports.
-    const systemPrompt = [sharedPreamble, def.body].filter(Boolean).join("\n\n");
+    // Async workers support steering/follow-ups and UI requests; load mode-
+    // correct shared norms rather than the fire-and-forget sync preamble.
+    const shared = composeSpecialistSharedPrompts("async");
+    const systemPrompt = [shared.systemPreamble, def.body]
+      .filter(Boolean)
+      .join("\n\n");
     if (systemPrompt) args.push("--system-prompt", systemPrompt);
-    const handoff = readSharedFile("_handoff.md");
-    if (handoff) args.push("--append-system-prompt", handoff);
+    if (shared.appendSystemPrompt) {
+      args.push("--append-system-prompt", shared.appendSystemPrompt);
+    }
 
     let client: RpcClient;
     try {
@@ -1452,6 +1679,9 @@ export default function (pi: ExtensionAPI) {
           clearHard(worker);
           clearAbortTimer(worker);
           if (worker.closed) return;
+          worker.fallbackEpoch += 1;
+          worker.fallbackInProgress = false;
+          worker.fallbackAwaitingAgentStart = false;
           if (
             worker.lifecycle !== "settled" &&
             worker.lifecycle !== "failed" &&
@@ -1495,36 +1725,48 @@ export default function (pi: ExtensionAPI) {
     }, timeoutMs);
     worker.hardTimer.unref?.();
 
-    // Accept the initial prompt before returning the handle.
+    // Accept the initial prompt before returning the handle. Model/provider
+    // preflight failures are eligible for the same configured fallback chain
+    // as failures emitted after agent_start.
     try {
       const response = await client.request(
         { type: "prompt", message: params.prompt },
         PROMPT_ACCEPT_TIMEOUT_MS,
       );
       if (!response.success) {
-        forceKillWorker(worker, `prompt rejected: ${response.error ?? "unknown"}`);
-        worker.countsTowardCap = false;
-        worker.lifecycle = "failed";
-        worker.closed = true;
-        clearHard(worker);
-        clearIdle(worker);
-        try {
-          client.closeStdin();
-        } catch {
-          // ignore
+        const message = response.error ?? "prompt rejected";
+        worker.modelError = message;
+        pushError(worker, message);
+        const fallbackResult = await retryModelFallback(worker);
+        if (fallbackResult !== "retried") {
+          const finalError = worker.modelError ?? message;
+          forceKillWorker(worker, `prompt rejected: ${finalError}`);
+          worker.countsTowardCap = false;
+          worker.lifecycle = "failed";
+          worker.closed = true;
+          clearHard(worker);
+          clearIdle(worker);
+          try {
+            client.closeStdin();
+          } catch {
+            // ignore
+          }
+          return { error: `${id} prompt rejected: ${finalError}` };
         }
-        return {
-          error: `${id} prompt rejected: ${response.error ?? "unknown"}`,
-        };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      forceKillWorker(worker, `prompt accept failed: ${message}`);
-      worker.countsTowardCap = false;
-      worker.lifecycle = "failed";
+      worker.modelError = message;
       pushError(worker, message);
-      // Leave metadata for diagnosis; process will exit via kill.
-      return { error: `${id} failed to accept prompt: ${message}` };
+      const fallbackResult = await retryModelFallback(worker);
+      if (fallbackResult !== "retried") {
+        const finalError = worker.modelError ?? message;
+        forceKillWorker(worker, `prompt accept failed: ${finalError}`);
+        worker.countsTowardCap = false;
+        worker.lifecycle = "failed";
+        // Leave metadata for diagnosis; process will exit via kill.
+        return { error: `${id} failed to accept prompt: ${finalError}` };
+      }
     }
 
     // Best-effort state fetch for session id (non-blocking for the caller —
@@ -1567,6 +1809,9 @@ export default function (pi: ExtensionAPI) {
     // final child row in place. Normal close is a successful completion, not a
     // failure or a separate detached receipt.
     if (worker.hasPinnedSurface) worker.pinnedLifecycle = worker.lifecycle;
+    worker.fallbackEpoch += 1;
+    worker.fallbackInProgress = false;
+    worker.fallbackAwaitingAgentStart = false;
     worker.closed = true;
     worker.lifecycle = "closed";
     worker.countsTowardCap = false;
@@ -2055,6 +2300,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           );
         }
         try {
+          worker.initialPrompt = message;
+          worker.fallbackReplaySafe = true;
           startGeneration(worker);
           const response = await worker.client.request(
             { type: "prompt", message },
@@ -2111,6 +2358,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             }
           }
           worker.pendingSteer += 1;
+          worker.fallbackReplaySafe = false;
+          worker.modelError = undefined;
+          worker.fallbackEpoch += 1;
+          worker.fallbackInProgress = false;
+          worker.fallbackAwaitingAgentStart = false;
+          if (worker.lifecycle === "retrying") worker.lifecycle = "running";
+          armIdle(worker);
           return textResult(
             [
               `${id} steer queued.`,
@@ -2152,6 +2406,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           }
         }
         worker.pendingFollowUp += 1;
+        worker.fallbackReplaySafe = false;
+        worker.modelError = undefined;
+        worker.fallbackEpoch += 1;
+        worker.fallbackInProgress = false;
+        worker.fallbackAwaitingAgentStart = false;
+        if (worker.lifecycle === "retrying") worker.lifecycle = "running";
+        armIdle(worker);
         return textResult(
           [
             `${id} follow_up queued.`,

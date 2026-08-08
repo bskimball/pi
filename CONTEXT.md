@@ -36,7 +36,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 - Canonical discovery: `lib/agent-discovery.ts`.
 - Directories: `getAgentDir()/agents` (global) and `process.cwd()/.pi/agents` (project override; later wins on name).
 - Frontmatter → `AgentDef` (model, fallbacks, thinking, tools, turns, timeout, skills, body).
-- Shared files: `_shared.md` (preamble), `_handoff.md` (subagent append); project overrides global.
+- Shared files: `_shared.md` (common preamble), `_shared-sync.md` / `_shared-async.md` (worker-mode semantics), `_handoff.md` (visible final-report requirement); project overrides global independently per file.
 - `modelAttempts(def, override?)` builds the try chain; empty chain returns `[undefined]` so a default-model attempt still runs.
 - Theme agent hues stay in amp-task (presentation of badges), not the catalog.
 

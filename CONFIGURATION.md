@@ -11,7 +11,7 @@ config/markdown formats used in this repo. Two kinds of format are covered:
   (`agent/extensions/*.ts`) and not part of upstream Pi. Documented here in
   full, sourced directly from the implementation.
 
-Installed package version: `@earendil-works/pi-coding-agent@0.82.1` (see
+Installed package version: `@earendil-works/pi-coding-agent@0.84.1` (see
 `package.json`). Upstream docs can drift between versions; when in doubt, read
 `node_modules/@earendil-works/pi-coding-agent/docs/*.md` directly.
 
@@ -334,8 +334,8 @@ This repo's tracked `agent/settings.json` sets: `defaultModel`,
 - Project: `<cwd>/.pi/agents/*.md`
 
 Files starting with `_` are excluded from discovery (`_shared.md`,
-`_handoff.md` here) — they are shared text injected by convention, not agent
-definitions.
+`_shared-sync.md`, `_shared-async.md`, and `_handoff.md` here) — they are shared
+text injected by convention, not agent definitions.
 
 **Format:** YAML-like frontmatter block (`---\n...\n---`) parsed with regex
 (not a real YAML parser — see caveats below), followed by the system-prompt
@@ -389,10 +389,13 @@ stripped.
 
 ### Shared files
 
-`_shared.md` is prepended as a preamble to every agent's system prompt (project
-copy overrides global if both exist); `_handoff.md` is appended for subagent
-runs specifically. See `agent/agents/_shared.md` / `_handoff.md` for current
-content — both are plain markdown, no frontmatter.
+`_shared.md` contains common specialist norms. The task implementation then
+prepends one mode-specific fragment: `_shared-sync.md` for fire-and-forget
+synchronous `task` workers, or `_shared-async.md` for persistent RPC workers
+that support steering, follow-ups, and UI requests. `_handoff.md` is appended
+for both modes and requires a non-empty visible final report for the current
+generation. Project copies override global copies independently per file.
+All four files are plain Markdown with no frontmatter.
 
 ---
 
@@ -518,11 +521,12 @@ inside `mcp-adapter.ts` (see the mcp.json section above for why).
 
 ---
 
-## Do not modify
+## Runtime and generated data
 
-This file documents but does not change: `agent/auth.json`, `agent/mcp.json`,
-`agent/models.json`, `web-search.json`, `agent/sessions/`,
-`agent/run-history.jsonl`, `agent/models-store.json`, `agent/mcp-cache.json`,
-`agent/mcp-npx-cache.json`, `agent/trust.json`, `exa-usage.json`, `.tmp/`,
-`node_modules/`, and `reference/`. All remain exactly as they were before this
-change.
+Avoid editing runtime/generated state during ordinary configuration work:
+`agent/sessions/`, `agent/run-history.jsonl`, `agent/models-store.json`,
+`agent/mcp-cache.json`, `agent/mcp-npx-cache.json`, `agent/trust.json`,
+`exa-usage.json`, `.tmp/`, `node_modules/`, and `reference/`. Credential-bearing
+active configs such as `agent/auth.json`, `agent/mcp.json`, `agent/models.json`,
+and `web-search.json` may be edited intentionally when changing local setup,
+but remain gitignored and must never be copied into tracked examples.

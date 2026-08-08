@@ -241,6 +241,10 @@ export function buildTodoList(
 export interface TodoListOptions {
   /** Expanded surfaces get more rows and let the active item wrap. */
   expanded?: boolean;
+  /** Render only the header, for a docked panel that has been collapsed. */
+  collapsed?: boolean;
+  /** Optional key/command hint appended to the header's right side. */
+  toggleHint?: string;
   /** Left inset matching the transcript's configured outputPad. */
   pad?: number;
   /** Actionable follow-up shown only when the list is empty. */
@@ -356,10 +360,18 @@ export function renderTodoList(
   // 5 is a minimum column, not a cap: `198/200` must never clip to `198/2`.
   const tallyText = `${view.done}/${view.total}`;
   const tally = padStartToWidth(tallyText, Math.max(5, tallyText.length));
-  const right = [progressRail(theme, view.done, view.total, track), theme.fg("dim", tally)]
+  const toggleHint = options.toggleHint
+    ? theme.fg("dim", `${options.collapsed ? "\u25b8" : "\u25be"} ${options.toggleHint}`)
+    : "";
+  const right = [
+    progressRail(theme, view.done, view.total, track),
+    theme.fg("dim", tally),
+    toggleHint,
+  ]
     .filter(Boolean)
     .join(" ");
   const header = fitLine(headerLeft, right, inner);
+  if (options.collapsed) return emit([header]);
 
   const limit = expanded ? ROWS_EXPANDED : ROWS_COLLAPSED;
   const { start, end } = windowFor(view.total, limit, view.anchorIndex);

@@ -7,7 +7,10 @@
 
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   buildTodoList,
   renderTodoList,
@@ -145,6 +148,80 @@ function todoFallbackLines(
 export default function (pi: ExtensionAPI) {
   /** Current plan for this process/session. Each successful write replaces it. */
   let current: TodoListView | undefined;
+  let currentCtx: ExtensionContext | undefined;
+  let panelCollapsed = false;
+  const PANEL_KEY = "todo-list";
+  const TOGGLE_HINT = "alt+t";
+
+  function clearPanel(): void {
+    const ctx = currentCtx;
+    currentCtx = undefined;
+    if (!ctx?.hasUI || ctx.mode !== "tui") return;
+    try {
+      ctx.ui.setWidget(PANEL_KEY, undefined);
+    } catch {
+      // UI teardown must not interrupt a session transition.
+    }
+  }
+
+  function renderPanel(): void {
+    const ctx = currentCtx;
+    if (!ctx?.hasUI || ctx.mode !== "tui" || !current) return;
+    try {
+      ctx.ui.setWidget(
+        PANEL_KEY,
+        (_tui, theme) =>
+          new WidthText(
+            (width) =>
+              renderTodoList(theme, width, current!, {
+                collapsed: panelCollapsed,
+                toggleHint: TOGGLE_HINT,
+              }),
+            "[todo panel unavailable]",
+          ),
+        { placement: "aboveEditor" },
+      );
+    } catch {
+      // The transcript receipt remains available if the dock cannot be mounted.
+    }
+  }
+
+  pi.on("session_start", (_event, ctx) => {
+    clearPanel();
+    current = undefined;
+    panelCollapsed = false;
+    currentCtx = ctx;
+  });
+  pi.on("session_shutdown", () => {
+    clearPanel();
+    current = undefined;
+  });
+
+  pi.registerShortcut("alt+t", {
+    description: "Collapse or expand the todo panel",
+    handler: (ctx) => {
+      currentCtx = ctx;
+      if (!current) {
+        ctx.ui.notify("No todo list for this session yet.", "info");
+        return;
+      }
+      panelCollapsed = !panelCollapsed;
+      renderPanel();
+    },
+  });
+
+  pi.registerCommand("todos", {
+    description: "Collapse or expand the todo panel above the input",
+    handler: async (_args, ctx) => {
+      currentCtx = ctx;
+      if (!current) {
+        ctx.ui.notify("No todo list for this session yet.", "info");
+        return;
+      }
+      panelCollapsed = !panelCollapsed;
+      renderPanel();
+    },
+  });
 
   pi.registerTool({
     name: "todo_write",
@@ -228,13 +305,17 @@ export default function (pi: ExtensionAPI) {
             isError,
           );
         }
+        // In the interactive TUI the dock above the editor is the canonical
+        // todo surface. Keep successful writes out of the transcript so the
+        // same list is not shown twice; non-TUI modes retain the receipt.
+        if (currentCtx?.mode === "tui") return [];
         return renderTodoList(theme, width, view, {
           expanded: context.expanded || options.expanded,
           emptyHint: "todo_write to start a plan",
         });
       }, "[todo_write result unavailable]");
     },
-    async execute(_toolCallId, params: TodoWriteParams) {
+    async execute(_toolCallId, params: TodoWriteParams, _signal, _onUpdate, ctx) {
       const todos = Array.isArray(params?.todos) ? params.todos : [];
       if (todos.length === 0) {
         const message =
@@ -259,6 +340,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       current = view;
+      currentCtx = ctx;
+      renderPanel();
       return textResult(summarize(current), false, { view: current });
     },
   });
@@ -299,6 +382,7 @@ export default function (pi: ExtensionAPI) {
             }),
           ];
         }
+        if (currentCtx?.mode === "tui") return [];
         return renderTodoList(theme, width, view, {
           expanded: context.expanded || options.expanded,
           emptyHint: "todo_write to start a plan",

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -90,12 +91,33 @@ connection.listen();
 `;
 }
 
+async function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      once(child, "exit"),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("mock server did not exit"));
+        }, 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 describe("mock JSON-RPC lifecycle", () => {
   it("initialize, definition, and empty-then-filled diagnostics", async () => {
     const child = spawn(
       process.execPath,
       ["--input-type=module", "-e", mockServerScript()],
-      { stdio: ["pipe", "pipe", "pipe"] },
+      {
+        cwd: fileURLToPath(new URL("../", import.meta.url)),
+        stdio: ["pipe", "pipe", "pipe"],
+      },
     );
 
     const connection = createMessageConnection(
@@ -112,58 +134,59 @@ describe("mock JSON-RPC lifecycle", () => {
     });
     connection.listen();
 
-    const init = await connection.sendRequest("initialize", {
-      processId: process.pid,
-      rootUri: "file:///tmp/mock",
-      capabilities: {
-        workspace: { configuration: true },
-        textDocument: { publishDiagnostics: {} },
-      },
-    }) as { capabilities?: { definitionProvider?: boolean } };
+    try {
+      const init = await connection.sendRequest("initialize", {
+        processId: process.pid,
+        rootUri: "file:///tmp/mock",
+        capabilities: {
+          workspace: { configuration: true },
+          textDocument: { publishDiagnostics: {} },
+        },
+      }) as { capabilities?: { definitionProvider?: boolean } };
 
-    assert.equal(init.capabilities?.definitionProvider, true);
-    await connection.sendNotification("initialized", {});
+      assert.equal(init.capabilities?.definitionProvider, true);
+      await connection.sendNotification("initialized", {});
 
-    await connection.sendNotification("textDocument/didOpen", {
-      textDocument: {
-        uri: "file:///tmp/mock/a.ts",
-        languageId: "typescript",
-        version: 1,
-        text: "const x = 1;\n",
-      },
-    });
+      await connection.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri: "file:///tmp/mock/a.ts",
+          languageId: "typescript",
+          version: 1,
+          text: "const x = 1;\n",
+        },
+      });
 
-    const def = await connection.sendRequest("textDocument/definition", {
-      textDocument: { uri: "file:///tmp/mock/a.ts" },
-      position: { line: 0, character: 6 },
-    }) as { range: { start: { line: number } } };
-    assert.equal(def.range.start.line, 2);
+      const def = await connection.sendRequest("textDocument/definition", {
+        textDocument: { uri: "file:///tmp/mock/a.ts" },
+        position: { line: 0, character: 6 },
+      }) as { range: { start: { line: number } } };
+      assert.equal(def.range.start.line, 2);
 
-    // Wait for both publishes
-    const deadline = Date.now() + 2_000;
-    while (diagnostics.length < 2 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    assert.ok(diagnostics.length >= 2, `expected >=2 publishes, got ${diagnostics.length}`);
-    assert.equal((diagnostics[0].diagnostics as unknown[]).length, 0);
-    assert.equal((diagnostics[1].diagnostics as unknown[]).length, 1);
+      // Wait for both publishes
+      const deadline = Date.now() + 2_000;
+      while (diagnostics.length < 2 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.ok(diagnostics.length >= 2, `expected >=2 publishes, got ${diagnostics.length}`);
+      assert.equal((diagnostics[0].diagnostics as unknown[]).length, 0);
+      assert.equal((diagnostics[1].diagnostics as unknown[]).length, 1);
 
-    const hover = await connection.sendRequest("textDocument/hover", {
-      textDocument: { uri: "file:///tmp/mock/a.ts" },
-      position: { line: 0, character: 0 },
-    }) as { contents: { value: string } };
-    assert.match(hover.contents.value, /mock hover/);
+      const hover = await connection.sendRequest("textDocument/hover", {
+        textDocument: { uri: "file:///tmp/mock/a.ts" },
+        position: { line: 0, character: 0 },
+      }) as { contents: { value: string } };
+      assert.match(hover.contents.value, /mock hover/);
 
-    await connection.sendRequest("shutdown", null);
-    await connection.sendNotification("exit");
-    connection.dispose();
-    await Promise.race([
-      once(child, "exit"),
-      new Promise((_, reject) => setTimeout(() => {
+      await connection.sendRequest("shutdown", null);
+      await connection.sendNotification("exit");
+      await waitForChildExit(child);
+    } finally {
+      connection.dispose();
+      if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
-        reject(new Error("mock server did not exit"));
-      }, 2_000)),
-    ]);
+        await waitForChildExit(child).catch(() => {});
+      }
+    }
   });
 
   it("resolveSpawnCommand wraps Windows cmd scripts", () => {
