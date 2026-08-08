@@ -74,6 +74,7 @@ const ansiFg = (hex: string, text: string) => {
 const DEFAULT_AGENT_HUES: Record<string, string> = {
   advisor: "#39c5cf",
   artisan: "#d2a8ff",
+  inspector: "#58a6ff",
   librarian: "#79c0ff",
   machinist: "#7ee787",
   oracle: "#bc8cff",
@@ -551,7 +552,7 @@ export default function (pi: ExtensionAPI) {
 
   const TaskParams = Type.Object({
     agent: Type.String({
-      description: `Agent to run. One of: ${[...agents.keys()].join(", ")}. Route UI/frontend/styling/layout work to artisan; non-visual code to machinist.`,
+      description: `Agent to run. One of: ${[...agents.keys()].join(", ")}. Route UI/frontend/styling/layout implementation to artisan; routine read-only browser/screenshot verification to inspector; non-visual code to machinist.`,
     }),
     prompt: Type.String({
       description:

@@ -40,7 +40,8 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | Agent | Role |
 | --- | --- |
 | `advisor` | Strategic planner consulted before consequential approaches, when stuck, or when changing direction. Advisory only. |
-| `artisan` | Bold visual-design and frontend specialist for substantial UI work, diagrams, slides, data visualization, and polished human-facing artifacts. |
+| `artisan` | Bold visual-design and frontend specialist for substantial UI implementation, design judgment, exploratory refinement, diagrams, slides, and data visualization. |
+| `inspector` | Fast, cheap read-only UI verifier for bounded browser interaction, responsive checks, screenshots, and focused visual regression analysis after implementation. |
 | `librarian` | Remote source-code researcher for external libraries, framework internals, and cross-repository investigation. |
 | `machinist` | Workhorse coding specialist for large implementation chunks, backend logic, refactors, migrations, bug fixes, and tests. |
 | `oracle` | Deep independent code reviewer and debugger for difficult bugs, conflicting evidence, and high-stakes decisions. |
@@ -73,7 +74,7 @@ No extensions are currently loaded as npm packages; `agent/settings.json` `packa
 
 `/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
-`/orchestrate [on|off]` is also native, registered by the same extension: it toggles a **sticky strict-orchestrator mode**. While on, every turn's system prompt gets an appended block (via `before_agent_start`) that revokes the lead's inline allowance — no self-written edits (machinist/artisan own all implementation), no broad self-reading (scout owns discovery), mandatory fresh-eyes review, and the non-negotiable gates with zero inline exemptions. The toggle persists across session resume via a custom session entry and shows an `orchestrator` footer status while active. A one-shot prompt template couldn't do this because template expansion only rides on a single message.
+`/orchestrate [on|off]` is also native, registered by the same extension: it toggles a **sticky strict-orchestrator mode**. While on, every turn's system prompt gets an appended block (via `before_agent_start`) that revokes the lead's inline allowance — no self-written edits (machinist/artisan own all implementation), no broad self-reading (scout owns discovery), routine post-implementation browser and screenshot verification goes to the read-only inspector, mandatory fresh-eyes review, and the non-negotiable gates with zero inline exemptions. Artisan remains responsible when verification requires design judgment, exploratory refinement, or implementation changes. The toggle persists across session resume via a custom session entry and shows an `orchestrator` footer status while active. A one-shot prompt template couldn't do this because template expansion only rides on a single message.
 
 `agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
 

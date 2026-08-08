@@ -33,7 +33,7 @@ The user has switched this session into strict orchestrator mode. This overrides
 - Every task meeting the todo threshold gets a \`todo_write\` plan before the first dispatch, with one item per delegable unit.
 - Prefer \`task_start\` and keep useful lead work going while specialists run; parallelize independent read-only units, serialize writers per worktree, and \`task_close\` finished workers.
 - Every implementation diff gets a fresh-eyes review — oracle for risky, tricky, or multi-file work; a fresh reviewing agent otherwise. The implementer's self-review never closes a unit.
-- Verification is yours to own: run the combined validation yourself or delegate a fresh verification pass and inspect its result before reporting done.
+- Verification is yours to own: run the combined validation yourself or delegate a fresh verification pass and inspect its result before reporting done. Route routine read-only browser and screenshot checks after UI changes to inspector; use artisan when verification requires design judgment, exploratory refinement, or implementation changes.
 - Consult advisor before consequential approach choices or when specialists return conflicting findings; use librarian when a unit depends on external/dependency internals.
 
 The non-negotiable gates apply with zero inline exemptions: in this mode "tiny task" is not a reason to skip delegation. If a unit truly cannot be delegated (credentials, interactive auth, user-only decisions), surface it to the user instead of doing it silently.`;

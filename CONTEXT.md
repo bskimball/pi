@@ -38,6 +38,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 - Frontmatter → `AgentDef` (model, fallbacks, thinking, tools, turns, timeout, skills, body).
 - Shared files: `_shared.md` (common preamble), `_shared-sync.md` / `_shared-async.md` (worker-mode semantics), `_handoff.md` (visible final-report requirement); project overrides global independently per file.
 - `modelAttempts(def, override?)` builds the try chain; empty chain returns `[undefined]` so a default-model attempt still runs.
+- Role boundary: `artisan` owns substantial UI implementation and design judgment; `inspector` is the cheap, read-only post-implementation verifier for bounded browser, viewport, interaction, screenshot, and visual-regression checks.
 - Theme agent hues stay in amp-task (presentation of badges), not the catalog.
 
 ## Task: sync vs async

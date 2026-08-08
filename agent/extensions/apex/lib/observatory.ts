@@ -94,6 +94,7 @@ const PREFERRED = [
 /** Specialist preference order on a blank page. */
 const PREFERRED_AGENTS = [
   "scout",
+  "inspector",
   "advisor",
   "machinist",
   "artisan",
