@@ -2516,6 +2516,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const pending = finiteNumber(
         send.mode === "follow_up" ? send.pendingFollowUp : send.pendingSteer,
       );
+      const sentMessage = safeLine(send.message, 400);
+      const outcomeNote = safeLine(send.note, 200);
+      const showSentMessage = ["accepted", "delivered", "queued"].includes(outcome);
       return controlLines(
         theme,
         width,
@@ -2531,8 +2534,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           ]),
           kind: outcomeKind(outcome),
           label: outcome,
-          message: safeLine(send.note, 200) || undefined,
-          notes: expanded ? tailLines(send.message, 3, 200) : [],
+          message:
+            showSentMessage && sentMessage
+              ? `sent: ${sentMessage}`
+              : outcomeNote || undefined,
+          notes: showSentMessage
+            ? outcomeNote
+              ? [outcomeNote]
+              : []
+            : expanded
+              ? tailLines(send.message, 3, 200)
+              : [],
         },
         expanded,
       );
@@ -2782,16 +2794,40 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
       if (pinned?.hasPinnedSurface) {
         // Timeout/validation failures are control outcomes the worker card
-        // cannot express, so retain one compact diagnostic line. It is a
-        // detached annotation, not a child of the frozen work card, so it
-        // must not claim that card's terminal `╰─` nor sit at the child
-        // indent. It starts in the glyph column like any other receipt row.
-        return new WidthText((width) => [
-          safeTruncateToWidth(
-            `${theme.fg(isError ? "error" : "warning", isError ? "×" : "!")} ${theme.fg(isError ? "error" : "warning", cleanOneLine(resultText, 240))}`,
+        // cannot express. Render them as receipts rather than detached alert
+        // text so a routine wait timeout does not look like a warning.
+        if (isTimeout && !isError) {
+          const timeout = finiteNumber(context.args?.timeoutSec) ?? 600;
+          return new WidthText((width) => [
+            receiptHeader(theme, width, {
+              tool: "task_wait",
+              id: waitId,
+              subject: `wait ended after ${timeout}s`,
+              meta: metaText([
+                safeLine(view?.lifecycle, 20) || undefined,
+                view ? `gen ${view.generation}` : undefined,
+                "worker continues",
+              ]),
+              kind: "waiting",
+              label: "still running",
+              rootGlyph: TREE.receipt,
+            }),
+          ]);
+        }
+        return new WidthText((width) =>
+          controlLines(
+            theme,
             width,
+            "task_wait",
+            {
+              id: waitId,
+              operation: "failed",
+              kind: "failed",
+              message: cleanOneLine(resultText, 240),
+            },
+            options.expanded,
           ),
-        ]);
+        );
       }
       if (!view) return new WidthText(() => [resultText || "(no output)"]);
       const waiting = Boolean((result.details as { waiting?: boolean })?.waiting);
