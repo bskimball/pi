@@ -10,7 +10,7 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, web search, MCP presentation, background-process management, a custom "Apex" TUI presentation layer, and crash logging.
-- **Slash commands and prompt templates** — native `/browser` and `/deploy` commands are registered by `agent/extensions/prompt-commands.ts`; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
+- **Slash commands and prompt templates** — native [`/orchestrate`](#orchestrate) switches the lead into sticky, delegation-only mode, while `/browser` and `/deploy` handle browser automation and full-worktree shipping; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for image generation and background processes.
 - **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
@@ -62,22 +62,31 @@ Custom TUI and orchestration extensions live in `agent/extensions/`:
 - **`web-search.ts`** — provides native Exa web search and page fetching tools (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
 - **`prompt-commands.ts`** — registers the native `/browser` and `/deploy` slash commands directly via `pi.registerCommand()`, without external plugins. It does not register or discover Markdown prompt templates; those are handled by upstream Pi's own prompt-template loading (see [Slash commands](#slash-commands)).
 - **`mcp-adapter.ts`** — composes Apex's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
-- **`codex-conversion.ts`** — composes Apex's Codex presentation (`apex/lib/codex-presentation.ts`) with the lockfile-resolved `@howaboua/pi-codex-conversion` package on one `ExtensionAPI`, giving the Codex tools (`exec_command`, `write_stdin`, `apply_patch`, `view_image`, `web_run`, `imagegen`) stable Apex receipt chrome. The package is installed under `agent/npm/node_modules` and stays out of `agent/settings.json` packages — same-API composition as `mcp-adapter.ts`, since loading it a second way would register a duplicate, unwrapped instance. Optional `web_run`/`imagegen` and the beta Code Mode `exec`/`wait` tools are disabled; see [CONFIGURATION.md](CONFIGURATION.md#agentpi-codex-conversionjson-third-party-package).
 - **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
 - **`todo-list.ts`** — the session plan (`todo_write`, `todo_read`). `todo_write` replaces the whole list on each call and enforces at most one `in_progress` item; statuses are `pending`, `in_progress`, `blocked`, `completed`, `cancelled`. `blocked` marks work waiting on a user decision, another agent, or an external service: it stays open and never counts toward done, and the collapsed view anchors on it when nothing is in progress so the only open item can't hide behind completed rows. `todo_read` returns a bounded serialization of every item — status, exact content text, and note — so the plan and its exact wording survive compaction; items are addressed by content text, not by id. Scoped to the lead agent: specialists run non-interactively and report once, and no agent definition grants them these tools. The threshold for writing a plan lives in `agent/SYSTEM.md`. Render behavior is guarded by `agent/extensions/apex/lib/todo-list-preview.mjs` (run it with `node --experimental-transform-types`).
 - **`continual-memory.ts`** — small evidence-backed durable notes outside the chat (`memory_list`, `memory_write`). Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Session-local entries resume via custom session entries; global entries live under `agent/harness/global.json` (gitignored). Injected as a compact overview each turn via `before_agent_start`. Manual only — never rewrites `SYSTEM.md`.
 - **`crash-logger.ts`** — records fatal JavaScript/stream errors and nonzero exits to `agent/pi-crash.log`, distinguishing main and sub-agent processes. Routine shutdowns and exit code zero are ignored; at 1 MiB the complete active log is atomically renamed, with one rotated generation retained.
 - **`lsp/`** — a single on-demand `lsp` tool for semantic navigation (`definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `diagnostics`, `read_symbol`) backed by language servers already on `PATH` (TypeScript/JavaScript, Python, Go, PHP). It never installs servers and runs no always-on analysis; servers spawn per session and are disposed on `session_shutdown`. Bare commands resolve on `PATH` only — never from the project directory — so an untrusted repo can't inject a binary. Optional config at `agent/lsp.json` or a trusted `.pi/lsp.json`.
 
-No extensions are currently loaded as npm packages; `agent/settings.json` `packages` is empty. Both third-party dependencies used here — `pi-mcp-adapter` and the lockfile-resolved `@howaboua/pi-codex-conversion` — are composed locally instead, one per same-API entry point (`mcp-adapter.ts`, `codex-conversion.ts`), so they are not absent, just not package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
+No extensions are currently loaded as npm packages; `agent/settings.json` `packages` is empty. The third-party MCP dependency used here — `pi-mcp-adapter` — is composed locally via `mcp-adapter.ts` instead, so it is not absent, just not package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
 
 ## Slash commands
 
 `/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
-`/orchestrate [on|off]` is also native, registered by the same extension: it toggles a **sticky strict-orchestrator mode**. While on, every turn's system prompt gets an appended block (via `before_agent_start`) that revokes the lead's inline allowance — no self-written edits (machinist/artisan own all implementation), no broad self-reading (scout owns discovery), routine post-implementation browser and screenshot verification goes to the read-only inspector, mandatory fresh-eyes review, and the non-negotiable gates with zero inline exemptions. Artisan remains responsible when verification requires design judgment, exploratory refinement, or implementation changes. The toggle persists across session resume via a custom session entry and shows an `orchestrator` footer status while active. A one-shot prompt template couldn't do this because template expansion only rides on a single message.
-
 `agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
+
+### `/orchestrate`
+
+Switches the current session between the default inline-capable lead and a **strict orchestrator** that delegates all detailed work to sub-agents. With orchestration on, the lead still decomposes the request, writes work orders, integrates results, verifies the outcome, and answers the user, but it does not edit files or perform broad implementation work itself.
+
+```text
+/orchestrate on       # enable strict delegation
+/orchestrate off      # restore the normal inline allowance
+/orchestrate          # toggle the current mode
+```
+
+Strict mode routes implementation to Machinist or Artisan, broad discovery to Scout, and routine post-implementation browser verification to Inspector. It also requires fresh-eyes review and applies the normal delivery gates without inline exemptions. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
 
 ### `/browser`
 
@@ -155,7 +164,6 @@ Copying an example is a starting point, not a drop-in config: placeholders need 
 
    ```bash
    npm install
-   npm install --prefix agent/npm
    ```
 
 3. Restore the ignored local configuration files from their tracked examples (see [CONFIGURATION.md](CONFIGURATION.md) for field details):
