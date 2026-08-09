@@ -324,14 +324,16 @@ wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
 (`gpt-5.6-sol`, provider-local id), `defaultProvider` (`openai-codex`),
-`defaultThinkingLevel`, `lastChangelogVersion`, `packages`
-(`npm:@howaboua/pi-codex-conversion@3.0.12` for the Codex structured-tool adapter;
-MCP is still loaded directly by `mcp-adapter.ts`, not via `packages` — see the
-mcp.json section above), `skills` (registers the `pi-mcp-adapter` bundled skill
-directory so `mcp-scripting` is discoverable without loading the adapter twice),
-`steeringMode`, `transport`, `terminal.showTerminalProgress`, `editorPaddingX`,
-`theme`, `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
-`openai-codex/*` and other providers for compatibility).
+`defaultThinkingLevel`, `lastChangelogVersion`, `packages` (empty — both
+third-party dependencies used here are composed locally instead of loaded
+from this array: MCP by `mcp-adapter.ts`, and the Codex structured-tool
+adapter by `agent/extensions/codex-conversion.ts`; see the mcp.json section
+above and the pi-codex-conversion.json section below for why), `skills`
+(registers the `pi-mcp-adapter` bundled skill directory so `mcp-scripting` is
+discoverable without loading the adapter twice), `steeringMode`, `transport`,
+`terminal.showTerminalProgress`, `editorPaddingX`, `theme`, `tuiMode`, and
+`enabledModels` (keeps `local-proxy/*` plus `openai-codex/*` and other
+providers for compatibility).
 
 Active GPT subagent routes use OAuth-backed `openai-codex`
 (`openai-codex/gpt-5.6-luna`, `openai-codex/gpt-5.6-sol`). Non-GPT agent models
@@ -346,8 +348,20 @@ flow; this repo does not store provider secrets in tracked settings).
 
 ## `agent/pi-codex-conversion.json` (third-party package)
 
-**Package:** `npm:@howaboua/pi-codex-conversion@3.0.12` (installed via
-`agent/settings.json` `packages`, currently 3.0.12 under `agent/npm/`).
+**Package:** `@howaboua/pi-codex-conversion`, declared as `^3.0.12` in
+`agent/npm/package.json`, resolved to 3.0.12 by `agent/npm/package-lock.json`,
+and installed under `agent/npm/node_modules` — **not** via
+`agent/settings.json` `packages` (that array is empty). It is booted by
+`agent/extensions/codex-conversion.ts`, which imports the pinned dist entry by
+relative path and calls it on the same `ExtensionAPI` instance that
+`installCodexPresentation()` (`agent/extensions/apex/lib/codex-presentation.ts`)
+patches first. This same-API composition is required for the same reason as
+`mcp-adapter.ts`/`pi-mcp-adapter`: each Pi extension gets its own
+`ExtensionAPI`/tool map, so Apex's receipt wrapper can only intercept
+`registerTool` calls made on the instance it patched. Loading the package a
+second way (e.g. adding it back to `packages`) would register a second,
+unwrapped instance of its tools — duplicate registration, not just missing
+presentation — so the `packages` entry must stay removed.
 Authoritative field schema:
 `agent/npm/node_modules/@howaboua/pi-codex-conversion/src/adapter/activation/config.ts`
 (`CodexConversionConfig` / `DEFAULT_CODEX_CONVERSION_CONFIG`). Settings UI:
@@ -388,11 +402,26 @@ the structured Codex tool conversion (`exec_command`, `write_stdin`,
 `apply_patch`, …). Status and background-shell presentation are owned by Apex
 on this Windows TUI setup to avoid overlapping third-party UI risk.
 
+**Receipt ownership:** independently of `ui.toolRenaming`, tools the package
+registers under the exact names `exec_command`, `write_stdin`, `apply_patch`,
+`view_image`, `web_run`, `imagegen` are wrapped with stable Apex receipt chrome
+by `installCodexPresentation()` (`agent/extensions/apex/lib/codex-presentation.ts`)
+unless a definition sets `renderShell: "self"` (none do today).
+`ui.toolRenaming: false` above only disables the package's own optional
+transcript rendering; it does not gate the Apex wrapper. Currently active
+tools: `exec_command`, `write_stdin`, `apply_patch`, `view_image`. Currently
+config-disabled tools: `web_run` and `imagegen`, controlled by `tools.webRun`
+and `tools.imageGeneration`; their names stay in the presentation allowlist so
+they render correctly if re-enabled. The beta Code
+Mode `exec`/`wait` tools (`beta.codeMode: false`) are a separate dormant
+surface, outside this wrapper entirely.
+
 Non-core Pi tools (MCP via `mcp-adapter.ts`, skills, Apex task tooling, local
 extensions) remain available on non-GPT routes and outside adapter replacement
-boundaries. After editing this file, `/reload` (or a new session) is required
-for keybind-sensitive changes; ordinary config reloads follow the package's
-normal load path.
+boundaries. Direct edits to this file take effect after `/reload` or in a new
+session. Changes made through `/codex` are applied by the package in the
+current session, except shortcut changes, which require `/reload` or a new
+session because keybindings are registered at startup.
 
 ---
 
@@ -579,24 +608,27 @@ custom tools/commands/shortcuts, and extension loading/discovery rules. Not
 reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
-`mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
-`crash-logger.ts`, `todo-list.ts`, `continual-memory.ts`, `read-guard.ts`),
-`agent/extensions/lsp/` and `agent/extensions/apex/` (directory-style extensions:
-`apex-ui.ts`, `amp-task.ts`, `async-task.ts` plus a shared `lib/` of helper
-modules that are imported directly rather than loaded as separate
-extensions). See `CONTEXT.md` for the local architecture (seams, tool
-receipts, agent catalog, sync-vs-async task tools, Apex UI stability rules) —
-that file documents *how these extensions are built*, complementary to this
-file's focus on *config/markdown parameter shapes*.
+`mcp-adapter.ts`, `codex-conversion.ts`, `web-search.ts`, `prompt-commands.ts`,
+`bg-process.ts`, `crash-logger.ts`, `todo-list.ts`, `continual-memory.ts`,
+`read-guard.ts`), `agent/extensions/lsp/` and `agent/extensions/apex/`
+(directory-style extensions: `apex-ui.ts`, `amp-task.ts`, `async-task.ts` plus
+a shared `lib/` of helper modules that are imported directly rather than
+loaded as separate extensions). See `CONTEXT.md` for the local architecture
+(seams, tool receipts, agent catalog, sync-vs-async task tools, Apex UI
+stability rules) — that file documents *how these extensions are built*,
+complementary to this file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
-`agent/extensions/` is used. `agent/settings.json` `packages` loads
-`npm:@howaboua/pi-codex-conversion@3.0.12` (Codex structured-tool adapter for GPT /
-`openai-codex` routes; see `agent/pi-codex-conversion.json` above).
-(`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in
-`tuiMode: "fullscreen"`.) MCP integration is deliberately *not* loaded via
-`packages` — it composes `pi-mcp-adapter` directly inside `mcp-adapter.ts`
-(see the mcp.json section above for why).
+`agent/extensions/` is used. `agent/settings.json` `packages` is empty — both
+third-party dependencies used here are composed locally instead, one same-API
+entry point per dependency: `mcp-adapter.ts` boots `pi-mcp-adapter` (see the
+mcp.json section above for why), and `codex-conversion.ts` boots the
+lockfile-resolved `@howaboua/pi-codex-conversion` package from
+`agent/npm/node_modules` (Codex
+structured-tool adapter for GPT / `openai-codex` routes; see
+`agent/pi-codex-conversion.json` above for why it is loaded this way instead
+of via `packages`). (`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor
+of the built-in `tuiMode: "fullscreen"`.)
 
 ---
 

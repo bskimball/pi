@@ -1,12 +1,11 @@
 ---
 name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
-model: local-proxy/gemini-3-flash-agent
+model: openai-codex/gpt-5.6-luna
 fallbackModels:
-  - local-proxy/grok-composer-2.5-fast
+  - xai/grok-composer-2.5-fast
+  - local-proxy/gemini-3-flash-agent
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-# Prefer AGY agent Flash (gemini-default) over gemini-3.6-flash-high for more
-# reliable visible text handoffs after multi-tool turns.
 thinking: off
 tools: read, grep, find, ls, bash
 inheritSkills: false

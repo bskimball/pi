@@ -1,8 +1,9 @@
 ---
 name: artisan
 description: Frontend and UI engineer for any user-facing visual surface — screens, components, styling, layout, design systems, interaction states — plus diagrams, slides, and data visualization.
-model: github-copilot/kimi-k3
+model: local-proxy/claude-opus-5
 fallbackModels:
+  - github-copilot/kimi-k3
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high

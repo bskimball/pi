@@ -6,7 +6,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 
 | Path | Role |
 |------|------|
-| `agent/extensions/` | Pi extensions (Apex UI, tasks, web search, continual memory, MCP) |
+| `agent/extensions/` | Pi extensions (Apex UI, tasks, web search, continual memory, MCP, Codex) |
 | `agent/extensions/apex/` | Apex package: UI, sync/async tasks, shared `lib/` |
 | `agent/agents/` | Specialist agent markdown catalog |
 | `agent/prompts/`, `agent/skills/`, `agent/themes/` | Prompts, skills, themes |
@@ -18,6 +18,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 - Each Pi extension receives its **own** `ExtensionAPI` / tool map.
 - Cross-extension interception is impossible: if extension A wraps `registerTool` on its API, extension B’s registrations are unaffected.
 - **MCP same-API composition**: `mcp-adapter.ts` installs Apex MCP presentation on *its* `pi`, then boots `pi-mcp-adapter` on that same instance so proxy/direct tools get Apex receipts.
+- **Codex same-API composition**: `codex-conversion.ts` installs Apex Codex presentation (`installCodexPresentation`) on *its* `pi`, then boots the lockfile-resolved `@howaboua/pi-codex-conversion` package (relative-imported from `agent/npm/node_modules`, not `agent/settings.json` packages) on that same instance so `exec_command`, `write_stdin`, `apply_patch`, and `view_image` get Apex receipts; optional `web_run` and `imagegen` use the same wrapper when enabled. Also loading the package independently would register a second, unwrapped instance.
 - Prefer lib imports (`apex/lib/*`) over loading `apex-ui.ts`’s default export when only helpers are needed (avoids UI side effects).
 
 ## Tool receipt
@@ -28,6 +29,7 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 - Consumers:
   - Web: `lib/web-search-ui.ts` (specs + `scrubSecrets`)
   - MCP: `lib/mcp-presentation.ts` (`installMcpPresentation`)
+  - Codex: `lib/codex-presentation.ts` (`installCodexPresentation`; exact-name allowlist, skips definitions already `renderShell: "self"`; tests in `lib/codex-presentation.test.ts`)
   - Built-ins: `apex-ui.ts` (read/bash/edit/write via the same engine)
 - **Edit diffs**: `lib/edit-diff.ts` (numbered contextual diff, stats, intra-line highlights).
 

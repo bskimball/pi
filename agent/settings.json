@@ -3,9 +3,7 @@
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.1",
-  "packages": [
-    "npm:@howaboua/pi-codex-conversion@3.0.12"
-  ],
+  "packages": [],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"
   ],
