@@ -1,7 +1,8 @@
-# Secrets and authentication
+# Secrets, authentication, and private local context
 agent/auth.json
 agent/models.json
 agent/mcp.json
+agent/USER_PROFILE.local.md
 web-search.json
 .env
 .env.*

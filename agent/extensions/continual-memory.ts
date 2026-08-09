@@ -56,7 +56,7 @@ const LIST_CONTENT = 200;
 
 /** Best-effort rejection for credential-shaped content. Not a full secret scanner. */
 const SECRETISH =
-  /\b(sk-[a-zA-Z0-9_-]{16,}|ghp_[a-zA-Z0-9]{20,}|xox[baprs]-[a-zA-Z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)\b/;
+  /(?:\b(?:sk-[a-zA-Z0-9_-]{16,}|ghp_[a-zA-Z0-9]{20,}|xox[baprs]-[a-zA-Z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\b|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/;
 
 type MemoryKind = (typeof KINDS)[number];
 type MemoryScope = (typeof SCOPES)[number];
@@ -193,7 +193,13 @@ function loadJsonStore(path: string): LoadResult {
   try {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as Partial<MemoryStore>;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      parsed.schema !== SCHEMA ||
+      !Array.isArray(parsed.entries)
+    ) {
       return {
         store: emptyStore(),
         error: `Global memory file is malformed (${path}). Fix or rename it before writing.`,
