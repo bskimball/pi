@@ -1,9 +1,9 @@
 ---
 name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
-model: openai-codex/gpt-5.6-luna
+model: local-proxy/gpt-5.6-luna
 fallbackModels:
-  - xai/grok-composer-2.5-fast
+  - local-proxy/grok-composer-2.5-fast
   - local-proxy/gemini-3-flash-agent
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: off

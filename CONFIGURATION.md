@@ -322,7 +322,7 @@ optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
-(`gpt-5.6-sol`, provider-local id), `defaultProvider` (`openai-codex`),
+(`grok-4.5`, provider-local id), `defaultProvider` (`local-proxy`),
 `defaultThinkingLevel`, `lastChangelogVersion`, `packages` (empty — the
 third-party MCP dependency used here is composed locally by `mcp-adapter.ts`
 instead of loaded from this array; see the mcp.json section above for why),
@@ -330,16 +330,13 @@ instead of loaded from this array; see the mcp.json section above for why),
 `mcp-scripting` is discoverable without loading the adapter twice),
 `steeringMode`, `transport`, `terminal.showTerminalProgress`, `editorPaddingX`,
 `theme`, `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
-`openai-codex/*` and other providers for compatibility).
+`openai-codex/*`, `xai/*`, and other providers for optional manual selection).
 
-Active GPT subagent routes use OAuth-backed `openai-codex`
-(`openai-codex/gpt-5.6-luna`, `openai-codex/gpt-5.6-sol`). Non-GPT agent models
-stay on their existing providers (for example `local-proxy/grok-4.5`,
-`local-proxy/claude-opus-5`, Cloudflare Workers AI). `local-proxy` GPT
-definitions remain in `models.json` / enabled models for manual selection;
-they are no longer the active default or GPT subagent path. Pi expects a
-working OpenAI Codex OAuth login for those GPT routes (configure via Pi's auth
-flow; this repo does not store provider secrets in tracked settings).
+Active default and subagent routes use `local-proxy` (for example
+`local-proxy/gpt-5.6-luna`, `local-proxy/gpt-5.6-sol`, `local-proxy/grok-4.5`,
+`local-proxy/claude-opus-5`, plus Cloudflare Workers AI fallbacks). Direct
+`openai-codex/*` and `xai/*` provider routes remain enabled for manual
+selection but are not the active default or agent frontmatter path.
 
 ---
 
@@ -385,12 +382,12 @@ Either form works:
 
 ```yaml
 fallbackModels:
-  - openai-codex/gpt-5.6-sol
+  - local-proxy/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
 ```
 
 ```yaml
-fallbackModels: [openai-codex/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
+fallbackModels: [local-proxy/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
 ```
 
 Both single and double surrounding quotes on individual list items are

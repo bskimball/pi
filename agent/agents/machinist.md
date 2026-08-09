@@ -1,9 +1,9 @@
 ---
 name: machinist
 description: Non-visual implementation specialist for backend logic, data layer, CLI, build and config, refactors, migrations, bug fixes, and tests. Not for UI, styling, layout, or user-facing components.
-model: xai/grok-4.5
+model: local-proxy/grok-4.5
 fallbackModels:
-  - openai-codex/gpt-5.6-sol
+  - local-proxy/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
 thinking: medium
 tools: read, grep, find, ls, bash, edit, write, task

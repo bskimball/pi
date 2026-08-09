@@ -1,9 +1,9 @@
 ---
 name: oracle
 description: Deep independent code reviewer and debugger for difficult bugs, conflicting evidence, high-stakes decisions, and substantial completed work.
-model: openai-codex/gpt-5.6-sol
+model: local-proxy/gpt-5.6-sol
 fallbackModels:
-  - xai/grok-4.5
+  - local-proxy/grok-4.5
   - local-proxy/claude-fable-5
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
