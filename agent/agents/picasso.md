@@ -3,7 +3,7 @@ name: picasso
 description: Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, diagrams, and other visual assets.
 model: local-proxy/gemini-3-flash-agent
 fallbackModels:
-  - local-proxy/gpt-5.6-luna
+  - openai-codex/gpt-5.6-luna
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 # Prefer AGY agent Flash (gemini-default) over gemini-3.6-flash-high for more
 # reliable visible text handoffs after multi-tool turns.

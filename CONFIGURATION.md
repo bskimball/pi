@@ -22,6 +22,7 @@ Installed package version: `@earendil-works/pi-coding-agent@0.84.1` (see
 - [`agent/models.json` (upstream Pi, custom providers/models)](#agentmodelsjson-upstream-pi-custom-providersmodels)
 - [`web-search.json` (local custom, web-search extension)](#web-searchjson-local-custom-web-search-extension)
 - [`agent/settings.json` (upstream Pi)](#agentsettingsjson-upstream-pi)
+- [`agent/pi-codex-conversion.json` (third-party package)](#agentpi-codex-conversionjson-third-party-package)
 - [Agent markdown (`agent/agents/*.md`, local custom)](#agent-markdown-agentagentsmd-local-custom)
 - [Prompt template markdown (`agent/prompts/*.md`, upstream Pi)](#prompt-template-markdown-agentpromptsmd-upstream-pi)
 - [Skill markdown (`agent/skills/**/SKILL.md`, upstream Pi)](#skill-markdown-agentskillsskillmd-upstream-pi)
@@ -321,13 +322,77 @@ supplementing beyond what's below.
 optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
-This repo's tracked `agent/settings.json` sets: `defaultModel`,
-`defaultProvider`, `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
-(currently `[]` — MCP is loaded directly by `mcp-adapter.ts`, not via
-`packages`, see the mcp.json section above), `skills` (registers the
-`pi-mcp-adapter` bundled skill directory so `mcp-scripting` is discoverable
-without loading the adapter twice), `steeringMode`, `transport`,
-`terminal.showTerminalProgress`, `editorPaddingX`, `theme`.
+This repo's tracked `agent/settings.json` sets: `defaultModel`
+(`gpt-5.6-sol`, provider-local id), `defaultProvider` (`openai-codex`),
+`defaultThinkingLevel`, `lastChangelogVersion`, `packages`
+(`npm:@howaboua/pi-codex-conversion@3.0.12` for the Codex structured-tool adapter;
+MCP is still loaded directly by `mcp-adapter.ts`, not via `packages` — see the
+mcp.json section above), `skills` (registers the `pi-mcp-adapter` bundled skill
+directory so `mcp-scripting` is discoverable without loading the adapter twice),
+`steeringMode`, `transport`, `terminal.showTerminalProgress`, `editorPaddingX`,
+`theme`, `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
+`openai-codex/*` and other providers for compatibility).
+
+Active GPT subagent routes use OAuth-backed `openai-codex`
+(`openai-codex/gpt-5.6-luna`, `openai-codex/gpt-5.6-sol`). Non-GPT agent models
+stay on their existing providers (for example `local-proxy/grok-4.5`,
+`local-proxy/claude-opus-5`, Cloudflare Workers AI). `local-proxy` GPT
+definitions remain in `models.json` / enabled models for manual selection;
+they are no longer the active default or GPT subagent path. Pi expects a
+working OpenAI Codex OAuth login for those GPT routes (configure via Pi's auth
+flow; this repo does not store provider secrets in tracked settings).
+
+---
+
+## `agent/pi-codex-conversion.json` (third-party package)
+
+**Package:** `npm:@howaboua/pi-codex-conversion@3.0.12` (installed via
+`agent/settings.json` `packages`, currently 3.0.12 under `agent/npm/`).
+Authoritative field schema:
+`agent/npm/node_modules/@howaboua/pi-codex-conversion/src/adapter/activation/config.ts`
+(`CodexConversionConfig` / `DEFAULT_CODEX_CONVERSION_CONFIG`). Settings UI:
+`/codex`.
+
+**Location:** `~/.pi/agent/pi-codex-conversion.json` (`agent/pi-codex-conversion.json`
+here). Tracked; contains no secrets.
+
+**Routing intent:** On Codex-like GPT / `openai-codex` models, the package
+replaces Pi's default file/shell tools with the structured Codex adapter
+(`exec_command`, `write_stdin`, `apply_patch`, …). Non-GPT models keep Pi's
+ordinary tools. Provider scope stays conservative: `scope.allProviders` is
+`"off"` with empty `additionalProviders`, so only Codex-like GPT routes get the
+adapter — not all providers.
+
+**This repo's conservative structured defaults** (explicit overrides of package
+defaults that would otherwise enable optional extras):
+
+| Area | Value | Notes |
+|---|---|---|
+| `scope.allProviders` | `"off"` | No all-provider override |
+| `scope.additionalProviders` | `[]` | No extra Responses proxies |
+| `beta.codeMode` | `false` | Code Mode intentionally off |
+| `compaction.responsesCompaction` | `false` | Native Responses compaction off |
+| `tools.webRun` | `false` | Optional web tool off (package default is on) |
+| `tools.imageGeneration` | `false` | Optional imagegen off (package default is on) |
+| `tools.viewImageFallback` / `*Only` flags | `false` | No activate-only tool overlays |
+| `prompt.heavySystemPromptOverwrite` | `false` | Keep Pi scaffold |
+| `voiceFeaturesOnly` | `false` | Full structured adapter path, not voice-only |
+| `ui.statusLine` | `false` | Package footer/status off; Apex owns status presentation |
+| `ui.backgroundShellWidget` | `false` | Package background-shell widget off; Apex owns background presentation |
+| `ui.toolRenaming` | `false` | Optional transcript/custom tool-cell rendering only (`customRendering`); does not change Codex tool names or the model contract |
+
+Optional package UI surfaces (`ui.statusLine`, `ui.backgroundShellWidget`,
+`ui.toolRenaming`, and related display toggles such as `ui.compactTools` /
+`ui.codeModeDetails`) are presentation extras. Disabling them does not remove
+the structured Codex tool conversion (`exec_command`, `write_stdin`,
+`apply_patch`, …). Status and background-shell presentation are owned by Apex
+on this Windows TUI setup to avoid overlapping third-party UI risk.
+
+Non-core Pi tools (MCP via `mcp-adapter.ts`, skills, Apex task tooling, local
+extensions) remain available on non-GPT routes and outside adapter replacement
+boundaries. After editing this file, `/reload` (or a new session) is required
+for keybind-sensitive changes; ordinary config reloads follow the package's
+normal load path.
 
 ---
 
@@ -373,12 +438,12 @@ Either form works:
 
 ```yaml
 fallbackModels:
-  - local-proxy/gpt-5.6
+  - openai-codex/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
 ```
 
 ```yaml
-fallbackModels: [local-proxy/gpt-5.6, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
+fallbackModels: [openai-codex/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
 ```
 
 Both single and double surrounding quotes on individual list items are
@@ -525,11 +590,13 @@ that file documents *how these extensions are built*, complementary to this
 file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
-`agent/extensions/` is used. `agent/settings.json` `packages` is currently
-empty — no npm extension packages are loaded. (`npm:pi-sticky-input` was
-dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.) MCP
-integration is deliberately *not* loaded that way — it composes `pi-mcp-adapter` directly
-inside `mcp-adapter.ts` (see the mcp.json section above for why).
+`agent/extensions/` is used. `agent/settings.json` `packages` loads
+`npm:@howaboua/pi-codex-conversion@3.0.12` (Codex structured-tool adapter for GPT /
+`openai-codex` routes; see `agent/pi-codex-conversion.json` above).
+(`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in
+`tuiMode: "fullscreen"`.) MCP integration is deliberately *not* loaded via
+`packages` — it composes `pi-mcp-adapter` directly inside `mcp-adapter.ts`
+(see the mcp.json section above for why).
 
 ---
 

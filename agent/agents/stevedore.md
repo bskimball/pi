@@ -2,7 +2,7 @@
 name: stevedore
 description: Fast, cheap ops specialist for deploys and CLI chores: lint, format check, build, git operations, and platform CLIs (wrangler, ibmcloud, gh, etc.).
 tools: read, grep, find, ls, bash, edit
-model: local-proxy/gpt-5.6-luna
+model: openai-codex/gpt-5.6-luna
 fallbackModels:
   - local-proxy/gemini-3-flash-agent
   - local-proxy/grok-composer-2.5-fast
