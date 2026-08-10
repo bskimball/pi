@@ -19,6 +19,8 @@ const codingAgentTuiPackage = join(
   "package.json",
 );
 
+const nativeContainerRender = Container.prototype.render;
+
 const markdownTheme = new Proxy(
   {},
   {
@@ -72,24 +74,9 @@ describe("Apex render safety", () => {
     ]);
   });
 
-  it("isolates a failing component instead of aborting the container", () => {
+  it("leaves native Container rendering untouched", () => {
     installRenderSafety();
-    const container = new Container();
-    container.addChild({
-      render: () => {
-        throw new TypeError("broken renderer");
-      },
-      invalidate: () => {},
-    });
-    container.addChild({
-      render: () => ["still visible"],
-      invalidate: () => {},
-    });
-
-    assert.deepEqual(container.render(80), [
-      "[display unavailable]",
-      "still visible",
-    ]);
+    assert.equal(Container.prototype.render, nativeContainerRender);
   });
 
   it("coerces malformed Text and Markdown payloads at render time", () => {
@@ -103,16 +90,42 @@ describe("Apex render safety", () => {
     assert.equal(typeof markdown.render(80)[0], "string");
   });
 
-  it("contains the historical width-renderer failure shape", () => {
+  it("contains historical marked substring failures inside Markdown", () => {
     installRenderSafety();
-    const container = new Container();
-    container.addChild({
-      render: () => {
-        throw new TypeError("segment.codePointAt is not a function");
-      },
-      invalidate: () => {},
-    });
+    const markedFailure = new Markdown("ok", 0, 0, markdownTheme);
+    (markedFailure as unknown as { options: unknown }).options = {
+      transform: () => ({
+        trim: () => "ok",
+        replace: () => ({
+          substring: null,
+          codePointAt: () => 111,
+          [Symbol.iterator]: function* () {
+            yield "o";
+            yield "k";
+          },
+        }),
+      }),
+    };
 
-    assert.deepEqual(container.render(80), ["[display unavailable]"]);
+    assert.deepEqual(markedFailure.render(80), ["[markdown unavailable]"]);
+  });
+
+  it("contains historical width codePointAt failures inside Markdown", () => {
+    installRenderSafety();
+    const widthFailure = new Markdown("ok", 0, 0, markdownTheme);
+    (widthFailure as unknown as { options: unknown }).options = {
+      transform: () => ({
+        trim: () => "ok",
+        replace: () => ({
+          substring: () => "ok",
+          codePointAt: null,
+          [Symbol.iterator]: function* () {
+            yield Object.create(null);
+          },
+        }),
+      }),
+    };
+
+    assert.deepEqual(widthFailure.render(80), ["[markdown unavailable]"]);
   });
 });

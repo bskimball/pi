@@ -2,10 +2,10 @@
 //
 // A malformed extension/model value must not be able to terminate the whole
 // interactive process. Keep valid strings byte-for-byte intact (including ANSI
-// and image protocol sequences), but coerce invalid line/text values and isolate
-// individual component failures.
+// and image protocol sequences), but coerce invalid line/text values and contain
+// failures in the text renderers that consume model and extension payloads.
 
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { Markdown, Text } from "@earendil-works/pi-tui";
 import { reportRenderFailure } from "./tool-receipt.ts";
 
 const INSTALL_KEY = Symbol.for("pi.apex.renderSafety.installed");
@@ -37,37 +37,6 @@ export function normalizeRenderedLines(value: unknown): string[] {
     lines.push(...text.replace(/\r\n?/g, "\n").split("\n"));
   }
   return lines;
-}
-
-interface ChildOwner {
-  children?: unknown;
-}
-
-function safeChildLines(owner: ChildOwner, width: number): string[] {
-  const children = Array.isArray(owner.children) ? owner.children : [];
-  const lines: string[] = [];
-  for (const child of children) {
-    try {
-      const component = child as { render?: (renderWidth: number) => unknown };
-      if (typeof component?.render !== "function") {
-        throw new TypeError("Container child has no render(width) method");
-      }
-      lines.push(...normalizeRenderedLines(component.render(width)));
-    } catch (error) {
-      reportRenderFailure("component", error);
-      lines.push("[display unavailable]");
-    }
-  }
-  return lines;
-}
-
-function installContainerBoundary(): void {
-  const prototype = Container.prototype as unknown as {
-    render(width: number): string[];
-  };
-  prototype.render = function renderSafely(width: number): string[] {
-    return safeChildLines(this as unknown as ChildOwner, width);
-  };
 }
 
 interface TextLikePrototype {
@@ -126,6 +95,5 @@ export function installRenderSafety(): void {
   if (state[INSTALL_KEY]) return;
   installTextBoundary();
   installMarkdownBoundary();
-  installContainerBoundary();
   state[INSTALL_KEY] = true;
 }
