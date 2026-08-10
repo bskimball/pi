@@ -7,7 +7,7 @@ fallbackModels:
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 # Prefer AGY agent Flash (gemini-default) over gemini-3.6-flash-high for more
 # reliable visible text handoffs after multi-tool turns.
-thinking: medium
+thinking: low
 tools: read, grep, find, ls, bash
 inheritSkills: false
 maxTurns: 45
