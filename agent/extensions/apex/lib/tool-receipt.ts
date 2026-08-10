@@ -35,9 +35,9 @@ export function reportRenderFailure(surface: string, error: unknown): void {
   if (reportedRenderFailures.has(key)) return;
   reportedRenderFailures.add(key);
   const entry = `\n=== apex-ui ${surface} render fallback at ${new Date().toISOString()} ===\n${message}\n`;
-  void fs
-    .appendFile(path.join(os.homedir(), ".pi", "agent", "pi-render.log"), entry)
-    .catch(() => {});
+  const agentDir =
+    process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+  void fs.appendFile(path.join(agentDir, "pi-render.log"), entry).catch(() => {});
 }
 
 /**

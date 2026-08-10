@@ -64,19 +64,34 @@ export function rotateIfNeeded(logPath: string): void {
   }
 }
 
+function processMetadata(): string {
+  const subagent = process.env.PI_SUBAGENT === "1";
+  const processKind = subagent ? "subagent" : "main Pi";
+  const subagentDetails = subagent
+    ? ` agent=${process.env.PI_SUBAGENT_AGENT ?? "unknown"} model=${process.env.PI_SUBAGENT_MODEL ?? "unknown"}`
+    : "";
+  return [
+    `kind=${processKind}${subagentDetails}`,
+    `pid=${process.pid} ppid=${process.ppid} node=${process.version} platform=${process.platform}`,
+    `cwd=${process.cwd()}`,
+    `entrypoint=${JSON.stringify(process.argv[1] ?? "unknown")} argc=${Math.max(0, process.argv.length - 2)}`,
+    `terminal=${JSON.stringify({
+      TERM: process.env.TERM,
+      WT_SESSION: process.env.WT_SESSION,
+      COLORTERM: process.env.COLORTERM,
+      MSYSTEM: process.env.MSYSTEM,
+      PI_APEX_UI: process.env.PI_APEX_UI,
+    })}`,
+  ].join("\n");
+}
+
 function append(kind: string, value: unknown): void {
   try {
     const logPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
-    const subagent = process.env.PI_SUBAGENT === "1";
-    const processKind = subagent ? "subagent" : "main Pi";
-    const subagentDetails = subagent
-      ? ` agent=${process.env.PI_SUBAGENT_AGENT ?? "unknown"} model=${process.env.PI_SUBAGENT_MODEL ?? "unknown"}`
-      : "";
     const body = [
       "",
-      `=== ${processKind} ${kind} at ${new Date().toISOString()} ===`,
-      `pid=${process.pid} ppid=${process.ppid} node=${process.version} platform=${process.platform}${subagentDetails}`,
-      `cwd=${process.cwd()}`,
+      `=== ${kind} at ${new Date().toISOString()} ===`,
+      processMetadata(),
       errorText(value),
       "",
     ].join("\n");
@@ -112,7 +127,10 @@ export default function (_pi: ExtensionAPI): void {
     if (code === 0 || code == null) return;
     processError(
       `process exit ${code}`,
-      "No additional exit error was provided.",
+      [
+        `process.exitCode=${process.exitCode ?? "unset"}`,
+        "No uncaught JavaScript error reached the logger. Pi most likely called process.exit() or set process.exitCode.",
+      ].join("\n"),
     );
   });
 }

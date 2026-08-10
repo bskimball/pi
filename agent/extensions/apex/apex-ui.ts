@@ -28,6 +28,7 @@ import {
   toolRenderers,
   type ToolRenderState,
 } from "./lib/tool-receipt.ts";
+import { installRenderSafety } from "./lib/render-safety.ts";
 import {
   formatDiffStats,
   generateDiffString,
@@ -476,6 +477,11 @@ function applyRandomWorkingIndicator(
 }
 
 export default function (pi: ExtensionAPI) {
+  // Install the process-wide boundary before any Apex surface is mounted. This
+  // keeps malformed model/extension values from terminating the TUI while
+  // preserving the full Apex UI; it is a repair boundary, not a fallback mode.
+  installRenderSafety();
+
   // PI_APEX_UI=0 remains an emergency opt-out. The extension stays enabled by
   // default and uses dependency-free tool/footer rendering plus Pi's built-in
   // editor and working indicator.
