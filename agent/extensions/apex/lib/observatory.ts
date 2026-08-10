@@ -17,6 +17,8 @@ import { cleanInline } from "./ui-common.ts";
 import {
   SHARK_PIXELS_MID,
   SHARK_PIXELS_MID_WIDTH,
+  SHARK_PIXELS_ULTRA,
+  SHARK_PIXELS_ULTRA_WIDTH,
   SHARK_PIXELS_WIDE,
   SHARK_PIXELS_WIDE_WIDTH,
 } from "./shark-art.ts";
@@ -27,8 +29,8 @@ import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "./safe-t
 /**
  * The observatory is installed as Pi's startup header, which has no line cap.
  * With quiet startup the header is the entire opening screen, so the
- * composition is a full splash. The budget covers the 10-row truecolor mark
- * plus the signal, the inventory, and the threshold chrome beneath it.
+ * composition is a full splash. The budget covers the tallest 16-row truecolor
+ * mark plus the signal, the inventory, and the threshold chrome beneath it.
  */
 export const OBSERVATORY_MAX_LINES = 25;
 export const NEUTRAL_SIGNAL = "AWAITING A SIGNAL";
@@ -325,10 +327,8 @@ const FULL_MIN = 62;
 /** Below this only the minimal dorsal-fin mark, the signal and the threshold remain. */
 const MINIMAL_MIN = 20;
 
-/**
- * Width needed for the 66-cell truecolor mark, and for the 39-cell one. Below
- * the smaller of the two the glyph art takes over again.
- */
+/** Width gates for the purpose-built truecolor tiers. */
+const PIXEL_ULTRA_MIN = SHARK_PIXELS_ULTRA_WIDTH + 2;
 const PIXEL_WIDE_MIN = SHARK_PIXELS_WIDE_WIDTH + 2;
 const PIXEL_MID_MIN = SHARK_PIXELS_MID_WIDTH + 2;
 
@@ -478,7 +478,7 @@ function lateralLine(art: string, fg: Fg): string {
 /**
  * The shark mark, sized to the terminal.
  *
- * Four tiers, widest first: the truecolor bitmap at two sizes, then the
+ * Five tiers, widest first: three purpose-built truecolor bitmaps, then the
  * hand-authored glyph shark, then a lone dorsal fin. The bitmap tiers are
  * skipped entirely without 24-bit colour so the mark never degrades into
  * banded mush.
@@ -486,6 +486,12 @@ function lateralLine(art: string, fg: Fg): string {
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
   if (width < MINIMAL_MIN) {
     return { rows: [fg("accent", SHARK_MINIMAL)], blockWidth: 1 };
+  }
+  if (TRUECOLOR && width >= PIXEL_ULTRA_MIN) {
+    return {
+      rows: pixelRows(SHARK_PIXELS_ULTRA),
+      blockWidth: SHARK_PIXELS_ULTRA_WIDTH,
+    };
   }
   if (TRUECOLOR && width >= PIXEL_WIDE_MIN) {
     return {
@@ -920,7 +926,7 @@ export interface ObservatorySelection {
 /**
  * Render the splash: star field → shark mark → signal → constellations → meta →
  * threshold → horizon, on one optical axis with an even single-row rhythm.
- * Installed as Pi's startup header, so 22 rows is the budget, not 9.
+ * Installed as Pi's startup header, so 25 rows is the budget, not 9.
  */
 export function renderObservatory(
   view: Observatory,

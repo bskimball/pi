@@ -15,10 +15,11 @@ to a free rear tip, small second dorsal, long falcate pectoral, pelvic and anal,
 narrow keeled peduncle and a crescentic caudal fin with a deep fork — the cues
 that make a silhouette read as "great white" at a glance.
 
-Colour is flat posterized bands driven by body depth alone: dark slate back,
-mid-slate flank, one lighter lateral line, pale belly. Thin geometry (fins,
-tail) shifts one band darker so it separates from the trunk. No texture, no
-gradients.
+Colour is a designed cosmic countershade: violet and indigo across the back,
+a narrow cyan lateral glow, and a cool pearl belly. A restrained deterministic
+pixel shimmer appears only where the output grid can carry it; thin geometry
+stays darker so fins and tail remain legible. The treatment is generated at the
+final cell resolution rather than downsampled from the concept image.
 
 Usage:
     python encode-shark.py preview <cols> <rows>   # ANSI to stdout
@@ -44,46 +45,50 @@ CANVAS_W, CANVAS_H = 1800, 640
 COVERAGE_CUTOFF = 0.3
 
 # --- styling ----------------------------------------------------------------
-# Thin geometry (fins, tail lobes, peduncle rim) steps one band darker so it
-# separates from the trunk. THIN_SCALE is in canvas pixels.
+# Thin geometry (fins, tail lobes, peduncle rim) shifts toward abyss violet so
+# it separates from the trunk. THIN_SCALE is in canvas pixels.
 THIN_SCALE = 46.0
-THIN_BANDS_SHIFT = 1.2
 
-# Flat bands from back to belly, applied by index rather than blended, so the
-# mark reads as a few solid shapes instead of a gradient. Classic great-white
-# countershading in slate/gray: dark dorsal, mid-slate flank, pale belly.
-BANDS = [
-    (30, 41, 59),  # back (slate 800)
-    (71, 85, 105),  # upper flank (slate 600)
-    (100, 116, 139),  # lateral line (slate 500)
-    (203, 213, 225),  # lower flank (slate 300)
-    (241, 245, 249),  # belly (slate 50)
-]
+# Cosmic countershade stops, interpolated by body depth. The closely spaced
+# cyan stops create a luminous lateral line without making the whole flank
+# neon; the violet back and pearl belly retain great-white anatomy.
+COLOR_STOPS = np.asarray([0.00, 0.30, 0.50, 0.585, 0.625, 0.67, 0.82, 1.00])
+COLOR_PALETTE = np.asarray(
+    [
+        (27, 10, 68),    # abyss violet
+        (67, 29, 157),   # dorsal violet
+        (35, 42, 111),   # indigo flank
+        (14, 94, 151),   # cyan halo
+        (20, 231, 238),  # bioluminescent lateral core
+        (35, 111, 165),  # lower halo
+        (139, 157, 205), # cool lower flank
+        (238, 243, 255), # pearl belly
+    ],
+    dtype=np.float32,
+)
+DARK_COLOR = np.asarray((18, 12, 52), dtype=np.float32)
+MOUTH_COLOR = np.asarray((54, 66, 128), dtype=np.float32)
+EYE_COLOR = (230, 255, 255)
 
-# Where each band ends, as a fraction of body depth from the dorsal edge.
-BAND_EDGES = [0.50, 0.66, 0.78, 0.90, 1.0]
-
-# Band depth is measured against the analytic body curves, not the rasterized
-# outline, so fins never distort where the bands sit on the trunk. Fin pixels
-# outside the trunk don't get a meaningful body depth at all — above the dorsal
-# curve they clip to 0, below the ventral curve to 1 — which would paint the
-# pectoral and the lower caudal lobe in belly white and lose them entirely.
-# Instead out-of-trunk fin pixels are pinned to a fixed depth per side: fins
-# above the back stay in the dark dorsal tone so the first dorsal reads as one
-# shape with the spine, and fins below the belly take a mid-slate so the
-# pelvic and lower caudal lobe don't vanish into the white underside (the
-# pectoral fin is pinned to PECTORAL_DEPTH so it matches the flank above it).
+# Countershade depth is measured against the analytic body curves, not the
+# rasterized outline, so fins never distort where the colour stops sit on the
+# trunk. Fin pixels outside the trunk lack meaningful body depth — above the
+# dorsal curve they clip to 0, below the ventral curve to 1 — which would paint
+# the pectoral and lower caudal lobe pearl-white. Instead out-of-trunk pixels
+# are pinned to a fixed depth per side: upper fins stay in the dark dorsal tone,
+# while lower fins take a cool mid-flank tone so they remain distinct from the
+# belly. The pectoral has its own depth so it matches the flank above it.
 FIN_DEPTH_ABOVE = 0.10
 FIN_DEPTH_BELOW = 0.72
 
-# The pectoral is its own case: pinned to the upper-flank band so it continues
-# the tone of the flank it grows out of rather than the near-black spine.
+# The pectoral is its own case: pinned to the upper flank so it continues the
+# tone of the body it grows out of rather than the near-black spine.
 PECTORAL_DEPTH = 0.58
 
 # Counter-shade sweep: a perfectly level split reads as a sea horizon, not a
 # body. Real counter-shading swoops — the pale belly rides high on the jaw,
 # dips under the trunk, and pinches out at the peduncle where the tail goes
-# all dark. Values shift every band edge at that x (in depth units).
+# all dark. Values shift the countershade depth at that x.
 SWEEP = [
     (0.00, -0.04),
     (0.12, -0.06),
@@ -97,12 +102,21 @@ SWEEP = [
 # Face marks, the difference between a shape and a creature. Design coords.
 EYE_CENTER = (0.108, 0.078)  # just above and behind the mouth corner
 EYE_RADIUS = 0.008  # of body length
-EYE_COLOR = (248, 250, 252)
 GILL_XS = (0.196, 0.217, 0.238, 0.259, 0.280)  # five slits ahead of the pectoral
 GILL_DEPTH = (0.22, 0.62)  # vertical span in depth units, ending at the flank
 GILL_WIDTH = 0.006  # of body length
-MOUTH = ((0.034, -0.10), (0.142, -0.30))  # jaw slit under the conical snout
-MOUTH_WIDTH = 0.006
+# A shallow interior jaw crease. It is rasterized on its own layer so its
+# terminal-pixel threshold can stay lower than the broad gill marks; otherwise
+# a clean curve becomes disconnected blocks after downsampling.
+MOUTH_POINTS = (
+    (0.052, -0.098),
+    (0.070, -0.116),
+    (0.088, -0.137),
+    (0.106, -0.158),
+    (0.122, -0.176),
+)
+MOUTH_WIDTH = 0.004
+MOUTH_COVERAGE = 0.16
 
 # --- the drawing ------------------------------------------------------------
 # All coordinates are design units: x runs 0 (snout tip) to 1 (tail tip), y is
@@ -231,7 +245,7 @@ def draw_mask(sweep_scale=1.0):
     (PCHIP: smooth but overshoot-free); the fins are straight-edged polygons
     on top. Depth is computed analytically from those same curves — 0 at the
     dorsal edge, 1 at the ventral edge — so the fins never skew where the
-    colour bands sit on the trunk.
+    countershade transitions sit on the trunk.
     """
     all_y = (
         [y for _, y in TOP_PROFILE]
@@ -273,8 +287,8 @@ def draw_mask(sweep_scale=1.0):
     unit = CANVAS_W - 2 * pad  # design-length → pixels
 
     # Analytic depth field over the full canvas, from the same design curves,
-    # with the counter-shade sweep folded in: shifting depth by -sweep(x) is
-    # equivalent to shifting every band edge by +sweep(x).
+    # with the counter-shade sweep folded in: shifting depth by -sweep(x)
+    # moves every colour stop by +sweep(x).
     px_x = np.arange(CANVAS_W, dtype=np.float32)
     design_x = np.clip((px_x - pad) / unit, 0.0, 1.0)
     top_y = np.array([to_px(0, float(top(x)))[1] for x in design_x])
@@ -285,8 +299,8 @@ def draw_mask(sweep_scale=1.0):
     sweep = np.interp(design_x, [x for x, _ in SWEEP], [s for _, s in SWEEP])
     depth = np.clip(depth - sweep_scale * sweep[None, :], 0.0, 1.0)
     below = rows_px > (top_y + bot_y)[None, :] / 2.0
-    # The pectoral takes the upper-flank tone rather than the mid-slate the
-    # other ventral fins get, so it reads as the shaded top surface of the fin.
+    # The pectoral takes the upper-flank tone rather than the cooler lower-fin
+    # tone, so it reads as the shaded top surface of the fin.
     depth = np.where(
         fin_only,
         np.where(
@@ -327,18 +341,22 @@ def draw_mask(sweep_scale=1.0):
         dark_draw.line(
             [col + rake, y_hi, col, y_lo], fill=1, width=int(GILL_WIDTH * unit)
         )
-    (mx0, my0), (mx1, my1) = MOUTH
-    dark_draw.line(
-        [to_px(mx0, my0), to_px(mx1, my1)], fill=1, width=int(MOUTH_WIDTH * unit)
+    mouth_im = Image.new("1", (CANVAS_W, CANVAS_H), 0)
+    ImageDraw.Draw(mouth_im).line(
+        [to_px(x, y) for x, y in MOUTH_POINTS],
+        fill=1,
+        width=max(1, int(MOUTH_WIDTH * unit)),
+        joint="curve",
     )
 
     eye = np.asarray(eye_im, dtype=bool) & mask
     dark = np.asarray(dark_im, dtype=bool) & mask
+    mouth = np.asarray(mouth_im, dtype=bool) & mask
 
     ys, xs_idx = np.where(mask)
     y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs_idx.min(), xs_idx.max() + 1
     box = (slice(y0, y1), slice(x0, x1))
-    return mask[box], depth[box], eye[box], dark[box]
+    return mask[box], depth[box], eye[box], dark[box], mouth[box]
 
 
 def thickness(mask):
@@ -369,24 +387,38 @@ def box_downsample(values, weights, cols, rows):
     return averaged.reshape(rows, cols), coverage.reshape(rows, cols)
 
 
-def stylize(depth, solidity, eye, dark):
-    """Paint flat bands by body depth; push thin geometry one band darker."""
-    index = np.zeros(depth.shape, dtype=float)
-    for edge in BAND_EDGES[:-1]:
-        index += (depth > edge).astype(float)
+def stylize(depth, solidity, eye, dark, mouth):
+    """Paint cosmic countershading at the final pixel-grid resolution."""
+    flat_depth = np.clip(depth, 0.0, 1.0).ravel()
+    rgb = np.column_stack(
+        [
+            np.interp(flat_depth, COLOR_STOPS, COLOR_PALETTE[:, channel])
+            for channel in range(3)
+        ]
+    ).reshape((*depth.shape, 3))
 
-    thin = 1.0 - np.clip(solidity, 0.0, 1.0)
-    index = np.maximum(index - thin * THIN_BANDS_SHIFT, 0.0)
+    # Thin fins and tail rims step toward abyss violet. This preserves their
+    # silhouette against both the luminous flank and a black terminal.
+    thin = (1.0 - np.clip(solidity, 0.0, 1.0))[..., None]
+    rgb = rgb * (1.0 - 0.42 * thin) + DARK_COLOR * (0.42 * thin)
 
-    bands = np.asarray(BANDS, dtype=np.uint8)
-    rgb = bands[np.clip(np.round(index).astype(int), 0, len(BANDS) - 1)]
+    # Deliberate pixel shimmer, not random noise: sparse highlights follow a
+    # fixed diagonal lattice and only appear on sufficiently detailed grids.
+    # Small tiers remain clean instead of becoming speckled.
+    rows, cols = depth.shape
+    if cols >= 90 and rows >= 24:
+        yy, xx = np.indices(depth.shape)
+        lattice = ((xx * 7 + yy * 11) % 29 == 0) | ((xx * 13 + yy * 5) % 47 == 0)
+        region = (depth > 0.12) & (depth < 0.78) & (solidity > 0.45)
+        shimmer = (lattice & region)[..., None]
+        rgb = np.where(shimmer, np.minimum(rgb * 1.18 + 8.0, 255.0), rgb)
 
-    # Face marks override the bands: gill slits and the mouth take the back
-    # tone, the eye is a pale dot. A mark claims a pixel at >35% coverage so
-    # the slits stay one clean column wide after downsampling.
-    rgb[dark > 0.35] = BANDS[0]
+    # Face marks override the body treatment. Broad gills use a firm threshold;
+    # the narrow mouth layer uses lower coverage so the jaw remains continuous.
+    rgb[dark > 0.35] = DARK_COLOR
+    rgb[mouth > MOUTH_COVERAGE] = MOUTH_COLOR
     rgb[eye > 0.35] = EYE_COLOR
-    return rgb
+    return np.clip(np.round(rgb), 0, 255).astype(np.uint8)
 
 
 def encode(cols, rows):
@@ -397,7 +429,7 @@ def encode(cols, rows):
     into dashes, so it fades out as the grid shrinks.
     """
     sweep_scale = np.clip((rows - 8.0) / 4.0, 0.0, 1.0)
-    mask, depth_field, eye_field, dark_field = draw_mask(sweep_scale)
+    mask, depth_field, eye_field, dark_field, mouth_field = draw_mask(sweep_scale)
 
     pixel_rows = rows * 2
     weights = mask.astype(np.float32)
@@ -405,7 +437,8 @@ def encode(cols, rows):
     depth, _ = box_downsample(depth_field, weights, cols, pixel_rows)
     eye, _ = box_downsample(eye_field.astype(np.float32), weights, cols, pixel_rows)
     dark, _ = box_downsample(dark_field.astype(np.float32), weights, cols, pixel_rows)
-    colors = stylize(depth, solidity, eye, dark)
+    mouth, _ = box_downsample(mouth_field.astype(np.float32), weights, cols, pixel_rows)
+    colors = stylize(depth, solidity, eye, dark, mouth)
     drawn = coverage >= COVERAGE_CUTOFF
 
     grid = []

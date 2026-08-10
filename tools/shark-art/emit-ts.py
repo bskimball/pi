@@ -1,6 +1,6 @@
 """Generate agent/extensions/apex/lib/shark-art.ts from the shark encoder.
 
-Runs encode-shark.py's `to_json` at both landing-screen sizes, packs each cell
+Runs encode-shark.py's `to_json` at the landing-screen sizes, packs each cell
 into the string form pixel-art.ts decodes, and overwrites the TS module.
 
 Usage:
@@ -27,10 +27,10 @@ HEADER = """\
 // full truecolor depth, so the mark has twice the vertical resolution of the
 // text grid it lives in.
 //
-// Colour is flat posterized bands driven by body depth: great-white
-// countershading in slate — dark slate back, mid-slate flank, one lighter
-// lateral line, pale belly — plus an eye, gill slits and a jaw line. No
-// texture, no gradients: a designed mark, not a downsampled photo.
+// Colour is a designed cosmic countershade: violet and indigo across the back,
+// a narrow cyan lateral glow, and a cool pearl belly. Restrained deterministic
+// highlights add pixel-scale depth at the ultra tier. The eye, gill slits and
+// jaw remain authored anatomical marks, not details sampled from a photograph.
 //
 // Cell encoding, comma-separated per row:
 //   "rrggbbRRGGBB"  both halves lit -> `\u2580`, foreground top, background bottom
@@ -78,11 +78,16 @@ def block(name, cols, rows):
 
 
 def main():
+    ultra = block(
+        {"const": "SHARK_PIXELS_ULTRA", "doc": "Ultra-wide mark"}, 112, 16
+    )
     wide = block(
         {"const": "SHARK_PIXELS_WIDE", "doc": "Full-width mark"}, 72, 12
     )
     mid = block({"const": "SHARK_PIXELS_MID", "doc": "Mid-width mark"}, 48, 8)
-    OUT.write_text(f"{HEADER}\n\n{wide}\n{mid}", encoding="utf-8", newline="\n")
+    OUT.write_text(
+        f"{HEADER}\n\n{ultra}\n{wide}\n{mid}", encoding="utf-8", newline="\n"
+    )
     print(f"wrote {OUT}")
 
 
