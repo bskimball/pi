@@ -88,6 +88,7 @@ import {
   type StatusKind,
 } from "./lib/status-view.ts";
 import { noticeComponent, type NoticeRow } from "./lib/notice-view.ts";
+import { waitForSnapshot } from "./lib/wait-policy.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -404,7 +405,7 @@ function renderWorkerCard(
       rows.push({
         line: (rail) =>
           safeTruncateToWidth(
-            `${theme.fg("dim", rail)}${TREE.hang}${theme.fg("muted", "Ctrl+C aborts this worker · task_status observes without cancelling")}`,
+            `${theme.fg("dim", rail)}${TREE.hang}${theme.fg("muted", "Ctrl+C stops waiting; worker continues · task_abort stops it")}`,
             width,
           ),
       });
@@ -2555,9 +2556,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     name: "task_wait",
     label: "Task Wait",
     description:
-      "Wait until the worker's current generation settles (agent_settled). Blocks and shows live progress updates. Optional bounded timeout returns current status without killing the worker. Cancelling this tool call via its AbortSignal cooperatively aborts the worker's current generation.",
+      "Wait until the worker's current generation settles (agent_settled). Blocks and shows live progress updates. Optional bounded timeout returns current status without killing the worker. Cancelling this tool call only stops waiting; the worker continues. Use task_abort to stop the worker explicitly.",
     promptSnippet:
-      "Wait for an async RPC worker generation to settle (optional timeout).",
+      "Wait for an async RPC worker generation to settle without aborting it (optional timeout).",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start." }),
       timeoutSec: Type.Optional(
@@ -2637,32 +2638,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         );
       }
 
-      const snapshot = await new Promise<GenerationSnapshot | "timeout" | "aborted">(
-        (resolve) => {
-          let done = false;
-          let waiter: Worker["waiters"][number] | undefined;
-          const finish = (value: GenerationSnapshot | "timeout" | "aborted") => {
-            if (done) return;
-            done = true;
-            if (signal) signal.removeEventListener("abort", onSignalAbort);
-            if (waiter) {
-              const index = worker.waiters.indexOf(waiter);
-              if (index >= 0) worker.waiters.splice(index, 1);
-              if (waiter.timer) clearTimeout(waiter.timer);
-            }
-            resolve(value);
-          };
-
-          const onSignalAbort = () => finish("aborted");
-          if (signal?.aborted) {
-            finish("aborted");
-            return;
-          }
-          signal?.addEventListener("abort", onSignalAbort);
-
-          waiter = {
+      const snapshot = await waitForSnapshot<GenerationSnapshot>({
+        signal,
+        timeoutMs,
+        register(resolve) {
+          const waiter: Worker["waiters"][number] = {
             generation: targetGen,
-            resolve: (snap: GenerationSnapshot) => finish(snap),
+            resolve,
             timer: undefined,
           };
           worker.waiters.push(waiter);
@@ -2675,38 +2657,32 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               worker.lifecycle === "closed") &&
             worker.generation >= targetGen
           ) {
-            finish(generationSnapshot(worker));
-            return;
+            resolve(generationSnapshot(worker));
           }
 
-          if (timeoutMs > 0) {
-            waiter.timer = setTimeout(() => {
-              finish("timeout");
-              // The pinned card derives its waiting hint from the waiter list.
-              notifySubscribers(worker);
-            }, timeoutMs);
-            waiter.timer.unref?.();
-          }
+          return () => {
+            const index = worker.waiters.indexOf(waiter);
+            if (index >= 0) worker.waiters.splice(index, 1);
+            // The pinned card derives its waiting hint from the waiter list.
+            notifySubscribers(worker);
+          };
         },
-      );
+      });
 
       worker.subscribers.delete(notifyLive);
 
-      if (snapshot === "aborted") {
-        const outcome = await abortWorkerAndEscalate(worker);
-        const headline = outcome.settled
-          ? `${id} wait cancelled; worker generation stopped.`
-          : outcome.escalated && outcome.exited
-            ? `${id} wait cancelled; unresponsive worker process was terminated.`
-            : `${id} wait cancelled; force termination was requested but process exit is not yet confirmed.`;
+      if (snapshot === "interrupted") {
+        // A cancelled parent turn must not become an implicit task_abort. The
+        // worker is independent and may still be doing useful work; callers
+        // that intend to stop it have the explicit task_abort control.
         return textResult(
           [
-            headline,
-            `cooperative=${outcome.cooperative} escalated=${outcome.escalated} exited=${outcome.exited}`,
+            `${id} wait interrupted; worker was NOT aborted.`,
+            "The worker continues in the background; use task_status or task_wait to reconnect, or task_abort to stop it explicitly.",
             "",
             formatWorkerStatus(worker),
           ].join("\n"),
-          !outcome.settled && !outcome.exited,
+          false,
           { worker: workerView(worker), waiting: false },
         );
       }
