@@ -672,7 +672,28 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         break;
       }
     }
-    this.notify(worker);
+    // Streaming delta events do not change anything rendered by the pinned
+    // worker card: message text is committed on message_end, and tool rows on
+    // tool_execution_start/end. Invalidating here turns every token/output
+    // chunk into a full parent fullscreen repaint, which can overwhelm Windows
+    // ConPTY during long async generations without improving the display.
+    const isStreamingDelta =
+      type === "message_update" ||
+      type === "tool_execution_update" ||
+      type === "bash_execution_update";
+    if (isStreamingDelta) {
+      // Detached task_wait subscribers need fresh model-facing progress, but the
+      // pinned fullscreen card has no delta content to repaint.
+      for (const subscriber of worker.subscribers ?? []) {
+        try {
+          subscriber();
+        } catch {
+          // Subscriber errors are isolated from worker lifecycle state.
+        }
+      }
+    } else {
+      this.notify(worker);
+    }
   }
 
   async abort(worker: TWorker): Promise<{ cooperative: boolean; settled: boolean }> {

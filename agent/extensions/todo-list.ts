@@ -17,7 +17,10 @@ import {
   type TodoListView,
   type TodoStatus,
 } from "./apex/lib/todo-list.ts";
-import { withApexPresentation } from "./apex/lib/presentation.ts";
+import {
+  apexPresentationEnabled,
+  withApexPresentation,
+} from "./apex/lib/presentation.ts";
 import {
   TREE,
   WidthText,
@@ -167,6 +170,10 @@ export default function (pi: ExtensionAPI) {
 
   function renderPanel(): void {
     const ctx = currentCtx;
+    if (!apexPresentationEnabled()) {
+      clearPanel();
+      return;
+    }
     if (!ctx?.hasUI || ctx.mode !== "tui" || !current) return;
     try {
       ctx.ui.setWidget(
@@ -198,31 +205,33 @@ export default function (pi: ExtensionAPI) {
     current = undefined;
   });
 
-  pi.registerShortcut("alt+t", {
-    description: "Collapse or expand the todo panel",
-    handler: (ctx) => {
-      currentCtx = ctx;
-      if (!current) {
-        ctx.ui.notify("No todo list for this session yet.", "info");
-        return;
-      }
-      panelCollapsed = !panelCollapsed;
-      renderPanel();
-    },
-  });
+  if (apexPresentationEnabled()) {
+    pi.registerShortcut("alt+t", {
+      description: "Collapse or expand the todo panel",
+      handler: (ctx) => {
+        currentCtx = ctx;
+        if (!current) {
+          ctx.ui.notify("No todo list for this session yet.", "info");
+          return;
+        }
+        panelCollapsed = !panelCollapsed;
+        renderPanel();
+      },
+    });
 
-  pi.registerCommand("todos", {
-    description: "Collapse or expand the todo panel above the input",
-    handler: async (_args, ctx) => {
-      currentCtx = ctx;
-      if (!current) {
-        ctx.ui.notify("No todo list for this session yet.", "info");
-        return;
-      }
-      panelCollapsed = !panelCollapsed;
-      renderPanel();
-    },
-  });
+    pi.registerCommand("todos", {
+      description: "Collapse or expand the todo panel above the input",
+      handler: async (_args, ctx) => {
+        currentCtx = ctx;
+        if (!current) {
+          ctx.ui.notify("No todo list for this session yet.", "info");
+          return;
+        }
+        panelCollapsed = !panelCollapsed;
+        renderPanel();
+      },
+    });
+  }
 
   pi.registerTool({
     name: "todo_write",

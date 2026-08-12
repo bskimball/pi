@@ -154,6 +154,41 @@ describe("WorkerRuntime control plane", () => {
     assert.equal(notifications, 1);
   });
 
+  it("does not repaint pinned cards for streamed worker deltas", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    let invalidations = 0;
+    let subscriberCalls = 0;
+    const item = worker({ pinnedInvalidate: () => invalidations++ });
+    item.subscribers = new Set([() => subscriberCalls++]);
+    const eventHooks = hooks();
+
+    for (let index = 0; index < 2_000; index++) {
+      runtime.handleEvent(
+        item,
+        { type: "message_update", delta: `token-${index}` },
+        eventHooks,
+      );
+      runtime.handleEvent(
+        item,
+        { type: "tool_execution_update", toolCallId: "call", output: index },
+        eventHooks,
+      );
+      runtime.handleEvent(
+        item,
+        { type: "bash_execution_update", toolCallId: "call", output: index },
+        eventHooks,
+      );
+    }
+
+    assert.equal(invalidations, 0);
+    assert.equal(subscriberCalls, 6_000);
+
+    runtime.handleEvent(item, { type: "turn_start" }, eventHooks);
+    assert.equal(invalidations, 1);
+    assert.equal(subscriberCalls, 6_001);
+    runtime.clearTimers(item);
+  });
+
   it("derives idle phase from the activity ledger", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker();

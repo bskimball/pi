@@ -167,6 +167,46 @@ export function boundedOutput(
   return [...shown, suffix];
 }
 
+/** Bound renderer-owned rows without stripping their intentional ANSI colors. */
+function boundedRenderedOutput(
+  values: readonly unknown[],
+  maxLines: number,
+  maxChars: number,
+): string[] {
+  const source = values.flatMap((value) =>
+    String(value ?? "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n"),
+  );
+  const shown: string[] = [];
+  let remaining = maxChars;
+  let truncated = source.length > maxLines;
+
+  for (const line of source.slice(0, maxLines)) {
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    // A small look-ahead lets the safe truncator close ANSI state even when
+    // the source row itself is far larger than the receipt budget.
+    const candidate =
+      line.length > remaining + 256 ? line.slice(0, remaining + 256) : line;
+    const clipped = safeTruncateToWidth(candidate, remaining);
+    shown.push(clipped);
+    remaining -= safeVisibleWidth(clipped) + 1;
+    if (
+      candidate.length < line.length ||
+      safeVisibleWidth(candidate) > safeVisibleWidth(clipped)
+    ) {
+      truncated = true;
+      break;
+    }
+  }
+
+  if (truncated) shown.push("... output truncated for display");
+  return shown;
+}
+
 /* ------------------------------------------------------------------ */
 /* Unified receipt engine                                              */
 /* ------------------------------------------------------------------ */
@@ -185,6 +225,10 @@ export interface ToolRenderState {
 
 const PREVIEW_LINES = 4;
 const BODY_LINES = 80;
+// Receipt hooks never need Pi's full model-facing tool payload. Keeping the
+// presentation copy small prevents pathological single-line output (package
+// indexes, minified JSON, generated arrays) from reaching terminal layout.
+export const RECEIPT_OUTPUT_CHARS = 12_000;
 
 /**
  * Spec for one tool receipt family. Callers supply identity/arg/preview/body
@@ -344,8 +388,11 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
         : "";
 
       const title = asTitle(spec.title, context.args, asDetails(result));
-      const rawOutput = textContent(result);
-      const output = scrub(rawOutput.slice(0, 200_000)).trim();
+      // Scrub first so a secret that crosses the presentation boundary cannot
+      // be split into an unrecognizable prefix by the intake cap.
+      const output = scrub(textContent(result))
+        .slice(0, RECEIPT_OUTPUT_CHARS)
+        .trim();
       const hasBody = output.length > 0;
       const expandExtra =
         !runningNow &&
@@ -422,7 +469,11 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
             }
             if (spec.body) {
               return paintBody(
-                spec.body(output, result, context.args, innerWidth),
+                boundedRenderedOutput(
+                  spec.body(output, result, context.args, innerWidth),
+                  bodyLimit,
+                  RECEIPT_OUTPUT_CHARS,
+                ),
                 "toolOutput",
               );
             }
@@ -456,6 +507,7 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
       }
       const preview = previewLines
         .slice(0, previewLimit)
+        .map((line) => safeTruncateToWidth(line, 400))
         .map((line) => cleanInline(line, 400))
         .filter(Boolean);
       if (!preview.length) return stableText(header);
