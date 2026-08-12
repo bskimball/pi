@@ -15,6 +15,7 @@ import {
   webSearchSpec,
   webToolRenderers,
 } from "./apex/lib/web-search-ui.ts";
+import { withApexPresentation } from "./apex/lib/presentation.ts";
 
 // Apex receipts for these tools. Presentation lives in apex/lib/web-search-ui.ts
 // and reuses the same primitives as the built-in and MCP rows.
@@ -197,18 +198,20 @@ export default function (pi: ExtensionAPI): void {
       numResults: Type.Optional(Type.Number()), includeContent: Type.Optional(Type.Boolean()),
       recencyFilter: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")])),
       domainFilter: Type.Optional(Type.Array(Type.String())), provider: Type.Optional(Type.String()), workflow: Type.Optional(Type.String()),
-    }), executionMode: "parallel", renderShell: "self",
+    }), executionMode: "parallel", ...withApexPresentation({
+      renderShell: "self" as const,
     renderCall: searchUi.renderCall, renderResult: searchUi.renderResult,
-    async execute(_id, params, signal) {
+    }),
+    async execute(_id: string, params: any, signal: AbortSignal | undefined) {
       const credential = requireKey();
       if ("error" in credential) return textResult(credential.error, {}, true);
       if (params.provider && !["exa", "auto"].includes(params.provider.toLowerCase())) return textResult(`Unsupported provider "${params.provider}". This local tool supports Exa only.`, {}, true);
-      const queries = [...(params.query?.trim() ? [params.query.trim()] : []), ...(params.queries ?? []).map((q) => q.trim()).filter(Boolean)];
+      const queries = [...(params.query?.trim() ? [params.query.trim()] : []), ...(params.queries ?? []).map((q: string) => q.trim()).filter(Boolean)];
       if (!queries.length) return textResult("query or queries is required.", {}, true);
       const numResults = Math.min(MAX_RESULTS, Math.max(1, Math.floor(params.numResults ?? 5)));
       const domainFilter = params.domainFilter ?? [];
-      const includeDomains = domainFilter.filter((domain) => !domain.startsWith("-")).map((domain) => domain.trim()).filter(Boolean);
-      const excludeDomains = domainFilter.filter((domain) => domain.startsWith("-")).map((domain) => domain.slice(1).trim()).filter(Boolean);
+      const includeDomains = domainFilter.filter((domain: string) => !domain.startsWith("-")).map((domain: string) => domain.trim()).filter(Boolean);
+      const excludeDomains = domainFilter.filter((domain: string) => domain.startsWith("-")).map((domain: string) => domain.slice(1).trim()).filter(Boolean);
       try {
         const groups: { query: string; results: SearchResult[] }[] = [];
         for (const query of queries) {
@@ -242,10 +245,12 @@ export default function (pi: ExtensionAPI): void {
     description: "Fetch readable text from one or more public HTTP(S) pages. Stores complete fetched content temporarily for get_search_content.",
     parameters: Type.Object({
       url: Type.Optional(Type.String()), urls: Type.Optional(Type.Array(Type.String())), forceClone: Type.Optional(Type.Boolean()), prompt: Type.Optional(Type.String()), timestamp: Type.Optional(Type.String()), frames: Type.Optional(Type.Boolean()), model: Type.Optional(Type.String()),
-    }), executionMode: "parallel", renderShell: "self",
+    }), executionMode: "parallel", ...withApexPresentation({
+      renderShell: "self" as const,
     renderCall: fetchUi.renderCall, renderResult: fetchUi.renderResult,
-    async execute(_id, params, signal) {
-      const urls = [...(params.url?.trim() ? [params.url.trim()] : []), ...(params.urls ?? []).map((url) => url.trim()).filter(Boolean)];
+    }),
+    async execute(_id: string, params: any, signal: AbortSignal | undefined) {
+      const urls = [...(params.url?.trim() ? [params.url.trim()] : []), ...(params.urls ?? []).map((url: string) => url.trim()).filter(Boolean)];
       if (!urls.length) return textResult("url or urls is required.", {}, true);
       if (params.forceClone || params.frames || params.prompt || params.timestamp || params.model) return textResult("Video, GitHub-clone, frame, prompt, timestamp, and model extraction modes are unsupported. Provide plain public HTTP(S) URL(s).", {}, true);
       try {
@@ -269,9 +274,11 @@ export default function (pi: ExtensionAPI): void {
     description: "Retrieve a bounded slice of content stored by web_search or fetch_content using its responseId.",
     parameters: Type.Object({
       responseId: Type.String(), query: Type.Optional(Type.String()), queryIndex: Type.Optional(Type.Number()), url: Type.Optional(Type.String()), urlIndex: Type.Optional(Type.Number()), offset: Type.Optional(Type.Number()), limit: Type.Optional(Type.Number()),
-    }), executionMode: "parallel", renderShell: "self",
+    }), executionMode: "parallel", ...withApexPresentation({
+      renderShell: "self" as const,
     renderCall: sliceUi.renderCall, renderResult: sliceUi.renderResult,
-    async execute(_id, params) {
+    }),
+    async execute(_id: string, params: any) {
       const entry = store.get(params.responseId);
       if (!entry || Date.now() - entry.createdAt > STORE_TTL_MS) { store.delete(params.responseId); return textResult("Unknown or expired responseId. Search and fetch content is retained in memory for about one hour.", {}, true); }
       const index = Math.max(0, Math.floor(entry.kind === "search" ? (params.queryIndex ?? (params.query ? entry.queries.findIndex((item) => item.query === params.query) : 0)) : (params.urlIndex ?? (params.url ? entry.pages.findIndex((item) => item.url === params.url) : 0))));

@@ -584,12 +584,6 @@ export default function (pi: ExtensionAPI): void {
     }
     orchestrateMode = enabled;
     pi.appendEntry(ORCHESTRATE_ENTRY_TYPE, { enabled });
-    if (ctx.hasUI) {
-      ctx.ui.setStatus(
-        "orchestrate",
-        enabled ? "orchestrator" : undefined,
-      );
-    }
     notify(
       ctx,
       enabled
@@ -623,9 +617,6 @@ export default function (pi: ExtensionAPI): void {
         const data = entry.data as { enabled?: boolean } | undefined;
         orchestrateMode = data?.enabled === true;
       }
-    }
-    if (orchestrateMode && ctx.hasUI) {
-      ctx.ui.setStatus("orchestrate", "orchestrator");
     }
   });
 

@@ -17,6 +17,8 @@
   },
   "settings": {
     "toolPrefix": "server",
-    "idleTimeout": 10
+    "idleTimeout": 10,
+    "showStatusIcon": false,
+    "mcpFooterStatus": "off"
   }
 }

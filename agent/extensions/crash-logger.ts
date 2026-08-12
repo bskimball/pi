@@ -1,5 +1,5 @@
-// Persist fatal JavaScript errors that Pi normally only prints to the terminal.
-// This makes intermittent terminal exits diagnosable after the terminal closes.
+// Persist fatal JavaScript errors that Pi normally only prints to the terminal,
+// plus a separate bounded lifecycle trace for compaction and session exits.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -10,8 +10,11 @@ const INSTALL_KEY = Symbol.for("pi.crashLogger.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
 
 export const MAX_LOG_BYTES = 1024 * 1024;
-const ROTATED_LOG_PREFIX = "pi-crash.rotated.";
 const ROTATED_LOG_SUFFIX = ".log";
+
+function rotatedLogPrefix(logPath: string): string {
+  return `${path.basename(logPath, path.extname(logPath))}.rotated.`;
+}
 
 function errorText(value: unknown): string {
   if (value instanceof Error)
@@ -32,9 +35,10 @@ export function rotateIfNeeded(logPath: string): void {
     // writing to the renamed file, while on Windows the rename fails safely if
     // another process holds the file open. Neither case overwrites new evidence.
     const directory = path.dirname(logPath);
+    const rotatedPrefix = rotatedLogPrefix(logPath);
     const rotatedPath = path.join(
       directory,
-      `${ROTATED_LOG_PREFIX}${Date.now()}.${process.pid}${ROTATED_LOG_SUFFIX}`,
+      `${rotatedPrefix}${Date.now()}.${process.pid}${ROTATED_LOG_SUFFIX}`,
     );
     fs.renameSync(logPath, rotatedPath);
 
@@ -44,7 +48,7 @@ export function rotateIfNeeded(logPath: string): void {
       .readdirSync(directory)
       .filter(
         (name) =>
-          name.startsWith(ROTATED_LOG_PREFIX) &&
+          name.startsWith(rotatedPrefix) &&
           name.endsWith(ROTATED_LOG_SUFFIX),
       )
       .map((name) => {
@@ -85,9 +89,9 @@ function processMetadata(): string {
   ].join("\n");
 }
 
-function append(kind: string, value: unknown): void {
+function appendToLog(logName: string, kind: string, value: unknown): void {
   try {
-    const logPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
+    const logPath = path.join(os.homedir(), ".pi", "agent", logName);
     const body = [
       "",
       `=== ${kind} at ${new Date().toISOString()} ===`,
@@ -103,11 +107,57 @@ function append(kind: string, value: unknown): void {
   }
 }
 
-function processError(kind: string, value: unknown): void {
-  append(kind, value);
+function appendCrash(kind: string, value: unknown): void {
+  appendToLog("pi-crash.log", kind, value);
 }
 
-export default function (_pi: ExtensionAPI): void {
+function appendLifecycle(kind: string, value: unknown): void {
+  appendToLog("pi-lifecycle.log", kind, value);
+}
+
+function processError(kind: string, value: unknown): void {
+  appendCrash(kind, value);
+}
+
+export default function (pi: ExtensionAPI): void {
+  let sessionFile: string | undefined;
+  const logLifecycle = (kind: string, event?: unknown) => {
+    appendLifecycle(
+      kind,
+      [
+        sessionFile ? `session=${sessionFile}` : "session=(unknown)",
+        event == null ? undefined : errorText(event),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  };
+
+  pi.on("session_start", (event, ctx) => {
+    sessionFile = ctx.sessionManager.getSessionFile();
+    logLifecycle(`session start (${event.reason})`);
+  });
+  pi.on("session_before_compact", (event) => {
+    logLifecycle(`compaction start (${event.reason})`, {
+      willRetry: event.willRetry,
+      tokensBefore: event.preparation.tokensBefore,
+      messagesToSummarize: event.preparation.messagesToSummarize.length,
+      turnPrefixMessages: event.preparation.turnPrefixMessages.length,
+    });
+  });
+  pi.on("session_compact", (event) => {
+    logLifecycle(`compaction complete (${event.reason})`, {
+      willRetry: event.willRetry,
+      tokensBefore: event.compactionEntry.tokensBefore,
+      fromExtension: event.fromExtension,
+    });
+  });
+  pi.on("session_shutdown", (event) => {
+    logLifecycle(`session shutdown (${event.reason})`, {
+      targetSessionFile: event.targetSessionFile,
+    });
+  });
+
   if (state[INSTALL_KEY]) return;
   state[INSTALL_KEY] = true;
 

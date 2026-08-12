@@ -14,6 +14,7 @@ import {
   toolRenderers,
   type ToolRenderState,
 } from "./tool-receipt.ts";
+import { withApexPresentation } from "./presentation.ts";
 
 /** Whether a registered tool is the MCP proxy or an MCP-adapter direct tool. */
 export function isMcpToolDefinition(
@@ -210,22 +211,24 @@ function wrapMcpTool(
 
   return {
     ...def,
-    renderShell: "self",
-    renderCall(
-      args,
-      theme,
-      context: ToolRenderContext<ToolRenderState, any>,
-    ) {
-      return ui.renderCall(args, theme, context);
-    },
-    renderResult(
-      result,
-      options,
-      theme,
-      context: ToolRenderContext<ToolRenderState, any>,
-    ) {
-      return ui.renderResult(result, options, theme, context);
-    },
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<ToolRenderState, any>,
+      ) {
+        return ui.renderCall(args, theme, context);
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<ToolRenderState, any>,
+      ) {
+        return ui.renderResult(result, options, theme, context);
+      },
+    }),
   };
 }
 

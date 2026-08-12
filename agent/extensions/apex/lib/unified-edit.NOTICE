@@ -1,0 +1,11 @@
+Unified Edit Extension
+
+This extension is derived from unified-edit.ts in mitsuhiko/agent-stuff:
+https://github.com/mitsuhiko/agent-stuff/blob/c77d49797ad3fb78888e5b002ae606a93777c6b1/extensions/unified-edit.ts
+
+Copyright 2025 Armin Ronacher and contributors.
+Licensed under the Apache License, Version 2.0.
+
+Local changes replace the upstream Box/Text live diff preview with the bounded,
+width-safe Apex tool receipt renderer and Apex diff presentation. Apex loads this
+module directly so only one extension registers the built-in `edit` tool name.

@@ -38,6 +38,13 @@ import {
   metaText,
   safeLine,
 } from "./apex/lib/status-view.ts";
+import { killProcessTree, killProcessTreeSync } from "./apex/lib/process-tree-kill.ts";
+import { JobRegistry } from "./apex/lib/job-registry.ts";
+import { textResult, resolveCwd, validateCwd } from "./apex/lib/tool-result.ts";
+import {
+  apexPresentationEnabled,
+  withApexPresentation,
+} from "./apex/lib/presentation.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -115,25 +122,6 @@ function formatAge(ms: number): string {
   return `${min}m${String(rem).padStart(2, "0")}s`;
 }
 
-function resolveCwd(raw: string | undefined, fallback: string): string {
-  const candidate = raw?.trim() ? raw.trim() : fallback;
-  return path.resolve(candidate);
-}
-
-function validateCwd(cwd: string): string | undefined {
-  try {
-    if (!fs.existsSync(cwd)) {
-      return `working_dir "${cwd}" does not exist. On Windows use a native path (e.g. C:/Users/...), not a bash-style path.`;
-    }
-    if (!fs.statSync(cwd).isDirectory()) {
-      return `working_dir "${cwd}" is not a directory.`;
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return `working_dir "${cwd}" is not usable: ${message}`;
-  }
-  return undefined;
-}
 
 function shellInvocation(command: string): {
   file: string;
@@ -164,81 +152,6 @@ function shellInvocation(command: string): {
   };
 }
 
-function taskkillPath(): string {
-  return path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "taskkill.exe",
-  );
-}
-
-function killDirect(pid: number, signal?: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // already gone
-  }
-}
-
-/** Interactive kill: async tree kill, good enough for bg_kill. */
-function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      const taskkill = spawn(
-        taskkillPath(),
-        ["/F", "/T", "/PID", String(pid)],
-        { stdio: "ignore", windowsHide: true },
-      );
-      const fallback = () => killDirect(pid);
-      taskkill.once("error", fallback);
-      taskkill.once("close", (code) => {
-        if (code !== 0) fallback();
-      });
-    } catch {
-      killDirect(pid);
-    }
-    return;
-  }
-
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    killDirect(pid, "SIGTERM");
-  }
-  setTimeout(() => {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      killDirect(pid, "SIGKILL");
-    }
-  }, 1500).unref?.();
-}
-
-/**
- * Session teardown kill: best-effort synchronous reaping so taskkill/SIGKILL
- * are not left on unref timers that may never run during process exit.
- */
-function killProcessTreeSync(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      spawnSync(
-        taskkillPath(),
-        ["/F", "/T", "/PID", String(pid)],
-        { stdio: "ignore", windowsHide: true, timeout: 5000 },
-      );
-    } catch {
-      // fall through
-    }
-    killDirect(pid);
-    return;
-  }
-
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    killDirect(pid, "SIGKILL");
-  }
-}
 
 function tailForStatus(buf: StreamBuf, maxChars = STATUS_STREAM_CAP): {
   text: string;
@@ -259,13 +172,6 @@ function tailForStatus(buf: StreamBuf, maxChars = STATUS_STREAM_CAP): {
   return { text, truncated, bytes: buf.bytes };
 }
 
-function textResult(text: string, isError = false, details: unknown = {}) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details,
-    isError,
-  };
-}
 
 /**
  * Structured presentation payload for one job. Kept separate from the text
@@ -315,47 +221,52 @@ export default function (pi: ExtensionAPI) {
       payload: NonNullable<ReturnType<typeof bgPayload>>,
       expanded: boolean,
     ) => string[],
-  ) => ({
-    renderShell: "self" as const,
-    renderCall(
-      args: any,
-      theme: any,
-      context: ToolRenderContext<{ hasResult?: boolean }, any>,
-    ) {
-      return new WidthText(
-        (width) =>
-          context.state.hasResult
-            ? []
-            : [bgCallLine(theme, width, tool, args, context.executionStarted)],
-        `[${tool} call unavailable]`,
-      );
-    },
-    renderResult(
-      result: any,
-      options: { expanded: boolean; isPartial: boolean },
-      theme: any,
-      context: ToolRenderContext<{ hasResult?: boolean }, any>,
-    ) {
-      context.state.hasResult = true;
-      const payload = bgPayload(result);
-      const isError = Boolean(result?.isError);
-      return new WidthText((width) => {
-        if (!payload) {
-          return bgFallbackLines(
+  ) =>
+    withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<{ hasResult?: boolean }, any>,
+      ) {
+        return new WidthText(
+          (width) =>
+            context.state.hasResult
+              ? []
+              : [bgCallLine(theme, width, tool, args, context.executionStarted)],
+          `[${tool} call unavailable]`,
+        );
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<{ hasResult?: boolean }, any>,
+      ) {
+        context.state.hasResult = true;
+        const payload = bgPayload(result);
+        const isError = Boolean(result?.isError);
+        return new WidthText((width) => {
+          if (!payload) {
+            return bgFallbackLines(
+              theme,
+              width,
+              tool,
+              textContent(result),
+              isError,
+            );
+          }
+          return card(
             theme,
             width,
-            tool,
-            textContent(result),
-            isError,
+            payload,
+            context.expanded || options.expanded,
           );
-        }
-        return card(theme, width, payload, context.expanded || options.expanded);
-      }, `[${tool} result unavailable]`);
-    },
-  });
+        }, `[${tool} result unavailable]`);
+      },
+    });
 
-  const jobs = new Map<string, BgJob>();
-  const order: string[] = [];
+  const jobs = new JobRegistry<BgJob>();
   let nextId = 1;
   let agentBusy = false;
   let shuttingDown = false;
@@ -364,17 +275,7 @@ export default function (pi: ExtensionAPI) {
     [...jobs.values()].filter((job) => job.status === "running").length;
 
   const pruneSettled = () => {
-    const settled = order
-      .map((id) => jobs.get(id))
-      .filter((job): job is BgJob => !!job && job.status !== "running");
-    if (settled.length <= MAX_SETTLED) return;
-    const excess = settled.length - MAX_SETTLED;
-    for (let i = 0; i < excess; i++) {
-      const job = settled[i];
-      jobs.delete(job.id);
-      const idx = order.indexOf(job.id);
-      if (idx >= 0) order.splice(idx, 1);
-    }
+    jobs.pruneSettled((job) => job.status !== "running", MAX_SETTLED);
   };
 
   const summarizeJob = (job: BgJob, now = Date.now()): string => {
@@ -420,12 +321,10 @@ export default function (pi: ExtensionAPI) {
 
   const drainSettledNotifications = () => {
     if (shuttingDown || agentBusy) return;
-    const pending = order
-      .map((id) => jobs.get(id))
-      .filter(
-        (job): job is BgJob =>
-          !!job && job.status !== "running" && !job.notified,
-      );
+    const pending = jobs
+      .entries()
+      .map(({ item: job }) => job)
+      .filter((job) => job.status !== "running" && !job.notified);
     if (!pending.length) return;
 
     for (const job of pending) job.notified = true;
@@ -527,8 +426,8 @@ export default function (pi: ExtensionAPI) {
       return `${job.id} had no pid; marked killed (${reason}).`;
     }
     try {
-      if (mode === "sync") killProcessTreeSync(pid);
-      else killProcessTree(pid);
+      if (mode === "sync") killProcessTreeSync(pid, { processGroup: true });
+      else killProcessTree(pid, { processGroup: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendStream(job.stderr, `\nkill error: ${message}\n`);
@@ -546,7 +445,7 @@ export default function (pi: ExtensionAPI) {
       if (job.status !== "running") return;
       try {
         process.kill(pid, 0);
-        killProcessTree(pid);
+        killProcessTree(pid, { processGroup: true });
       } catch {
         settleJob(job, "killed", job.exitCode, job.signal);
         return;
@@ -644,7 +543,6 @@ export default function (pi: ExtensionAPI) {
       };
 
       jobs.set(id, job);
-      order.push(id);
 
       const shell = shellInvocation(command);
       let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -658,8 +556,6 @@ export default function (pi: ExtensionAPI) {
         });
       } catch (error) {
         jobs.delete(id);
-        const idx = order.indexOf(id);
-        if (idx >= 0) order.splice(idx, 1);
         const message = error instanceof Error ? error.message : String(error);
         return textResult(`Failed to spawn ${id}: ${message}`, true, {
           bg: { message: `Failed to spawn ${id}: ${message}` },
@@ -738,9 +634,9 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params) {
       const includeSettled = params.include_settled !== false;
       const now = Date.now();
-      const rows = order
-        .map((id) => jobs.get(id))
-        .filter((job): job is BgJob => !!job)
+      const rows = jobs
+        .entries()
+        .map(({ item: job }) => job)
         .filter((job) => includeSettled || job.status === "running");
       const running = rows.filter((job) => job.status === "running").length;
       const bg = {
@@ -822,6 +718,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerMessageRenderer<{ jobs?: unknown }>(
     "bg-process-settled",
     (message, options, theme) => {
+      if (!apexPresentationEnabled()) return undefined;
       const raw = Array.isArray(message.details?.jobs)
         ? message.details.jobs
         : [];
@@ -870,9 +767,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     shuttingDown = true;
     try {
-      for (const id of [...order]) {
-        const job = jobs.get(id);
-        if (!job || job.status !== "running") continue;
+      for (const { item: job } of jobs.entries()) {
+        if (job.status !== "running") continue;
         try {
           killJob(job, "session_shutdown", "sync");
         } catch {
@@ -881,7 +777,6 @@ export default function (pi: ExtensionAPI) {
       }
     } finally {
       jobs.clear();
-      order.length = 0;
     }
   });
 }

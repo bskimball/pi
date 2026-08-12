@@ -8,6 +8,10 @@
     "../node_modules/pi-mcp-adapter/skills"
   ],
   "quietStartup": true,
+  "compaction": {
+    "reserveTokens": 44000,
+    "keepRecentTokens": 20000
+  },
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
   "terminal": {

@@ -28,6 +28,27 @@ describe("crash log rotation", () => {
     assert.equal(readFileSync(join(directory, archives[0]), "utf8"), original);
   });
 
+  it("rotates different log names into independent archive namespaces", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-crash-"));
+    const crashPath = join(directory, "pi-crash.log");
+    const lifecyclePath = join(directory, "pi-lifecycle.log");
+
+    writeFileSync(crashPath, "c".repeat(MAX_LOG_BYTES), "utf8");
+    writeFileSync(lifecyclePath, "l".repeat(MAX_LOG_BYTES), "utf8");
+    rotateIfNeeded(crashPath);
+    rotateIfNeeded(lifecyclePath);
+
+    const archives = readdirSync(directory);
+    assert.equal(
+      archives.filter((name) => name.startsWith("pi-crash.rotated.")).length,
+      1,
+    );
+    assert.equal(
+      archives.filter((name) => name.startsWith("pi-lifecycle.rotated.")).length,
+      1,
+    );
+  });
+
   it("retains only the newest complete rotated generation", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-crash-"));
     const logPath = join(directory, "pi-crash.log");

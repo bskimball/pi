@@ -1,8 +1,8 @@
 // First-class PowerShell tool: runs a direct PowerShell/pwsh child process,
 // independent of the host shell (bash, cmd, or otherwise).
 //
-// Results are plain bounded text for the model. No custom Pi TUI rendering
-// and no presentation timers.
+// Results are plain bounded text for the model; presentation reuses Apex's
+// shared tool receipt (no bespoke chrome, no presentation timers).
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,6 +11,39 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  boundedOutput,
+  toolRenderers,
+  type ToolRenderState,
+} from "./apex/lib/tool-receipt.ts";
+import { cleanInline, type ToolRenderContext } from "./apex/lib/ui-common.ts";
+import { safeTruncateToWidth } from "./apex/lib/safe-text-layout.ts";
+import { killProcessTree } from "./apex/lib/process-tree-kill.ts";
+import { withApexPresentation } from "./apex/lib/presentation.ts";
+
+type PowerShellArgs = { command?: string; timeout?: number };
+
+/**
+ * One-line command summary for the receipt header. Multi-line scripts collapse
+ * to their first statement plus a line count, never the whole body.
+ */
+export function formatPowerShellCommand(
+  command: unknown,
+  budget = 120,
+): string {
+  const max = Math.max(0, Math.floor(budget));
+  if (max === 0) return "";
+  const lines = String(command ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+  if (!lines.length) return "";
+  const extra = lines.length - 1;
+  if (extra <= 0) return safeTruncateToWidth(cleanInline(lines[0], max), max);
+  const suffix = ` +${extra} ${extra === 1 ? "line" : "lines"}`;
+  const head = cleanInline(lines[0], Math.max(0, max - suffix.length));
+  return safeTruncateToWidth(`${head}${suffix}`, max);
+}
 
 const DEFAULT_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
@@ -265,56 +298,6 @@ function textResult(
   };
 }
 
-function taskkillPath(): string {
-  return path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "taskkill.exe",
-  );
-}
-
-function killDirect(pid: number, signal?: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // already gone
-  }
-}
-
-function killProcessGroupOrDirect(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    killDirect(pid, signal);
-  }
-}
-
-/** Kill the PowerShell process tree (Windows taskkill /T, else process group). */
-function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      const taskkill = spawn(
-        taskkillPath(),
-        ["/F", "/T", "/PID", String(pid)],
-        { stdio: "ignore", windowsHide: true },
-      );
-      const fallback = () => killDirect(pid);
-      taskkill.once("error", fallback);
-      taskkill.once("close", (code) => {
-        if (code !== 0) fallback();
-      });
-    } catch {
-      killDirect(pid);
-    }
-    return;
-  }
-
-  killProcessGroupOrDirect(pid, "SIGTERM");
-  setTimeout(() => {
-    killProcessGroupOrDirect(pid, "SIGKILL");
-  }, 1500).unref?.();
-}
-
 function defaultProbe(executable: string): boolean {
   try {
     const result = spawnSync(executable, [...PROBE_ARGS], {
@@ -530,10 +513,11 @@ export async function executePowerShell(
   let aborted = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let retainFullOutput = false;
+  const processGroup = process.platform !== "win32";
 
   const onAbort = () => {
     aborted = true;
-    if (child?.pid) killProcessTree(child.pid);
+    if (child?.pid) killProcessTree(child.pid, { processGroup });
   };
 
   try {
@@ -594,7 +578,7 @@ export async function executePowerShell(
       if (timeoutMs !== undefined) {
         timeoutHandle = setTimeout(() => {
           timedOut = true;
-          if (child?.pid) killProcessTree(child.pid);
+          if (child?.pid) killProcessTree(child.pid, { processGroup });
         }, timeoutMs);
       }
 
@@ -682,6 +666,17 @@ export async function executePowerShell(
 }
 
 export default function (pi: ExtensionAPI): void {
+  // Shared Apex receipt chrome: same glyphs, duration column, collapsed rail
+  // preview, and ctrl+o expansion as read/bash/edit/write and MCP tools.
+  const ui = toolRenderers<PowerShellArgs>({
+    surface: "powershell",
+    title: "powershell",
+    arg: (args, budget) => formatPowerShellCommand(args?.command, budget),
+    stats: (result) =>
+      result?.details?.truncated ? "truncated" : "",
+    preview: (output) => (output ? boundedOutput(output, 3, 1200) : []),
+  });
+
   pi.registerTool({
     name: "powershell",
     label: "PowerShell",
@@ -746,5 +741,23 @@ export default function (pi: ExtensionAPI): void {
         return textResult(message, { executable }, true);
       }
     },
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: PowerShellArgs,
+        theme: any,
+        context: ToolRenderContext<ToolRenderState, PowerShellArgs>,
+      ) {
+        return ui.renderCall(args, theme, context);
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<ToolRenderState, PowerShellArgs>,
+      ) {
+        return ui.renderResult(result, options, theme, context);
+      },
+    }),
   });
 }

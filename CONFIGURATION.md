@@ -139,7 +139,8 @@ semantics: `node_modules/pi-mcp-adapter/README.md` ("Server Options" and
 | `toolPrefix` | `"server" \| "short" \| "none" \| "mcp"` | `"server"` | Tool name prefixing scheme. |
 | `idleTimeout` | number (minutes) | `10` | `0` disables. |
 | `requestTimeoutMs` | number | SDK default | Global request timeout. |
-| `showStatusIcon` | boolean | `true` | Plug icon in `/mcp` status text. |
+| `showStatusIcon` | boolean | `true` | Plug icon in MCP status text. This configuration sets it to `false`; it remains relevant to `/mcp` output even though persistent footer status is disabled. |
+| `mcpFooterStatus` | `"full" \| "compact" \| "off"` | `"full"` | Persistent MCP status verbosity. This configuration sets it to `"off"` so Pi's stable built-in footer remains two lines. `/mcp status` remains available. |
 | `hostConfigDiscovery` | `"off" \| "prompt" \| "on"` | `"off"` | Whether to discover other hosts' MCP configs. |
 | `directTools` | boolean | `false` | Global default; per-server overrides. |
 | `disableProxyTool` | boolean | `false` | Hide the `mcp` proxy tool once direct tools cover everything. |
@@ -170,7 +171,8 @@ semantics: `node_modules/pi-mcp-adapter/README.md` ("Server Options" and
 
 Includes one stdio server (`chrome-devtools`, no secrets) and one HTTP server
 using `bearerTokenEnv` instead of an inline header value, plus a minimal
-`settings` block. The `chrome-devtools-mcp` package is pinned to a tested
+`settings` block that disables persistent MCP footer status. The
+`chrome-devtools-mcp` package is pinned to a tested
 version because `npx -y` downloads and executes that package when it is not
 already cached. Review and update the pin deliberately.
 
@@ -328,8 +330,11 @@ third-party MCP dependency used here is composed locally by `mcp-adapter.ts`
 instead of loaded from this array; see the mcp.json section above for why),
 `skills` (registers the `pi-mcp-adapter` bundled skill directory so
 `mcp-scripting` is discoverable without loading the adapter twice),
-`steeringMode`, `transport`, `terminal.showTerminalProgress`, `editorPaddingX`,
-`theme`, `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
+`compaction` (`reserveTokens: 44000`, leaving roughly 20% of the default
+220k-token context as headroom before between-run auto-compaction, while
+retaining the upstream `keepRecentTokens: 20000` behavior), `steeringMode`,
+`transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme`,
+`tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
 `openai-codex/*`, `xai/*`, and other providers for optional manual selection).
 
 Active default and subagent routes use `local-proxy` (for example

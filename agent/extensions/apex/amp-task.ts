@@ -51,7 +51,18 @@ import {
   textContent,
   type ToolRenderContext,
 } from "./lib/ui-common.ts";
-import { activityGlyph, durationText } from "./lib/task-card.ts";
+import {
+  activityRows,
+  buildTreeLines,
+  type TreeRow,
+} from "./lib/task-card.ts";
+import { ActivityLedger, type Activity } from "./lib/activity-ledger.ts";
+import { killProcessTree } from "./lib/process-tree-kill.ts";
+import { withApexPresentation } from "./lib/presentation.ts";
+import {
+  MODEL_IDLE_MS,
+  TOOL_IDLE_MS,
+} from "./lib/worker-runtime.ts";
 
 // ---------------------------------------------------------------- visual helpers
 
@@ -130,15 +141,7 @@ function exitedFailure(
 
 // ---------------------------------------------------------------- task state
 
-type ActivityStatus = "running" | "completed" | "error";
-interface MissionActivity {
-  id: string;
-  tool: string;
-  summary: string;
-  status: ActivityStatus;
-  startedAt: number;
-  duration?: number;
-}
+type MissionActivity = Activity;
 
 interface TaskDetails {
   agent: string;
@@ -181,10 +184,13 @@ interface TaskRun {
 }
 
 const activeRuns = new Set<TaskRun>();
+
+// Task progress already has dedicated live receipts and task_list/task_status.
+// Do not duplicate it in Pi's extension-status row: leaving that map empty
+// keeps the stable built-in footer at its native two-line height.
 function updateStatus(ctx: ExtensionContext) {
   try {
-    const runs = [...activeRuns].filter((run) => !run.done);
-    ctx.ui.setStatus("tasks", runs.length ? `tasks:${runs.length}` : undefined);
+    ctx.ui.setStatus("tasks", undefined);
   } catch {}
 }
 
@@ -302,24 +308,6 @@ function guardLine(
   );
 }
 
-function renderActivity(
-  activity: MissionActivity,
-  theme: any,
-  width: number,
-  isLast: boolean,
-  now = Date.now(),
-): string {
-  const glyph = activityGlyph(theme, activity.status);
-  const rail = theme.fg("dim", isLast ? TREE.last : TREE.branch);
-  const detail = activity.summary ? ` ${theme.fg("dim", activity.summary)}` : "";
-  const elapsed = durationText(
-    theme,
-    activity.duration ?? now - activity.startedAt,
-  );
-  const left = `${rail} ${glyph} ${theme.fg("muted", activity.tool)}${detail}`;
-  return fitLine(left, elapsed, width);
-}
-
 function taskHeader(
   details: TaskDetails,
   theme: any,
@@ -377,45 +365,47 @@ function renderTaskComponent(
   // badges, failures, and the final report without Markdown, nested containers,
   // or extension-owned render timers.
   return new WidthText((width) => {
-    const lines = [taskHeader(details, theme, width, Date.now())];
+    const now = Date.now();
+    const reportFollows = !isRunning && !!details.finalReport;
+    const rows: TreeRow[] = activityRows(
+      theme,
+      width,
+      details.activities ?? [],
+      {
+        expanded,
+        collapsedLimit: 4,
+        expandedLimit: 80,
+        now,
+      },
+    );
+    const failures = expanded
+      ? details.attemptFailures.slice(-8)
+      : details.attemptFailures.slice(-1);
+    for (const failure of failures) {
+      rows.push({
+        line: (rail) =>
+          safeTruncateToWidth(
+            `${theme.fg("dim", rail)} ${theme.fg("error", "×")} ${theme.fg("error", cleanInline(failure, 180))}`,
+            width,
+          ),
+      });
+    }
+    const railText: string[] = [];
     // Guards are only meaningful once the child is actually executing. A queued
     // task has no idle/turn budget running yet, so listing them would imply
     // supervision that is not active.
     if (expanded && details.status === "running") {
       const guards = guardLine(details, theme, width);
-      if (guards) lines.push(guards);
+      if (guards) railText.push(guards);
     }
-    const limit = expanded ? 80 : 4;
-    const shown = details.activities?.slice(-limit) ?? [];
-    const hidden = (details.activities?.length ?? 0) - shown.length;
-    if (hidden > 0)
-      lines.push(
-        `${theme.fg("dim", TREE.rail)}  ${theme.fg("muted", `▸ ${hidden} more steps`)}`,
-      );
-    const now = Date.now();
-    const hasTail =
-      details.attemptFailures.length > 0 ||
-      (!isRunning && !!details.finalReport);
-    shown.forEach((activity, index) => {
-      const isLast = !hasTail && index === shown.length - 1;
-      lines.push(renderActivity(activity, theme, width, isLast, now));
-    });
-    if (details.attemptFailures.length) {
-      const failures = expanded
-        ? details.attemptFailures.slice(-8)
-        : details.attemptFailures.slice(-1);
-      const reportFollows = !isRunning && !!details.finalReport;
-      failures.forEach((failure, index) => {
-        const isLast = !reportFollows && index === failures.length - 1;
-        const rail = theme.fg("dim", isLast ? TREE.last : TREE.branch);
-        lines.push(
-          safeTruncateToWidth(
-            `${rail} ${theme.fg("error", "×")} ${theme.fg("error", cleanInline(failure, 180))}`,
-            width,
-          ),
-        );
-      });
-    }
+    const lines = buildTreeLines(
+      theme,
+      width,
+      taskHeader(details, theme, width, now),
+      rows,
+      railText,
+      { hasFollowingContent: reportFollows },
+    );
     if (!isRunning && details.finalReport) {
       // Body width accounts for the gutter (collapsed) or card padding
       // (expanded) so wrapped text never overflows its container.
@@ -577,7 +567,6 @@ export default function (pi: ExtensionAPI) {
     description: `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${agentList}`,
     parameters: TaskParams,
     executionMode: "parallel",
-    renderShell: "self",
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const def = agents.get(params.agent);
@@ -622,23 +611,15 @@ export default function (pi: ExtensionAPI) {
       }
 
       const timeoutMs = (def.timeoutSec ?? 1800) * 1000;
-      const idleMs = 300_000;
-      const toolIdleMs = 900_000;
+      const idleMs = MODEL_IDLE_MS;
+      const toolIdleMs = TOOL_IDLE_MS;
       const maxTurns = def.maxTurns ?? 30;
       const attempts = modelAttempts(def, params.model);
 
-      const activities: MissionActivity[] = [];
+      const ledger = new ActivityLedger({ maxActivities: 400 });
       const attemptedModels: string[] = [];
       const attemptFailures: string[] = [];
-      // Tool calls can overlap, so running activities are tracked per call
-      // rather than as one "active" activity. Identified calls are keyed by
-      // toolCallId; anonymous calls form a LIFO stack so an anonymous end can
-      // only ever close an anonymous start.
-      const runningById = new Map<string, MissionActivity>();
-      const runningAnonymous: MissionActivity[] = [];
-      let anonymousSeq = 0;
-      const hasActiveTools = () =>
-        runningById.size > 0 || runningAnonymous.length > 0;
+      const hasActiveTools = () => ledger.hasActiveTools();
       let turns = 0;
       let killReason: string | undefined;
       let finalExitCode: number | null = null;
@@ -661,7 +642,7 @@ export default function (pi: ExtensionAPI) {
           status === "running" || status === "queued"
             ? undefined
             : Date.now() - startedAt,
-        activities: activities.map((activity) => ({ ...activity })),
+        activities: ledger.snapshot(),
         attemptedModels: [...attemptedModels],
         attemptFailures: [...attemptFailures],
         model: currentModel,
@@ -686,21 +667,10 @@ export default function (pi: ExtensionAPI) {
           });
         } catch {}
       };
-      const closeActivity = (
-        activity: MissionActivity | undefined,
-        status: ActivityStatus = "completed",
+      const closeAllRunning = (
+        status: MissionActivity["status"] = "completed",
       ) => {
-        if (!activity || activity.status !== "running") return;
-        activity.status = status;
-        activity.duration = Date.now() - activity.startedAt;
-      };
-      const closeAllRunning = (status: ActivityStatus = "completed") => {
-        for (const activity of runningById.values())
-          closeActivity(activity, status);
-        for (const activity of runningAnonymous)
-          closeActivity(activity, status);
-        runningById.clear();
-        runningAnonymous.length = 0;
+        ledger.closeAll(status);
       };
 
       const run: TaskRun = { agent: def.name, done: false };
@@ -713,40 +683,7 @@ export default function (pi: ExtensionAPI) {
         cancelSlot?.();
         const child = run.child;
         if (!child?.pid) return;
-        if (process.platform === "win32") {
-          try {
-            const taskkill = spawn(
-              path.join(
-                process.env.SystemRoot ?? "C:\\Windows",
-                "System32",
-                "taskkill.exe",
-              ),
-              ["/F", "/T", "/PID", String(child.pid)],
-              { stdio: "ignore", windowsHide: true },
-            );
-            const killDirectChildIfAlive = () => {
-              if (child.exitCode !== null || child.signalCode !== null) return;
-              try {
-                if (process.kill(child.pid!, 0)) child.kill();
-              } catch {}
-            };
-            // Node 24 reports spawn failures asynchronously. Always consume the
-            // error event and fall back to killing the direct child. taskkill
-            // can also spawn successfully but fail to terminate the process.
-            taskkill.once("error", killDirectChildIfAlive);
-            taskkill.once("close", (code) => {
-              if (code !== 0) killDirectChildIfAlive();
-            });
-          } catch {
-            try {
-              child.kill();
-            } catch {}
-          }
-          return;
-        }
-        try {
-          child.kill();
-        } catch {}
+        killProcessTree(child.pid);
       };
       run.cancel = kill;
       // Queued work is registered before the queue wait so abort, session
@@ -1014,43 +951,20 @@ export default function (pi: ExtensionAPI) {
                       event.toolCallId == null
                         ? undefined
                         : String(event.toolCallId);
-                    const activity: MissionActivity = {
-                      id: callId ?? `anon#${anonymousSeq++}`,
-                      tool: cleanInline(event.toolName, 40),
-                      summary: shortArgs(event.args),
-                      status: "running",
-                      startedAt: Date.now(),
-                    };
-                    if (callId) {
-                      // A repeated id means the previous one will never get its
-                      // own end event; close it rather than leaking it.
-                      closeActivity(runningById.get(callId));
-                      runningById.set(callId, activity);
-                    } else {
-                      runningAnonymous.push(activity);
-                    }
-                    activities.push(activity);
-                    if (activities.length > 400)
-                      activities.splice(0, activities.length - 300);
+                    ledger.start(
+                      cleanInline(event.toolName, 40),
+                      shortArgs(event.args),
+                      callId,
+                    );
                     // Reset (and force-publish) after the running set changed
                     // so the emitted phase reflects the new tool budget.
                     resetIdle();
                   } else if (event.type === "tool_execution_end") {
-                    let activity: MissionActivity | undefined;
-                    if (event.toolCallId == null) {
-                      // Only match an anonymous end to an anonymous start, most
-                      // recent first. Never guess which identified overlapping
-                      // call may have ended.
-                      activity = runningAnonymous.pop();
-                    } else {
-                      const callId = String(event.toolCallId);
-                      activity = runningById.get(callId);
-                      runningById.delete(callId);
-                    }
-                    closeActivity(
-                      activity,
-                      event.isError ? "error" : "completed",
-                    );
+                    const callId =
+                      event.toolCallId == null
+                        ? undefined
+                        : String(event.toolCallId);
+                    ledger.end(callId, Boolean(event.isError));
                     resetIdle();
                   } else if (
                     event.type === "message_end" &&
@@ -1224,50 +1138,57 @@ export default function (pi: ExtensionAPI) {
       }
     },
 
-    renderCall(args, theme, context: ToolRenderContext<TaskRenderState, any>) {
-      context.state.startedAt ??= Date.now();
-      const def = args.agent ? agents.get(args.agent) : undefined;
-      const details: TaskDetails = {
-        agent: args.agent ?? "agent",
-        mission: missionFromPrompt(args.prompt ?? "Mission"),
-        // `executionStarted` only means `execute` was entered; the task may
-        // still be waiting for a concurrency slot. Stay queued here and let
-        // the first emitted snapshot (rendered by renderResult) prove that
-        // the child is actually running, so a queued task never flickers
-        // through a false "running" frame.
-        status: "queued",
-        startedAt: context.state.startedAt,
-        model: args.model
-          ? qualifyModel(args.model, agentProvider(def))
-          : def?.model,
-        thinking: def?.thinking,
-        activities: [],
-        attemptedModels: [],
-        attemptFailures: [],
-        turns: 0,
-      };
-      const call = renderTaskComponent(details, context.expanded, theme);
-      // ToolExecutionComponent composes renderCall and renderResult. The
-      // result renderer flips this shared state before the composed component
-      // renders, preserving the queued/running call until a result exists and
-      // then leaving exactly one live/final task display.
-      return new WidthText((width) =>
-        context.state.hasResult ? [] : call.render(width),
-      );
-    },
-    renderResult(
-      result,
-      options,
-      theme,
-      context: ToolRenderContext<TaskRenderState, any>,
-    ) {
-      context.state.hasResult = true;
-      const details = result.details as TaskDetails | undefined;
-      if (!details)
-        return new WidthText(() => [textContent(result) || "(no output)"]);
-      if (!options.isPartial) context.state.endedAt ??= Date.now();
-      return renderTaskComponent(details, options.expanded, theme);
-    },
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<TaskRenderState, any>,
+      ) {
+        context.state.startedAt ??= Date.now();
+        const def = args.agent ? agents.get(args.agent) : undefined;
+        const details: TaskDetails = {
+          agent: args.agent ?? "agent",
+          mission: missionFromPrompt(args.prompt ?? "Mission"),
+          // `executionStarted` only means `execute` was entered; the task may
+          // still be waiting for a concurrency slot. Stay queued here and let
+          // the first emitted snapshot (rendered by renderResult) prove that
+          // the child is actually running, so a queued task never flickers
+          // through a false "running" frame.
+          status: "queued",
+          startedAt: context.state.startedAt,
+          model: args.model
+            ? qualifyModel(args.model, agentProvider(def))
+            : def?.model,
+          thinking: def?.thinking,
+          activities: [],
+          attemptedModels: [],
+          attemptFailures: [],
+          turns: 0,
+        };
+        const call = renderTaskComponent(details, context.expanded, theme);
+        // ToolExecutionComponent composes renderCall and renderResult. The
+        // result renderer flips this shared state before the composed component
+        // renders, preserving the queued/running call until a result exists and
+        // then leaving exactly one live/final task display.
+        return new WidthText((width) =>
+          context.state.hasResult ? [] : call.render(width),
+        );
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<TaskRenderState, any>,
+      ) {
+        context.state.hasResult = true;
+        const details = result.details as TaskDetails | undefined;
+        if (!details)
+          return new WidthText(() => [textContent(result) || "(no output)"]);
+        if (!options.isPartial) context.state.endedAt ??= Date.now();
+        return renderTaskComponent(details, options.expanded, theme);
+      },
+    }),
   });
 
   pi.on("session_shutdown", () => {

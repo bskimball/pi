@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, normalize, resolve } from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { killWindowsProcessTree as killSharedWindowsProcessTree } from "../apex/lib/process-tree-kill.ts";
 
 export interface SpawnCommand {
   command: string;
@@ -201,41 +202,12 @@ export function isWindowsCmdScript(command: string, platform: NodeJS.Platform = 
 }
 
 /**
- * Kill a Windows process tree via taskkill /T /F. Bounded; never throws.
- * Used only for cmd/bat-wrapped language servers so grandchildren die with the wrapper.
+ * LSP compatibility adapter over the shared ProcessTree module. The injected
+ * spawn seam remains for command-resolution tests.
  */
 export function killWindowsProcessTree(
   pid: number,
   spawnImpl: typeof spawn = spawn,
 ): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-
-    let child: ReturnType<typeof spawnImpl>;
-    try {
-      child = spawnImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } catch {
-      finish();
-      return;
-    }
-
-    const timer = setTimeout(finish, 2_000);
-    timer.unref?.();
-    child.once("exit", () => {
-      clearTimeout(timer);
-      finish();
-    });
-    child.once("error", () => {
-      clearTimeout(timer);
-      finish();
-    });
-  });
+  return killSharedWindowsProcessTree(pid, { spawnImpl });
 }

@@ -17,6 +17,7 @@ import {
   type TodoListView,
   type TodoStatus,
 } from "./apex/lib/todo-list.ts";
+import { withApexPresentation } from "./apex/lib/presentation.ts";
 import {
   TREE,
   WidthText,
@@ -272,50 +273,58 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "sequential",
-    renderShell: "self" as const,
+    ...withApexPresentation({
+      renderShell: "self" as const,
     renderCall(
-      args: TodoWriteParams,
-      theme: StatusTheme,
-      context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
+        args: TodoWriteParams,
+        theme: StatusTheme,
+        context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
+      ) {
+        return new WidthText(
+          (width) =>
+            context.state.hasResult
+              ? []
+              : [todoCallLine(theme, width, args, context.executionStarted)],
+          "[todo_write call unavailable]",
+        );
+      },
+      renderResult(
+        result: { content?: unknown; details?: TodoDetails; isError?: boolean },
+        options: { expanded: boolean; isPartial: boolean },
+        theme: StatusTheme,
+        context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
+      ) {
+        context.state.hasResult = true;
+        const payload = todoPayload(result);
+        const isError = Boolean(result?.isError) || Boolean(payload?.message);
+        return new WidthText((width) => {
+          const view = payload?.view;
+          if (!view) {
+            return todoFallbackLines(
+              theme,
+              width,
+              payload?.message ?? textContent(result),
+              isError,
+            );
+          }
+          // In the interactive TUI the dock above the editor is the canonical
+          // todo surface. Keep successful writes out of the transcript so the
+          // same list is not shown twice; non-TUI modes retain the receipt.
+          if (currentCtx?.mode === "tui") return [];
+          return renderTodoList(theme, width, view, {
+            expanded: context.expanded || options.expanded,
+            emptyHint: "todo_write to start a plan",
+          });
+        }, "[todo_write result unavailable]");
+      },
+    }),
+    async execute(
+      _toolCallId: string,
+      params: TodoWriteParams,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
     ) {
-      return new WidthText(
-        (width) =>
-          context.state.hasResult
-            ? []
-            : [todoCallLine(theme, width, args, context.executionStarted)],
-        "[todo_write call unavailable]",
-      );
-    },
-    renderResult(
-      result: { content?: unknown; details?: TodoDetails; isError?: boolean },
-      options: { expanded: boolean; isPartial: boolean },
-      theme: StatusTheme,
-      context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
-    ) {
-      context.state.hasResult = true;
-      const payload = todoPayload(result);
-      const isError = Boolean(result?.isError) || Boolean(payload?.message);
-      return new WidthText((width) => {
-        const view = payload?.view;
-        if (!view) {
-          return todoFallbackLines(
-            theme,
-            width,
-            payload?.message ?? textContent(result),
-            isError,
-          );
-        }
-        // In the interactive TUI the dock above the editor is the canonical
-        // todo surface. Keep successful writes out of the transcript so the
-        // same list is not shown twice; non-TUI modes retain the receipt.
-        if (currentCtx?.mode === "tui") return [];
-        return renderTodoList(theme, width, view, {
-          expanded: context.expanded || options.expanded,
-          emptyHint: "todo_write to start a plan",
-        });
-      }, "[todo_write result unavailable]");
-    },
-    async execute(_toolCallId, params: TodoWriteParams, _signal, _onUpdate, ctx) {
       const todos = Array.isArray(params?.todos) ? params.todos : [];
       if (todos.length === 0) {
         const message =
@@ -361,34 +370,36 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({}),
     executionMode: "sequential",
-    renderShell: "self" as const,
+    ...withApexPresentation({
+      renderShell: "self" as const,
     renderResult(
-      result: { content?: unknown; details?: TodoDetails; isError?: boolean },
-      options: { expanded: boolean; isPartial: boolean },
-      theme: StatusTheme,
-      context: ToolRenderContext<{ hasResult?: boolean }, unknown>,
-    ) {
-      context.state.hasResult = true;
-      const payload = todoPayload(result);
-      return new WidthText((width) => {
-        const view = payload?.view;
-        if (!view) {
-          return [
-            receiptHeader(theme, width, {
-              tool: "todo_read",
-              kind: "unknown",
-              subject: safeLine(payload?.message ?? textContent(result), 300),
-              rootGlyph: TREE.receipt,
-            }),
-          ];
-        }
-        if (currentCtx?.mode === "tui") return [];
-        return renderTodoList(theme, width, view, {
-          expanded: context.expanded || options.expanded,
-          emptyHint: "todo_write to start a plan",
-        });
-      }, "[todo_read result unavailable]");
-    },
+        result: { content?: unknown; details?: TodoDetails; isError?: boolean },
+        options: { expanded: boolean; isPartial: boolean },
+        theme: StatusTheme,
+        context: ToolRenderContext<{ hasResult?: boolean }, unknown>,
+      ) {
+        context.state.hasResult = true;
+        const payload = todoPayload(result);
+        return new WidthText((width) => {
+          const view = payload?.view;
+          if (!view) {
+            return [
+              receiptHeader(theme, width, {
+                tool: "todo_read",
+                kind: "unknown",
+                subject: safeLine(payload?.message ?? textContent(result), 300),
+                rootGlyph: TREE.receipt,
+              }),
+            ];
+          }
+          if (currentCtx?.mode === "tui") return [];
+          return renderTodoList(theme, width, view, {
+            expanded: context.expanded || options.expanded,
+            emptyHint: "todo_write to start a plan",
+          });
+        }, "[todo_read result unavailable]");
+      },
+    }),
     async execute() {
       if (!current) {
         const message =

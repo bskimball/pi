@@ -1,51 +1,26 @@
 // apex-ui: compact built-in tool chrome and monochrome interactive layout.
 
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   CustomEditor,
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
-  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import {
   fallbackTruncateToWidth,
-  padStartToWidth,
-  safeTruncateToWidth,
-  safeVisibleWidth,
 } from "./lib/safe-text-layout.ts";
 import {
-  boundedOutput,
   reportRenderFailure,
-  toolRenderers,
-  type ToolRenderState,
 } from "./lib/tool-receipt.ts";
 import { installRenderSafety } from "./lib/render-safety.ts";
-import {
-  formatDiffStats,
-  generateDiffString,
-  normalizeToLF,
-  renderDiffLines,
-  resultDiff,
-} from "./lib/edit-diff.ts";
+import { installBuiltinTools } from "./lib/builtin-tools.ts";
 // Re-export so callers that still look for installMcpPresentation on apex-ui
 // keep working; preferred import is ./lib/mcp-presentation.ts.
 export { installMcpPresentation } from "./lib/mcp-presentation.ts";
 import {
   WidthText,
-  cleanInline,
-  fitLine,
-  formatTokens,
   stripAnsi,
-  type ToolRenderContext,
 } from "./lib/ui-common.ts";
 import {
   buildObservatory,
@@ -68,274 +43,6 @@ import {
   type ObservatoryOrbResult,
 } from "./lib/observatory-orb.ts";
 import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
-
-type BuiltinName = "read" | "bash" | "edit" | "write";
-type BuiltinRenderState = ToolRenderState;
-
-function primaryArg(name: BuiltinName, args: any): string {
-  if (name === "bash") return cleanInline(args?.command, 120);
-  const filePath = cleanInline(args?.path, 120);
-  if (name === "read" && args?.offset)
-    return `${filePath}:${args.offset}${args?.limit ? `+${args.limit}` : ""}`;
-  return filePath;
-}
-
-/**
- * Trailing notices appended after file content, matched exactly as emitted so
- * ordinary source is never mistaken for one. A loose `^\[` test would swallow
- * real lines such as `[key: string]: Foo` and desynchronize every number after
- * it. Upstream forms come from the read tool; the `...` forms come from
- * `boundedOutput`.
- */
-const READ_NOTICE_RE =
-  /^(?:\[Showing lines \d+-\d+ of \d+.*\]|\[\d+ more lines in file\. Use offset=\d+ to continue\.\]|\[Line \d+ is .*exceeds .*limit\..*\]|\.\.\. \d+ more lines|\.\.\. output truncated at \d+ characters)$/;
-
-/**
- * Prefix each read line with a right-aligned line number so the expanded card
- * has a stable left edge, matching the numbered edit/write diffs. Only the
- * read tool's actual trailing notices are left unnumbered; everything else is
- * treated as file content so the numbering stays in step with the file.
- */
-function numberReadLines(
-  lines: string[],
-  offset: unknown,
-  theme: { fg: (key: any, text: string) => string } | undefined,
-  innerWidth: number,
-): string[] {
-  const dim = (text: string) => theme?.fg("dim", text) ?? text;
-  const body = (text: string) => theme?.fg("toolOutput", text) ?? text;
-  const start = Number.isFinite(Number(offset))
-    ? Math.max(1, Math.floor(Number(offset)))
-    : 1;
-  const gutter = Math.max(2, String(start + lines.length - 1).length);
-  // Keep at least a usable slice of content on very narrow terminals.
-  if (innerWidth <= gutter + 4) return lines;
-  let lineNumber = start;
-  return lines.map((line) => {
-    if (READ_NOTICE_RE.test(line)) return dim(line);
-    const numbered = `${padStartToWidth(String(lineNumber), gutter)} `;
-    lineNumber++;
-    return `${dim(numbered)}${body(safeTruncateToWidth(line, innerWidth - gutter - 1))}`;
-  });
-}
-
-function resolveToolPath(filePath: string, cwd: string): string {
-  const normalized = filePath
-    .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ")
-    .replace(/^@/, "");
-  const expanded =
-    normalized === "~"
-      ? os.homedir()
-      : normalized.startsWith("~/")
-        ? os.homedir() + normalized.slice(1)
-        : normalized;
-  return path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
-}
-
-async function readPriorContent(
-  filePath: string,
-  cwd: string,
-): Promise<{ content: string | undefined; ok: boolean }> {
-  const absolutePath = resolveToolPath(filePath, cwd);
-  try {
-    return { content: await fs.readFile(absolutePath, "utf-8"), ok: true };
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return { content: "", ok: true };
-    return { content: undefined, ok: false };
-  }
-}
-
-function registerBuiltin(
-  pi: ExtensionAPI,
-  name: BuiltinName,
-  make: (cwd: string) => ToolDefinition<any, any, any>,
-) {
-  const cache = new Map<string, ToolDefinition<any, any, any>>();
-  const get = (cwd: string) => {
-    let definition = cache.get(cwd);
-    if (!definition) {
-      definition = make(cwd);
-      cache.set(cwd, definition);
-    }
-    return definition;
-  };
-  const base = get(process.cwd());
-  const isMutation = name === "edit" || name === "write";
-  // Theme for expanded mutation diffs is captured on each renderResult call.
-  let lastTheme:
-    | {
-        fg: (key: any, text: string) => string;
-        inverse?: (text: string) => string;
-      }
-    | undefined;
-
-  const ui = toolRenderers<any>({
-    surface: name,
-    title: name,
-    expandVerb: isMutation ? "diff" : "expand",
-    expandWhen: (result, _args, isError) =>
-      isMutation && !isError && !!resultDiff(result),
-    arg(args, budget) {
-      const rawArg = primaryArg(name, args);
-      return name === "bash"
-        ? safeTruncateToWidth(rawArg, budget)
-        : shortenPath(rawArg, budget);
-    },
-    stats(result, _args, theme) {
-      if (!isMutation) return "";
-      return formatDiffStats(theme, resultDiff(result));
-    },
-    preview(output) {
-      // Collapsed preview is bash-only; mutations show +/− stats, read is header-only.
-      if (name === "bash" && output) return boundedOutput(output, 3, 1200);
-      return [];
-    },
-    body(output, result, args, innerWidth) {
-      if (isMutation) {
-        const diff = resultDiff(result);
-        // Pre-styled rows; the engine leaves ESC-bearing lines unpainted.
-        return diff
-          ? renderDiffLines(
-              diff,
-              lastTheme ?? { fg: (_k, t) => t },
-              80,
-              innerWidth,
-            )
-          : [];
-      }
-      if (!output) return [];
-      const lines = boundedOutput(output, 80);
-      // A numbered gutter gives read the same scannable left edge as the
-      // numbered edit/write diffs, so both expanded surfaces read alike.
-      if (name !== "read") return lines;
-      return numberReadLines(lines, args?.offset, lastTheme, innerWidth);
-    },
-  });
-
-  pi.registerTool({
-    name,
-    label: base.label,
-    description: base.description,
-    promptSnippet: base.promptSnippet,
-    promptGuidelines: base.promptGuidelines,
-    parameters: base.parameters,
-    prepareArguments: base.prepareArguments,
-    executionMode: base.executionMode,
-    renderShell: "self",
-    async execute(toolCallId, params: any, signal, onUpdate, ctx) {
-      const definition = get(ctx.cwd);
-      if (name !== "write") {
-        return definition.execute(toolCallId, params, signal, onUpdate, ctx);
-      }
-
-      // Capture prior contents so expanded write results can show a real diff.
-      // ENOENT => new file (empty prior). Other pre-read failures omit the diff.
-      const filePath = typeof params?.path === "string" ? params.path : "";
-      const prior = filePath
-        ? await readPriorContent(filePath, ctx.cwd)
-        : { content: undefined, ok: false };
-      const result = await definition.execute(
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-        ctx,
-      );
-      if (!prior.ok || prior.content === undefined) return result;
-      if (result?.details?.diff) return result;
-
-      const newContent =
-        typeof params?.content === "string" ? params.content : "";
-      const diff = generateDiffString(
-        normalizeToLF(prior.content),
-        normalizeToLF(newContent),
-      );
-      return {
-        ...result,
-        details: {
-          ...(result?.details && typeof result.details === "object"
-            ? result.details
-            : {}),
-          diff,
-        },
-      };
-    },
-    renderCall(args, theme, context: ToolRenderContext<BuiltinRenderState, any>) {
-      return ui.renderCall(args, theme, context);
-    },
-    renderResult(
-      result,
-      options,
-      theme,
-      context: ToolRenderContext<BuiltinRenderState, any>,
-    ) {
-      lastTheme = theme;
-      // Preserve prior mutation error handling: single-line error rail (not full expand).
-      // The engine already supports error expand; keep behavior equivalent for bash/read.
-      return ui.renderResult(result, options, theme, context);
-    },
-  });
-}
-
-function formatCwd(cwd: string): string {
-  const home = process.env.HOME || process.env.USERPROFILE;
-  return home && cwd.toLowerCase().startsWith(home.toLowerCase())
-    ? `~${cwd.slice(home.length)}`
-    : cwd;
-}
-
-/** Keep the tail segments of a path, which carry the identifying information. */
-function shortenPath(value: string, max: number): string {
-  if (value.length <= max) return value;
-  const segments = value.split(/[\\/]+/).filter(Boolean);
-  for (let start = 1; start < segments.length; start++) {
-    const tail = `…/${segments.slice(start).join("/")}`;
-    if (tail.length <= max) return tail;
-  }
-  const last = segments[segments.length - 1] ?? value;
-  return last.length <= max ? last : `…${last.slice(-Math.max(1, max - 1))}`;
-}
-
-interface VsStatusParts {
-  wide: string;
-  narrow: string;
-}
-
-function parseVsCodeStatus(
-  status: string | undefined,
-): VsStatusParts | undefined {
-  if (!status) return undefined;
-  const body = cleanInline(status, 240).replace(/^VS Code:\s*/i, "");
-  if (!body) return { wide: "VS connected", narrow: "VS●" };
-  if (/bridge unavailable|no active editor/i.test(body)) {
-    return {
-      wide: `VS ${body}`,
-      narrow: /unavailable/i.test(body) ? "VS!" : "VS○",
-    };
-  }
-  const parts = body.split(/\s*(?:[•·]|\|)\s*/).filter(Boolean);
-  const file = parts[0]
-    ? path.basename(parts[0].replace(/^(?:●|\+)\s*/, ""))
-    : "connected";
-  const selection = parts.find((part) =>
-    /\b(?:ln|col|sel)\b|@\s*\d/i.test(part),
-  );
-  const diagnostics = [...parts]
-    .reverse()
-    .find((part) => /^(?:[EWIH]\d+)(?:\s+[EWIH]\d+)*$|^(?:✓|OK)$/.test(part));
-  const extras = [selection, diagnostics].filter(
-    (part): part is string => !!part,
-  );
-  return {
-    wide: `VS ${file}${extras.length ? ` | ${extras.join(" | ")}` : ""}`,
-    narrow: `VS ${diagnostics ?? "●"}`,
-  };
-}
-
-function taskCount(status: string | undefined): number {
-  const match = stripAnsi(status ?? "").match(/tasks:(\d+)/i);
-  return match ? Number(match[1]) : 0;
-}
 
 const RANDOM_INDICATOR_FRAME_COUNT = 256;
 const RANDOM_INDICATOR_INTERVAL_MS = 120;
@@ -495,10 +202,7 @@ export default function (pi: ExtensionAPI) {
   // MCP presentation is installed by agent/extensions/mcp-adapter.ts on the
   // adapter's own ExtensionAPI — not here (per-extension tool maps).
 
-  registerBuiltin(pi, "read", createReadToolDefinition);
-  registerBuiltin(pi, "bash", createBashToolDefinition);
-  registerBuiltin(pi, "edit", createEditToolDefinition);
-  registerBuiltin(pi, "write", createWriteToolDefinition);
+  installBuiltinTools(pi);
 
   // The observatory landing screen. It exists only for a conversation-blank
   // fresh chat and is owned entirely by this module through Pi's startup
@@ -795,9 +499,9 @@ export default function (pi: ExtensionAPI) {
       render(width: number): string[] {
         try {
           // Pi colors both input borders from the thinking level (and bash mode).
-          // Apex keeps the chrome quiet: only the footer thinking label carries
-          // that hue. Force the border painter before super.render so the bottom
-          // rule and scroll indicators stay muted too, not just the top line.
+          // Apex keeps the chrome quiet: mute the border painter before
+          // super.render so the bottom rule and scroll indicators stay muted
+          // too, not just the top line. Model/thinking stay on Pi's stock footer.
           this.borderColor = (str: string) =>
             ctx.ui.theme.fg("borderMuted", str);
 
@@ -807,8 +511,6 @@ export default function (pi: ExtensionAPI) {
           // Keep every upstream editor row and cursor calculation intact. Only
           // repaint the existing top border and replace its two leading padding
           // cells with a prompt glyph; no rows or terminal columns are added.
-          // Model/thinking now lives in the footer information system instead
-          // of floating alone above the input's right edge.
           lines[0] = ctx.ui.theme.fg(
             "borderMuted",
             "─".repeat(Math.max(0, width)),
@@ -837,282 +539,5 @@ export default function (pi: ExtensionAPI) {
       (tui, theme, keybindings) => new ApexEditor(tui, theme, keybindings),
     );
 
-    // Token totals are O(session length) to compute; cache them and only
-    // rescan when the entry count changes rather than on every render tick.
-    let usageCache = {
-      entryCount: -1,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    };
-    const sessionUsage = () => {
-      const entries = ctx.sessionManager.getEntries();
-      if (entries.length === usageCache.entryCount) return usageCache;
-      let input = 0;
-      let output = 0;
-      let cacheRead = 0;
-      let cacheWrite = 0;
-      for (const entry of entries) {
-        if (entry.type === "message" && entry.message.role === "assistant") {
-          const message = entry.message as AssistantMessage;
-          input += message.usage.input || 0;
-          output += message.usage.output || 0;
-          cacheRead += message.usage.cacheRead || 0;
-          cacheWrite += message.usage.cacheWrite || 0;
-        }
-      }
-      usageCache = {
-        entryCount: entries.length,
-        input,
-        output,
-        cacheRead,
-        cacheWrite,
-      };
-      return usageCache;
-    };
-
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
-      return {
-        dispose: unsubscribe,
-        invalidate() {},
-        render(width: number): string[] {
-          try {
-            if (width <= 0) return [];
-            const { input, output, cacheRead, cacheWrite } = sessionUsage();
-            const usage = ctx.getContextUsage();
-            const window =
-              usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-            const tokens = usage?.tokens;
-            const percent = usage?.percent;
-            // A continuous rule reads quieter than outlined boxes: the empty
-            // track recedes instead of competing with the filled portion.
-            const gauge = (track: number) => {
-              const cells =
-                percent == null
-                  ? 0
-                  : Math.max(
-                      0,
-                      Math.min(track, Math.round((percent / 100) * track)),
-                    );
-              const tone =
-                percent == null
-                  ? "borderMuted"
-                  : percent >= 90
-                    ? "error"
-                    : percent >= 70
-                      ? "warning"
-                      : "accent";
-              return `${theme.fg(tone, "━".repeat(cells))}${theme.fg("borderMuted", "─".repeat(track - cells))}`;
-            };
-            const promptTokens = input + cacheRead + cacheWrite;
-            const cacheHit = promptTokens
-              ? Math.round((cacheRead / promptTokens) * 100)
-              : 0;
-            const statuses = footerData.getExtensionStatuses();
-            const vs = parseVsCodeStatus(statuses.get("pi-vscode"));
-            const mcpEntry = [...statuses.entries()].find(([key]) =>
-              key.toLowerCase().includes("mcp"),
-            );
-            const otherStatus = [...statuses.entries()].find(
-              ([key]) =>
-                key !== "pi-vscode" &&
-                key !== "tasks" &&
-                !key.toLowerCase().includes("mcp"),
-            );
-            const tasks = taskCount(statuses.get("tasks"));
-            const branch = footerData.getGitBranch();
-            const cwd = formatCwd(ctx.cwd);
-
-            // Dynamic counters are padded to a fixed cell so the footer does
-            // not jitter column-by-column as numbers grow during a turn.
-            const used = padStartToWidth(
-              tokens == null ? "?" : formatTokens(tokens),
-              5,
-            );
-            const total = window > 0 ? formatTokens(window) : "?";
-            const pct =
-              percent == null
-                ? "   ?"
-                : padStartToWidth(`${Math.round(percent)}%`, 4);
-            const place = (text: string) => theme.fg("muted", text);
-            const value = (text: string) => theme.fg("dim", text);
-
-            const placeItem = [
-              place(`${cwd}${branch ? `:${branch}` : ""}`),
-              place(`${shortenPath(cwd, 22)}${branch ? `:${branch}` : ""}`),
-              place(
-                `${shortenPath(cwd, 14)}${branch ? `:${shortenPath(branch, 14)}` : ""}`,
-              ),
-              place(
-                `${shortenPath(cwd, 8)}${branch ? `:${shortenPath(branch, 10)}` : ""}`,
-              ),
-            ];
-            const contextItem = [
-              `${gauge(10)} ${value(`${used}/${total}`)}`,
-              `${gauge(8)} ${value(`${used}/${total}`)}`,
-              `${gauge(6)} ${value(pct)}`,
-            ];
-            const inputText = formatTokens(input);
-            const outputText = formatTokens(output);
-            const trafficItem = [
-              value(
-                `↑${padStartToWidth(inputText, 5)} ↓${padStartToWidth(outputText, 5)} cache ${padStartToWidth(`${cacheHit}%`, 4)}`,
-              ),
-              value(`↑${inputText} ↓${outputText}`),
-            ];
-            const thinking = String(piApi.getThinkingLevel());
-            const modelId = ctx.model?.id ?? "no-model";
-            const modelItem = [
-              `${value(modelId)} ${theme.fg((THINKING_TONES[thinking] ?? "muted") as any, thinking)}`,
-              `${value(shortenPath(modelId, 16))} ${theme.fg((THINKING_TONES[thinking] ?? "muted") as any, thinking.slice(0, 3))}`,
-            ];
-            const mcpText = mcpEntry
-              ? cleanInline(mcpEntry[1], 40)
-                  .replace(/^MCP:\s*/i, "")
-                  .replace(/\s*servers?$/i, "")
-              : "";
-            const mcpItem = mcpText
-              ? [value(`mcp ${mcpText}`), value(`mcp ${mcpText}`)]
-              : undefined;
-            const taskItem = tasks
-              ? [
-                  theme.fg("accent", `${tasks} task${tasks === 1 ? "" : "s"}`),
-                  theme.fg("accent", `T${tasks}`),
-                ]
-              : undefined;
-            const vsItem = vs
-              ? [theme.fg("muted", vs.wide), theme.fg("muted", vs.narrow)]
-              : undefined;
-            const otherItem = otherStatus
-              ? [value(cleanInline(otherStatus[1], 40))]
-              : undefined;
-
-            const separator = theme.fg("borderMuted", "  ·  ");
-            const has = (item?: string[]): item is string[] => !!item;
-            const narrowest = (item: string[]) => item[item.length - 1];
-
-            /**
-             * Fit a row by shrinking individual cells in a fixed give-way order
-             * rather than degrading every cell in lockstep, so a wide terminal
-             * never abbreviates a field it had room to show in full.
-             * Cell arrays are stable per-render objects, so they are used
-             * directly as identity keys for the per-row level map.
-             * Returns undefined when even the narrowest form overflows, so a
-             * caller never emits a row that was silently clipped.
-             */
-            const pack = (
-              cells: string[][],
-              right: string[] | undefined,
-              giveWay: string[][],
-            ): string[] | undefined => {
-              const levels = new Map<string[], number>();
-              const at = (cell: string[]) =>
-                cell[Math.min(levels.get(cell) ?? 0, cell.length - 1)];
-              const measure = () => {
-                // Separators carry ANSI styling; widths are measured on the
-                // joined string so the escape sequences are never counted.
-                const left = cells.map(at).join(separator);
-                const tail = right ? at(right) : "";
-                return {
-                  left,
-                  tail,
-                  total:
-                    safeVisibleWidth(left) +
-                    (tail ? 2 + safeVisibleWidth(tail) : 0),
-                };
-              };
-              // Only cells actually on this row can give way; otherwise the
-              // budget is spent degrading a field the row does not render.
-              const present = new Set<string[]>([
-                ...cells,
-                ...(right ? [right] : []),
-              ]);
-              let state = measure();
-              for (const cell of giveWay) {
-                if (!present.has(cell)) continue;
-                while (
-                  state.total > width &&
-                  (levels.get(cell) ?? 0) < cell.length - 1
-                ) {
-                  levels.set(cell, (levels.get(cell) ?? 0) + 1);
-                  state = measure();
-                }
-                if (state.total <= width) break;
-              }
-              if (state.total > width) return undefined;
-              return [
-                state.tail
-                  ? fitLine(state.left, state.tail, width)
-                  : safeTruncateToWidth(state.left, width),
-              ];
-            };
-
-            // Place and context anchor the left; session identity
-            // (model/thinking) anchors the right so it belongs to the footer
-            // information system instead of floating above the input border.
-            const detail = [
-              trafficItem,
-              taskItem,
-              vsItem,
-              mcpItem,
-              otherItem,
-            ].filter(has);
-            // Give-way order: identity/location abbreviate before the numbers
-            // the user reads, and the context gauge yields last.
-            const giveWay = [
-              placeItem,
-              vsItem,
-              modelItem,
-              trafficItem,
-              taskItem,
-              contextItem,
-            ].filter(has);
-
-            // Wide: one balanced line carrying everything.
-            const single = pack(
-              [placeItem, contextItem, ...detail],
-              modelItem,
-              giveWay,
-            );
-            if (single) return single;
-
-            // Medium: identity, context and model hold the primary line and the
-            // tail of the detail group moves down as a block. The split is
-            // taken as late as possible so the second line is a coherent group;
-            // a single leftover item is never stranded on its own line, so a
-            // solitary MCP status is either carried on the primary line or
-            // dropped with the rest of the overflow.
-            for (let split = detail.length - 1; split >= 0; split--) {
-              const tail = detail.slice(split);
-              // A single status (mcp, vs, task count) never earns a line of its
-              // own; only the multi-field traffic group reads as a coherent
-              // second line by itself.
-              if (tail.length === 1 && tail[0] !== trafficItem) continue;
-              const primary = pack(
-                [placeItem, contextItem, ...detail.slice(0, split)],
-                modelItem,
-                giveWay,
-              );
-              if (!primary) continue;
-              const secondary = pack(tail, undefined, giveWay);
-              if (secondary) return [primary[0], secondary[0]];
-            }
-
-            // Narrow: the context bar stays visible and everything else yields.
-            return (
-              pack([placeItem, contextItem], undefined, giveWay) ??
-              pack([contextItem], undefined, giveWay) ?? [
-                safeTruncateToWidth(narrowest(contextItem), width),
-              ]
-            );
-          } catch (error) {
-            reportRenderFailure("footer", error);
-            return [fallbackTruncateToWidth("apex-ui", width)];
-          }
-        },
-      };
-    });
   }
 }

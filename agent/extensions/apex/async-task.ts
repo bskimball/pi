@@ -9,9 +9,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
@@ -31,6 +32,19 @@ import {
   killProcessTreeSync,
 } from "./lib/process-tree-kill.ts";
 import {
+  ActivityLedger,
+  type Activity,
+} from "./lib/activity-ledger.ts";
+import {
+  apexPresentationEnabled,
+  withApexPresentation,
+} from "./lib/presentation.ts";
+import {
+  textResult,
+  resolveCwd,
+  validateCwd,
+} from "./lib/tool-result.ts";
+import {
   boundText,
   cleanOneLine,
   extractAssistantText,
@@ -48,28 +62,29 @@ import {
 import {
   MAX_LIVE_WORKERS,
   MAX_SETTLED_META,
-  MODEL_IDLE_MS,
-  RETRY_COMPACT_BUDGET_MS,
-  TOOL_IDLE_MS,
-  canStartWorker,
-  countLiveWorkers,
-  hasActiveTools,
-  isLiveLifecycle,
   shouldRetryModelFallback,
   splitQualifiedModel,
   workerStateLabel,
+  WorkerRuntime,
+  type RuntimeEventWorker,
+  type RuntimeFallbackResult,
+  type RuntimePendingUiRequest,
   type WorkerLifecycle,
   type WorkerPhase,
+  type WorkerRuntimeEventHooks,
 } from "./lib/worker-runtime.ts";
 import {
   getSharedModelCircuitBreaker,
   isQualifyingCircuitFailure,
 } from "./lib/model-circuit-breaker.ts";
 import {
-  activityGlyph,
+  contextCheckpointNote,
+  shouldCheckpointTimedOutWait,
+} from "./lib/task-compaction-policy.ts";
+import {
+  activityRows,
   boundedRailTextLines,
   buildTreeLines,
-  durationText,
   type TreeRow,
 } from "./lib/task-card.ts";
 import {
@@ -130,22 +145,7 @@ const EXCLUDED_CHILD_TOOLS = [
 export type { WorkerLifecycle } from "./lib/worker-runtime.ts";
 type IdlePhase = WorkerPhase;
 
-interface Activity {
-  id: string;
-  tool: string;
-  summary: string;
-  status: "running" | "completed" | "error";
-  startedAt: number;
-  duration?: number;
-}
-
-interface PendingUiRequest {
-  id: string;
-  method: string;
-  title?: string;
-  message?: string;
-  options?: string[];
-  receivedAt: number;
+interface PendingUiRequest extends RuntimePendingUiRequest {
   /** Fire-and-forget methods never expect a reply. */
   expectsReply: boolean;
 }
@@ -191,7 +191,7 @@ interface AsyncRenderState {
   startedAt?: number;
 }
 
-interface Worker {
+interface Worker extends RuntimeEventWorker {
   id: string;
   agent: string;
   mission: string;
@@ -201,96 +201,32 @@ interface Worker {
   initialPrompt: string;
   modelAttempts: Array<string | undefined>;
   modelAttemptIndex: number;
-  modelError?: string;
   /** Attempt index whose qualifying failure was already persisted. */
   circuitFailureAttempt?: number;
-  modelAttemptUsedTools: boolean;
   fallbackReplaySafe: boolean;
-  fallbackInProgress: boolean;
-  fallbackAwaitingAgentStart: boolean;
-  fallbackEpoch: number;
-  lifecycle: WorkerLifecycle;
-  generation: number;
   createdAt: number;
-  updatedAt: number;
-  lastEventAt?: number;
-  phase: IdlePhase;
-  turns: number;
-  maxTurns: number;
   timeoutMs: number;
-  hardTimer?: NodeJS.Timeout;
-  idleTimer?: NodeJS.Timeout;
-  abortTimer?: NodeJS.Timeout;
   client?: RpcClient;
-  pid?: number;
   sessionDir: string;
   sessionId?: string;
   sessionFile?: string;
-  /** Pending steering/follow-up message counts from queue_update. */
-  pendingSteer: number;
-  pendingFollowUp: number;
-  activities: Activity[];
-  runningById: Map<string, Activity>;
-  runningAnonymous: Activity[];
-  anonymousSeq: number;
-  errors: string[];
-  latestAssistantText: string;
-  latestResult: string;
-  killReason?: string;
-  exitCode: number | null;
   notifiedGeneration: number;
-  /** True when this process still counts against the concurrency cap. */
-  countsTowardCap: boolean;
-  closed: boolean;
   waiters: Array<{
     generation: number;
     resolve: (snapshot: GenerationSnapshot) => void;
     timer?: NodeJS.Timeout;
   }>;
-  subscribers?: Set<() => void>;
   /** True once a task_start result surface became this worker's canonical card. */
   hasPinnedSurface?: boolean;
-  /** Repaint hook for the pinned task_start card (callback only, no context). */
-  pinnedInvalidate?: () => void;
   /** Lifecycle frozen for the canonical work card while process cleanup runs. */
   pinnedLifecycle?: WorkerLifecycle;
   cleanupComplete?: boolean;
   cleanupWorkers?: number;
   cleanupMaxWorkers?: number;
   pendingUi: Map<string, PendingUiRequest>;
-  generationStartedAt: number;
-  generationSettledAt?: number;
 }
 
 // ---------------------------------------------------------------- helpers
-
-function textResult(text: string, isError = false, details: unknown = {}) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details,
-    isError,
-  };
-}
-
-function resolveCwd(raw: string | undefined, fallback: string): string {
-  const candidate = raw?.trim() ? raw.trim() : fallback;
-  return path.resolve(candidate);
-}
-
-function validateCwd(cwd: string): string | undefined {
-  try {
-    if (!fs.existsSync(cwd)) {
-      return `working_dir "${cwd}" does not exist. On Windows use a native path (e.g. C:/Users/...), not a bash-style path.`;
-    }
-    if (!fs.statSync(cwd).isDirectory()) {
-      return `working_dir "${cwd}" is not a directory.`;
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return `working_dir "${cwd}" is not usable: ${message}`;
-  }
-  return undefined;
-}
 
 function rpcSessionRoot(): string {
   // Isolated under the gitignored Pi runtime sessions tree.
@@ -343,26 +279,14 @@ function renderWorkerCard(
     // TREE.last; every earlier child keeps TREE.branch.
     const rows: TreeRow[] = [];
 
-    const running = view.activities.filter((activity) => activity.status === "running");
-    const completed = view.activities
-      .filter((activity) => activity.status !== "running")
-      .slice(expanded ? -12 : -3);
-    const shown = [...completed, ...running].slice(expanded ? -16 : -4);
-    for (const activity of shown) {
-      const glyph = activityGlyph(theme, activity.status);
-      const elapsed = durationText(
-        theme,
-        activity.duration ?? Math.max(0, now - activity.startedAt),
-      );
-      rows.push({
-        line: (rail) =>
-          fitLine(
-            `${theme.fg("dim", rail)} ${glyph} ${theme.fg("muted", activity.tool)}${activity.summary ? ` ${theme.fg("dim", activity.summary)}` : ""}`,
-            elapsed,
-            width,
-          ),
-      });
-    }
+    rows.push(
+      ...activityRows(theme, width, view.activities, {
+        expanded,
+        collapsedLimit: 4,
+        expandedLimit: 16,
+        now,
+      }),
+    );
 
     if (view.waitingUi.length) {
       const request = view.waitingUi[0];
@@ -405,7 +329,7 @@ function renderWorkerCard(
       rows.push({
         line: (rail) =>
           safeTruncateToWidth(
-            `${theme.fg("dim", rail)}${TREE.hang}${theme.fg("muted", "Ctrl+C stops waiting; worker continues · task_abort stops it")}`,
+            `${theme.fg("dim", rail)}${TREE.hang}${theme.fg("muted", "Esc stops waiting; worker continues · task_abort stops it")}`,
             width,
           ),
       });
@@ -561,7 +485,7 @@ function controlRenderers(
     expanded: boolean,
   ) => string[],
 ) {
-  return {
+  return withApexPresentation({
     renderShell: "self" as const,
     renderCall(
       args: any,
@@ -588,7 +512,7 @@ function controlRenderers(
         `[${tool} result unavailable]`,
       );
     },
-  };
+  });
 }
 
 /** Map a control outcome word onto the shared status vocabulary. */
@@ -636,258 +560,43 @@ export default function (pi: ExtensionAPI) {
     .map((agent) => `- ${agent.name}: ${agent.description}`)
     .join("\n");
 
-  const workers = new Map<string, Worker>();
-  const order: string[] = [];
+  const runtime = new WorkerRuntime<Worker>({
+    maxErrors: MAX_ERRORS,
+    maxSettled: MAX_SETTLED_META,
+    normalizeError: (message) => cleanOneLine(message, 300),
+    abortGraceMs: ABORT_GRACE_MS,
+  });
+  const workers = runtime.workers;
+  const compactionReserveTokensByCwd = new Map<string, number>();
+  const compactionReserveTokens = (cwd: string): number => {
+    const cached = compactionReserveTokensByCwd.get(cwd);
+    if (cached !== undefined) return cached;
+    const reserveTokens = SettingsManager.create(cwd).getCompactionSettings().reserveTokens;
+    compactionReserveTokensByCwd.set(cwd, reserveTokens);
+    return reserveTokens;
+  };
   let nextId = 1;
   let agentBusy = false;
   let shuttingDown = false;
 
-  const liveCount = () => countLiveWorkers(workers.values());
-
-  const pruneSettled = () => {
-    const settled = order
-      .map((id) => workers.get(id))
-      .filter(
-        (w): w is Worker =>
-          !!w &&
-          (w.lifecycle === "settled" ||
-            w.lifecycle === "failed" ||
-            w.lifecycle === "closed") &&
-          !w.countsTowardCap,
-      );
-    if (settled.length <= MAX_SETTLED_META) return;
-    const excess = settled.length - MAX_SETTLED_META;
-    for (let i = 0; i < excess; i++) {
-      const w = settled[i];
-      if (w.lifecycle !== "closed" && w.countsTowardCap) continue;
-      workers.delete(w.id);
-      const idx = order.indexOf(w.id);
-      if (idx >= 0) order.splice(idx, 1);
-    }
-  };
-
-  const notifySubscribers = (worker: Worker) => {
-    if (worker.pinnedInvalidate) {
-      try {
-        worker.pinnedInvalidate();
-      } catch {
-        // A presentation update must never break worker event handling.
-      }
-    }
-    if (!worker.subscribers) return;
-    for (const cb of worker.subscribers) {
-      try {
-        cb();
-      } catch {
-        // A presentation update must never break worker event handling.
-      }
-    }
-  };
-
-  const touch = (worker: Worker) => {
-    worker.updatedAt = Date.now();
-    worker.lastEventAt = worker.updatedAt;
-  };
-
-  const pushError = (worker: Worker, message: string) => {
-    worker.errors.push(cleanOneLine(message, 300));
-    if (worker.errors.length > MAX_ERRORS) {
-      worker.errors.splice(0, worker.errors.length - MAX_ERRORS);
-    }
-  };
-
-  const closeActivity = (
-    activity: Activity | undefined,
-    status: Activity["status"] = "completed",
-  ) => {
-    if (!activity || activity.status !== "running") return;
-    activity.status = status;
-    activity.duration = Date.now() - activity.startedAt;
-  };
-
+  const liveCount = () => runtime.liveCount();
+  const pruneSettled = () => runtime.pruneSettled();
+  const notifySubscribers = (worker: Worker) => runtime.notify(worker);
+  const touch = (worker: Worker) => runtime.touch(worker);
+  const pushError = (worker: Worker, message: string) =>
+    runtime.pushError(worker, message);
   const closeAllRunning = (
     worker: Worker,
     status: Activity["status"] = "completed",
-  ) => {
-    for (const activity of worker.runningById.values())
-      closeActivity(activity, status);
-    for (const activity of worker.runningAnonymous)
-      closeActivity(activity, status);
-    worker.runningById.clear();
-    worker.runningAnonymous.length = 0;
-  };
-
-  const clearIdle = (worker: Worker) => {
-    if (worker.idleTimer) {
-      clearTimeout(worker.idleTimer);
-      worker.idleTimer = undefined;
-    }
-  };
-
-  const clearHard = (worker: Worker) => {
-    if (worker.hardTimer) {
-      clearTimeout(worker.hardTimer);
-      worker.hardTimer = undefined;
-    }
-  };
-
-  const clearAbortTimer = (worker: Worker) => {
-    if (worker.abortTimer) {
-      clearTimeout(worker.abortTimer);
-      worker.abortTimer = undefined;
-    }
-  };
-
-  const abortWorker = async (worker: Worker): Promise<{ cooperative: boolean, settled: boolean }> => {
-    worker.fallbackEpoch += 1;
-    worker.fallbackInProgress = false;
-    worker.fallbackAwaitingAgentStart = false;
-    worker.lifecycle = "aborting";
-    worker.killReason = worker.killReason ?? "abort requested";
-    clearIdle(worker);
-    notifySubscribers(worker);
-
-    let cooperative = false;
-    if (worker.client && !worker.client.isClosed) {
-      try {
-        const response = await worker.client.request(
-          { type: "abort" },
-          5_000,
-        );
-        cooperative = response.success;
-      } catch {
-        cooperative = false;
-      }
-    }
-
-    const lifecycleOf = (w: Worker): WorkerLifecycle => w.lifecycle;
-    const isTerminalLife = (life: WorkerLifecycle) =>
-      life === "settled" || life === "failed" || life === "closed";
-
-    const limit = Date.now() + 5_000;
-    while (
-      Date.now() < limit &&
-      !isTerminalLife(lifecycleOf(worker))
-    ) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    const settled = isTerminalLife(lifecycleOf(worker));
-    notifySubscribers(worker);
-    return { cooperative, settled };
-  };
-
-  const forceKillWorker = (worker: Worker, reason: string) => {
-    if (worker.closed) return;
-    worker.fallbackEpoch += 1;
-    worker.fallbackInProgress = false;
-    worker.fallbackAwaitingAgentStart = false;
-    worker.killReason = worker.killReason ?? reason;
-    const pid = worker.pid ?? worker.client?.pid;
-    if (pid != null) {
-      try {
-        killProcessTree(pid);
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      worker.client?.closeStdin();
-    } catch {
-      // ignore
-    }
-    notifySubscribers(worker);
-  };
-
-  const abortWorkerAndEscalate = async (
-    worker: Worker,
-  ): Promise<{
-    cooperative: boolean;
-    settled: boolean;
-    escalated: boolean;
-    exited: boolean;
-  }> => {
-    const cooperativeResult = await abortWorker(worker);
-    if (cooperativeResult.settled) {
-      return {
-        ...cooperativeResult,
-        escalated: false,
-        exited: worker.client?.isClosed ?? false,
-      };
-    }
-
-    forceKillWorker(worker, "abort force-kill after grace period");
-    const deadline = Date.now() + ABORT_GRACE_MS;
-    while (
-      Date.now() < deadline &&
-      worker.countsTowardCap &&
-      !worker.client?.isClosed
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    const exited = !worker.countsTowardCap || worker.client?.isClosed === true;
-    notifySubscribers(worker);
-    return {
-      cooperative: cooperativeResult.cooperative,
-      settled:
-        worker.lifecycle === "settled" ||
-        worker.lifecycle === "failed" ||
-        worker.lifecycle === "closed",
-      escalated: true,
-      exited,
-    };
-  };
-
-  const armIdle = (worker: Worker) => {
-    clearIdle(worker);
-    if (
-      worker.closed ||
-      worker.lifecycle === "settled" ||
-      worker.lifecycle === "failed" ||
-      worker.lifecycle === "closed" ||
-      worker.lifecycle === "starting"
-    ) {
-      worker.phase = "none";
-      return;
-    }
-    if (worker.lifecycle === "retrying") {
-      worker.phase = "retry";
-      worker.idleTimer = setTimeout(() => {
-        forceKillWorker(
-          worker,
-          `retry/compacting budget exceeded (${RETRY_COMPACT_BUDGET_MS / 1000}s)`,
-        );
-      }, RETRY_COMPACT_BUDGET_MS);
-      worker.idleTimer.unref?.();
-      return;
-    }
-    if (worker.lifecycle === "compacting") {
-      worker.phase = "compacting";
-      worker.idleTimer = setTimeout(() => {
-        forceKillWorker(
-          worker,
-          `retry/compacting budget exceeded (${RETRY_COMPACT_BUDGET_MS / 1000}s)`,
-        );
-      }, RETRY_COMPACT_BUDGET_MS);
-      worker.idleTimer.unref?.();
-      return;
-    }
-    if (worker.lifecycle === "aborting") {
-      worker.phase = "none";
-      return;
-    }
-    const toolPhase = hasActiveTools(worker);
-    worker.phase = toolPhase ? "tool" : "model";
-    const budgetMs = toolPhase ? TOOL_IDLE_MS : MODEL_IDLE_MS;
-    const phaseNote = toolPhase ? " during tool execution" : "";
-    worker.idleTimer = setTimeout(() => {
-      forceKillWorker(
-        worker,
-        `idle for ${budgetMs / 1000}s${phaseNote}`,
-      );
-    }, budgetMs);
-    worker.idleTimer.unref?.();
-  };
+  ) => runtime.closeActivities(worker, status);
+  const clearIdle = (worker: Worker) => runtime.clearIdle(worker);
+  const clearHard = (worker: Worker) => runtime.clearHard(worker);
+  const clearAbortTimer = (worker: Worker) => runtime.clearAbort(worker);
+  const forceKillWorker = (worker: Worker, reason: string) =>
+    runtime.forceKill(worker, reason);
+  const abortWorkerAndEscalate = (worker: Worker) =>
+    runtime.abortAndEscalate(worker);
+  const armIdle = (worker: Worker) => runtime.armIdle(worker);
 
   const resolveWaiters = (worker: Worker, snapshot: GenerationSnapshot) => {
     const matched: Worker["waiters"] = [];
@@ -934,7 +643,7 @@ export default function (pi: ExtensionAPI) {
     lastEventAt: worker.lastEventAt,
     pendingSteer: worker.pendingSteer,
     pendingFollowUp: worker.pendingFollowUp,
-    activities: worker.activities.slice(-16).map((activity) => ({ ...activity })),
+    activities: worker.ledger.snapshot().slice(-16),
     waitingUi: [...worker.pendingUi.values()]
       .filter((request) => request.expectsReply)
       .slice(0, 4)
@@ -951,7 +660,7 @@ export default function (pi: ExtensionAPI) {
     cleanupMaxWorkers: worker.cleanupMaxWorkers,
   });
 
-  type ModelFallbackResult = "retried" | "exhausted" | "cancelled";
+  type ModelFallbackResult = RuntimeFallbackResult;
 
   /** Persist a clean provider/model availability failure for circuit breaking. */
   const noteCircuitFailure = (worker: Worker) => {
@@ -1141,52 +850,6 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const settleGeneration = (
-    worker: Worker,
-    lifecycle: "settled" | "failed",
-    opts?: { error?: string; killReason?: string },
-  ) => {
-    if (worker.closed) return;
-    if (
-      worker.lifecycle === "settled" ||
-      worker.lifecycle === "failed" ||
-      worker.lifecycle === "closed"
-    ) {
-      // Already settled this generation; ignore stale events.
-      return;
-    }
-    worker.fallbackEpoch += 1;
-    worker.fallbackInProgress = false;
-    worker.fallbackAwaitingAgentStart = false;
-    clearIdle(worker);
-    clearAbortTimer(worker);
-    closeAllRunning(
-      worker,
-      lifecycle === "failed" || opts?.killReason ? "error" : "completed",
-    );
-    worker.lifecycle = lifecycle;
-    worker.generationSettledAt = Date.now();
-    worker.phase = "none";
-    worker.pendingSteer = 0;
-    worker.pendingFollowUp = 0;
-    if (opts?.error) pushError(worker, opts.error);
-    if (opts?.killReason) worker.killReason = opts.killReason;
-    if (!worker.latestResult && worker.latestAssistantText) {
-      worker.latestResult = worker.latestAssistantText;
-    }
-    // Persist circuit outcomes only for clean attempt ends. Success closes the
-    // model circuit; clean availability failures feed the open threshold.
-    if (lifecycle === "settled" && !worker.killReason) {
-      noteCircuitSuccess(worker);
-    } else if (lifecycle === "failed") {
-      noteCircuitFailure(worker);
-    }
-    worker.updatedAt = Date.now();
-    resolveWaiters(worker, generationSnapshot(worker));
-    notifySubscribers(worker);
-    maybeNotifySettled(worker);
-  };
-
   const formatWorkerStatus = (worker: Worker): string => {
     const now = Date.now();
     const age = formatAge(now - worker.createdAt);
@@ -1194,13 +857,11 @@ export default function (pi: ExtensionAPI) {
       worker.lastEventAt != null
         ? formatAge(now - worker.lastEventAt)
         : "n/a";
-    const runningTools = [
-      ...worker.runningById.values(),
-      ...worker.runningAnonymous,
-    ]
-      .filter((a) => a.status === "running")
+    const runningTools = worker.ledger
+      .running()
       .map((a) => `${a.tool}(${a.summary})`);
-    const recent = worker.activities
+    const recent = worker.ledger
+      .snapshot()
       .slice(-8)
       .map(
         (a) =>
@@ -1256,6 +917,22 @@ export default function (pi: ExtensionAPI) {
     return lines.join("\n");
   };
 
+  const formatWorkerWaitStatus = (worker: Worker): string => {
+    const currentActivity = [...worker.ledger.running()].at(-1);
+    const activity = currentActivity
+      ? `${currentActivity.tool}: ${cleanOneLine(currentActivity.summary, 240)}`
+      : undefined;
+    return [
+      `${worker.id} lifecycle=${worker.lifecycle} agent=${worker.agent} generation=${worker.generation} turns=${worker.turns}/${worker.maxTurns}`,
+      activity ? `activity: ${activity}` : undefined,
+      worker.sessionFile
+        ? `session_file: ${cleanOneLine(worker.sessionFile, 240)}`
+        : `session_dir: ${cleanOneLine(worker.sessionDir, 240)}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
   const workerNotifyLine = (worker: Worker): string => {
     const result = cleanOneLine(
       worker.latestResult || worker.latestAssistantText || "(no output)",
@@ -1275,11 +952,11 @@ export default function (pi: ExtensionAPI) {
 
   const drainSettledNotifications = () => {
     if (shuttingDown || agentBusy) return;
-    const pending = order
-      .map((id) => workers.get(id))
+    const pending = workers
+      .entries()
+      .map(({ item: w }) => w)
       .filter(
-        (w): w is Worker =>
-          !!w &&
+        (w) =>
           !w.closed &&
           (w.lifecycle === "settled" || w.lifecycle === "failed") &&
           w.notifiedGeneration < w.generation,
@@ -1333,287 +1010,51 @@ export default function (pi: ExtensionAPI) {
     drainSettledNotifications();
   };
 
-  const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) => {
-    if (worker.closed) return;
-    const type = String(event.type ?? "");
-    touch(worker);
+  const shouldRetryWorkerFallback = (worker: Worker) =>
+    shouldRetryModelFallback({
+      hasNextAttempt:
+        worker.fallbackReplaySafe &&
+        worker.modelAttemptIndex + 1 < worker.modelAttempts.length,
+      fallbackInProgress: worker.fallbackInProgress,
+      killReason: worker.killReason,
+      resultText: worker.latestResult || worker.latestAssistantText,
+      modelError: worker.modelError,
+      activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
+    });
 
-    switch (type) {
-      case "agent_start": {
-        if (worker.fallbackAwaitingAgentStart) {
-          worker.fallbackAwaitingAgentStart = false;
-        }
-        if (worker.lifecycle === "starting" || worker.lifecycle === "settled") {
-          // New generation may begin after follow-up.
-          if (worker.lifecycle === "settled") {
-            worker.generation += 1;
-            worker.generationStartedAt = Date.now();
-            worker.generationSettledAt = undefined;
-            worker.turns = 0;
-            worker.latestResult = "";
-            worker.killReason = undefined;
-          }
-        }
-        if (worker.lifecycle !== "aborting") {
-          worker.lifecycle = "running";
-        }
-        armIdle(worker);
-        break;
-      }
-      case "agent_end": {
-        // Low-level run end; may still retry/compact/continue.
-        // Do not settle here.
-        armIdle(worker);
-        break;
-      }
-      case "agent_settled": {
-        // Gate completion notifications on true settlement only. Clean
-        // provider/model failures advance through the configured model chain
-        // before this generation is exposed as settled.
-        if (worker.lifecycle === "aborting") {
-          settleGeneration(worker, "settled", {
-            killReason: worker.killReason ?? "aborted",
-          });
-        } else if (
-          worker.fallbackInProgress ||
-          worker.fallbackAwaitingAgentStart
-        ) {
-          // Session replacement can emit terminal events for the failed
-          // attempt. The fallback controller owns settlement until replay is
-          // accepted and the replacement attempt has actually started.
-          break;
-        } else if (worker.lifecycle !== "failed") {
-          if (
-            shouldRetryModelFallback({
-              hasNextAttempt:
-                worker.fallbackReplaySafe &&
-                worker.modelAttemptIndex + 1 < worker.modelAttempts.length,
-              fallbackInProgress: worker.fallbackInProgress,
-              killReason: worker.killReason,
-              resultText: worker.latestResult || worker.latestAssistantText,
-              modelError: worker.modelError,
-              activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
-            })
-          ) {
-            void retryModelFallback(worker).then((result) => {
-              if (
-                result === "exhausted" &&
-                worker.lifecycle !== "settled" &&
-                worker.lifecycle !== "failed" &&
-                worker.lifecycle !== "closed"
-              ) {
-                settleGeneration(worker, "failed", {
-                  error:
-                    worker.modelError ??
-                    "configured model fallbacks exhausted",
-                });
-              }
-            });
-          } else if (
-            worker.modelError &&
-            !worker.killReason &&
-            !worker.latestResult &&
-            !worker.latestAssistantText &&
-            !worker.modelAttemptUsedTools
-          ) {
-            settleGeneration(worker, "failed", { error: worker.modelError });
-          } else {
-            settleGeneration(worker, "settled");
-          }
-        }
-        break;
-      }
-      case "turn_start": {
-        worker.turns += 1;
-        if (worker.turns > worker.maxTurns) {
-          forceKillWorker(worker, `exceeded ${worker.maxTurns} turns`);
-        }
-        armIdle(worker);
-        break;
-      }
-      case "tool_execution_start": {
-        worker.modelAttemptUsedTools = true;
-        const callId =
-          event.toolCallId == null ? undefined : String(event.toolCallId);
-        const activity: Activity = {
-          id: callId ?? `anon#${worker.anonymousSeq++}`,
-          tool: cleanOneLine(event.toolName, 40),
-          summary: argsSummary(event.args),
-          status: "running",
-          startedAt: Date.now(),
-        };
-        if (callId) {
-          closeActivity(worker.runningById.get(callId));
-          worker.runningById.set(callId, activity);
-        } else {
-          worker.runningAnonymous.push(activity);
-        }
-        worker.activities.push(activity);
-        if (worker.activities.length > MAX_ACTIVITIES) {
-          worker.activities.splice(
-            0,
-            worker.activities.length - MAX_ACTIVITIES,
-          );
-        }
-        if (worker.lifecycle === "running") armIdle(worker);
-        break;
-      }
-      case "tool_execution_end": {
-        let activity: Activity | undefined;
-        if (event.toolCallId == null) {
-          activity = worker.runningAnonymous.pop();
-        } else {
-          const callId = String(event.toolCallId);
-          activity = worker.runningById.get(callId);
-          worker.runningById.delete(callId);
-        }
-        closeActivity(activity, event.isError ? "error" : "completed");
-        if (worker.lifecycle === "running") armIdle(worker);
-        break;
-      }
-      case "message_end": {
-        const message = event.message;
-        if (message && typeof message === "object") {
-          const m = message as {
-            role?: string;
-            stopReason?: string;
-            errorMessage?: string;
-          };
-          if (m.role === "assistant") {
-            const text = extractAssistantText(message);
-            if (text) {
-              worker.latestAssistantText = text;
-              worker.latestResult = text;
-            }
-            if (m.stopReason === "error" || m.errorMessage) {
-              const message = String(
-                m.errorMessage ?? "provider/model error",
-              );
-              worker.modelError = message;
-              pushError(worker, message);
-            }
-          }
-        }
-        if (isLiveLifecycle(worker.lifecycle)) armIdle(worker);
-        break;
-      }
-      case "auto_retry_start": {
-        worker.lifecycle = "retrying";
-        armIdle(worker);
-        break;
-      }
-      case "auto_retry_end": {
-        if (event.success === false) {
-          pushError(
-            worker,
-            String(event.finalError ?? "auto-retry failed"),
-          );
-        }
-        if (worker.lifecycle === "retrying") {
-          worker.lifecycle = "running";
-        }
-        armIdle(worker);
-        break;
-      }
-      case "compaction_start": {
-        worker.lifecycle = "compacting";
-        armIdle(worker);
-        break;
-      }
-      case "compaction_end": {
-        if (event.aborted) {
-          pushError(worker, "compaction aborted");
-        } else if (event.errorMessage) {
-          pushError(worker, String(event.errorMessage));
-        }
-        if (worker.lifecycle === "compacting") {
-          worker.lifecycle = "running";
-        }
-        armIdle(worker);
-        break;
-      }
-      case "queue_update": {
-        const steering = Array.isArray(event.steering) ? event.steering : [];
-        const followUp = Array.isArray(event.followUp) ? event.followUp : [];
-        worker.pendingSteer = steering.length;
-        worker.pendingFollowUp = followUp.length;
-        break;
-      }
-      case "extension_error": {
-        pushError(
-          worker,
-          `extension_error: ${cleanOneLine(event.error, 200)}`,
-        );
-        break;
-      }
-      case "extension_ui_request": {
-        const id = typeof event.id === "string" ? event.id : undefined;
-        const method = String(event.method ?? "");
-        if (!id || !method) break;
-        const dialog = new Set(["select", "confirm", "input", "editor"]);
-        const expectsReply = dialog.has(method);
-        if (expectsReply) {
-          worker.pendingUi.set(id, {
-            id,
-            method,
-            title:
-              typeof event.title === "string" ? event.title : undefined,
-            message:
-              typeof event.message === "string" ? event.message : undefined,
-            options: Array.isArray(event.options)
-              ? event.options.map(String)
-              : undefined,
-            receivedAt: Date.now(),
-            expectsReply: true,
-          });
-        }
-        // Fire-and-forget methods (notify/setStatus/...) are ignored for wait state.
-        break;
-      }
-      default:
-        // Other events only refresh lastEventAt via touch().
-        if (isLiveLifecycle(worker.lifecycle) && worker.lifecycle === "running") {
-          // Avoid thrashing idle on high-frequency streaming updates.
-          if (
-            type !== "message_update" &&
-            type !== "tool_execution_update" &&
-            type !== "bash_execution_update"
-          ) {
-            armIdle(worker);
-          }
-        }
-        break;
-    }
-    notifySubscribers(worker);
+  const eventHooks: WorkerRuntimeEventHooks<Worker> = {
+    normalizeToolName: (name) => cleanOneLine(name, 40),
+    summarizeToolArgs: argsSummary,
+    extractAssistantText,
+    shouldRetryFallback: shouldRetryWorkerFallback,
+    retryFallback: retryModelFallback,
+    onSuccessfulSettlement: noteCircuitSuccess,
+    onFailedSettlement: noteCircuitFailure,
+    beforeSettlementNotify: (worker) =>
+      resolveWaiters(worker, generationSnapshot(worker)),
+    afterSettlementNotify: maybeNotifySettled,
   };
+
+  const settleGeneration = (
+    worker: Worker,
+    lifecycle: "settled" | "failed",
+    options?: { error?: string; killReason?: string },
+  ) => runtime.settleGeneration(worker, lifecycle, options, eventHooks);
+
+  const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) =>
+    runtime.handleEvent(worker, event, eventHooks);
 
   const handleUiRequest = (
     worker: Worker,
     request: Record<string, unknown>,
   ) => {
-    // Primary handling is in handleRpcEvent; this hook is reserved for
-    // future generic auto-answers if needed. For v1 we only record.
+    // extension_ui_request is handled by the normal RPC event stream. This
+    // dedicated callback remains reserved for future generic auto-answers.
     void worker;
     void request;
   };
 
-  const startGeneration = (worker: Worker) => {
-    worker.generation += 1;
-    worker.generationStartedAt = Date.now();
-    worker.generationSettledAt = undefined;
-    worker.turns = 0;
-    worker.latestResult = "";
-    worker.modelError = undefined;
-    worker.circuitFailureAttempt = undefined;
-    worker.modelAttemptUsedTools = false;
-    worker.fallbackInProgress = false;
-    worker.fallbackAwaitingAgentStart = false;
-    worker.fallbackEpoch += 1;
-    worker.killReason = undefined;
-    worker.lifecycle = "running";
-    touch(worker);
-    armIdle(worker);
-  };
+  const startGeneration = (worker: Worker) => runtime.startGeneration(worker);
 
   const spawnWorker = async (
     def: AgentDef,
@@ -1662,10 +1103,7 @@ export default function (pi: ExtensionAPI) {
       sessionDir,
       pendingSteer: 0,
       pendingFollowUp: 0,
-      activities: [],
-      runningById: new Map(),
-      runningAnonymous: [],
-      anonymousSeq: 0,
+      ledger: new ActivityLedger({ maxActivities: MAX_ACTIVITIES }),
       errors: [],
       latestAssistantText: "",
       latestResult: "",
@@ -1679,7 +1117,6 @@ export default function (pi: ExtensionAPI) {
     };
 
     workers.set(id, worker);
-    order.push(id);
     if (initial.skipped.length) {
       pushError(
         worker,
@@ -1747,34 +1184,10 @@ export default function (pi: ExtensionAPI) {
         onEvent: (event) => handleRpcEvent(worker, event),
         onUiRequest: (req) => handleUiRequest(worker, req),
         onExit: (code, _signal) => {
-          worker.exitCode = code;
-          worker.pid = undefined;
-          clearIdle(worker);
-          clearHard(worker);
-          clearAbortTimer(worker);
-          if (worker.closed) return;
-          worker.fallbackEpoch += 1;
-          worker.fallbackInProgress = false;
-          worker.fallbackAwaitingAgentStart = false;
-          if (
-            worker.lifecycle !== "settled" &&
-            worker.lifecycle !== "failed" &&
-            worker.lifecycle !== "closed"
-          ) {
-            const stderr = client.stderr.text;
-            const diag = stderrDiagnostic(stderr);
-            settleGeneration(worker, "failed", {
-              error:
-                worker.killReason ??
-                diag ??
-                `process exited (code=${code ?? "null"})`,
-              killReason: worker.killReason,
-            });
-          }
-          // Process gone: no longer counts as a live RPC worker process.
-          worker.countsTowardCap = false;
-          worker.client = undefined;
-          pruneSettled();
+          const diagnostic =
+            stderrDiagnostic(client.stderr.text) ??
+            `process exited (code=${code ?? "null"})`;
+          runtime.handleExit(worker, code, diagnostic, eventHooks);
         },
         onError: (error) => {
           pushError(worker, `spawn error: ${error.message}`);
@@ -1782,8 +1195,6 @@ export default function (pi: ExtensionAPI) {
       });
     } catch (error) {
       workers.delete(id);
-      const idx = order.indexOf(id);
-      if (idx >= 0) order.splice(idx, 1);
       const message = error instanceof Error ? error.message : String(error);
       return { error: `Failed to spawn ${id}: ${message}` };
     }
@@ -1791,13 +1202,7 @@ export default function (pi: ExtensionAPI) {
     worker.client = client;
     worker.pid = client.pid;
 
-    worker.hardTimer = setTimeout(() => {
-      forceKillWorker(
-        worker,
-        `exceeded ${timeoutMs / 1000}s time limit`,
-      );
-    }, timeoutMs);
-    worker.hardTimer.unref?.();
+    runtime.armHard(worker, timeoutMs);
 
     // Accept the initial prompt before returning the handle. Model/provider
     // preflight failures are eligible for the same configured fallback chain
@@ -1980,7 +1385,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       ),
     }),
     executionMode: "parallel",
-    renderShell: "self",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const def = agents.get(params.agent);
       if (!def) {
@@ -1992,7 +1396,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
-      if (!canStartWorker(workers.values())) {
+      if (!runtime.canStart()) {
         return textResult(
           `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a worker with task_close first. Persistent workers count against the cap until closed.`,
           true,
@@ -2026,67 +1430,79 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       ].join("\n");
       return textResult(text, false, { worker: workerView(worker) });
     },
-    renderCall(args, theme, context: ToolRenderContext<AsyncRenderState, any>) {
-      context.state.startedAt ??= Date.now();
-      const def = args.agent ? agents.get(args.agent) : undefined;
-      const view: WorkerView = {
-        id: "starting",
-        agent: args.agent ?? "agent",
-        mission: missionFromPrompt(args.prompt ?? "Mission"),
-        model: args.model ?? def?.model,
-        thinking: def?.thinking,
-        lifecycle: "starting",
-        phase: "none",
-        generation: 1,
-        turns: 0,
-        maxTurns: def?.maxTurns ?? DEFAULT_MAX_TURNS,
-        createdAt: context.state.startedAt,
-        pendingSteer: 0,
-        pendingFollowUp: 0,
-        activities: [],
-        waitingUi: [],
-        latestText: "",
-        countsTowardCap: true,
-      };
-      const call = renderLaunchReceipt(view, theme);
-      return new WidthText((width) =>
-        context.state.hasResult ? [] : call.render(width),
-      );
-    },
-    renderResult(result, options, theme, context: ToolRenderContext<AsyncRenderState, any>) {
-      // The launch receipt morphs in place into the canonical live worker card:
-      // same transcript item, no disappear/reappear. renderCall stops drawing
-      // once hasResult is set, so exactly one surface is visible at a time.
-      context.state.hasResult = true;
-      const initial = viewFromDetails(result.details);
-      if (!initial) {
-        return new WidthText(() => [textContent(result) || "(no output)"]);
-      }
-      const workerId = initial.id;
-      const pinned = workers.get(workerId);
-      if (pinned) {
-        pinned.hasPinnedSurface = true;
-        // Store only a callback, never the render context itself.
-        pinned.pinnedInvalidate = () => context.invalidate();
-      }
-      // Last observed live state, so the card keeps its final appearance if the
-      // worker is later reaped out of the registry by pruneSettled.
-      let lastView: WorkerView = initial;
-      return new WidthText((width) => {
-        // Read the registry on every render so the card never shows a stale
-        // snapshot captured at result time.
-        const live = workers.get(workerId);
-        if (live) {
-          lastView = workerView(live);
-          if (live.closed && live.pinnedLifecycle) {
-            lastView.lifecycle = live.pinnedLifecycle;
-          }
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        context.state.startedAt ??= Date.now();
+        const def = args.agent ? agents.get(args.agent) : undefined;
+        const view: WorkerView = {
+          id: "starting",
+          agent: args.agent ?? "agent",
+          mission: missionFromPrompt(args.prompt ?? "Mission"),
+          model: args.model ?? def?.model,
+          thinking: def?.thinking,
+          lifecycle: "starting",
+          phase: "none",
+          generation: 1,
+          turns: 0,
+          maxTurns: def?.maxTurns ?? DEFAULT_MAX_TURNS,
+          createdAt: context.state.startedAt,
+          pendingSteer: 0,
+          pendingFollowUp: 0,
+          activities: [],
+          waitingUi: [],
+          latestText: "",
+          countsTowardCap: true,
+        };
+        const call = renderLaunchReceipt(view, theme);
+        return new WidthText((width) =>
+          context.state.hasResult ? [] : call.render(width),
+        );
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        // The launch receipt morphs in place into the canonical live worker card:
+        // same transcript item, no disappear/reappear. renderCall stops drawing
+        // once hasResult is set, so exactly one surface is visible at a time.
+        context.state.hasResult = true;
+        const initial = viewFromDetails(result.details);
+        if (!initial) {
+          return new WidthText(() => [textContent(result) || "(no output)"]);
         }
-        const expanded = context.expanded || options.expanded;
-        const waiting = !!live?.waiters.length;
-        return renderWorkerCard(lastView, theme, expanded, waiting).render(width);
-      }, "[async worker display unavailable]");
-    },
+        const workerId = initial.id;
+        const pinned = workers.get(workerId);
+        if (pinned) {
+          pinned.hasPinnedSurface = true;
+          // Store only a callback, never the render context itself.
+          pinned.pinnedInvalidate = () => context.invalidate();
+        }
+        // Last observed live state, so the card keeps its final appearance if the
+        // worker is later reaped out of the registry by pruneSettled.
+        let lastView: WorkerView = initial;
+        return new WidthText((width) => {
+          // Read the registry on every render so the card never shows a stale
+          // snapshot captured at result time.
+          const live = workers.get(workerId);
+          if (live) {
+            lastView = workerView(live);
+            if (live.closed && live.pinnedLifecycle) {
+              lastView.lifecycle = live.pinnedLifecycle;
+            }
+          }
+          const expanded = context.expanded || options.expanded;
+          const waiting = !!live?.waiters.length;
+          return renderWorkerCard(lastView, theme, expanded, waiting).render(width);
+        }, "[async worker display unavailable]");
+      },
+    }),
   });
 
   pi.registerTool({
@@ -2183,9 +1599,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     async execute(_toolCallId, params) {
       const includeSettled = params.include_settled !== false;
       const now = Date.now();
-      const rows = order
-        .map((id) => workers.get(id))
-        .filter((w): w is Worker => !!w)
+      const rows = workers
+        .entries()
+        .map(({ item: w }) => w)
         .filter((w) => {
           if (includeSettled) return true;
           return w.countsTowardCap && !w.closed;
@@ -2556,9 +1972,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     name: "task_wait",
     label: "Task Wait",
     description:
-      "Wait until the worker's current generation settles (agent_settled). Blocks and shows live progress updates. Optional bounded timeout returns current status without killing the worker. Cancelling this tool call only stops waiting; the worker continues. Use task_abort to stop the worker explicitly.",
+      "Wait until the worker's current generation settles (agent_settled). Blocks and shows live progress updates. Optional bounded timeout returns compact current status without killing the worker. Cancelling this tool call only stops waiting; the worker continues. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact before more orchestration. Use task_abort to stop the worker explicitly.",
     promptSnippet:
-      "Wait for an async RPC worker generation to settle without aborting it (optional timeout).",
+      "Wait for an async RPC worker generation to settle without aborting it; reserve-boundary timeouts create a compaction checkpoint.",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start." }),
       timeoutSec: Type.Optional(
@@ -2574,9 +1990,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         }),
       ),
     }),
-    executionMode: "parallel",
-    renderShell: "self",
-    async execute(_toolCallId, params, signal, onUpdate) {
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
       const worker = workers.get(id);
@@ -2688,16 +2103,37 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       if (snapshot === "timeout") {
-        return textResult(
-          [
-            `${id} wait timed out after ${timeoutSec}s (generation ${targetGen} still ${worker.lifecycle}).`,
-            "Worker was NOT killed.",
-            "",
-            formatWorkerStatus(worker),
-          ].join("\n"),
-          false,
-          { worker: workerView(worker), waiting: false },
+        let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
+        try {
+          contextUsage = ctx.getContextUsage();
+        } catch {
+          contextUsage = undefined;
+        }
+        const reserveTokens = compactionReserveTokens(ctx.cwd);
+        const checkpoint = shouldCheckpointTimedOutWait(
+          contextUsage,
+          reserveTokens,
         );
+        return {
+          ...textResult(
+            [
+              `${id} wait timed out after ${timeoutSec}s (generation ${targetGen} still ${worker.lifecycle}).`,
+              "Worker was NOT killed.",
+              contextCheckpointNote(contextUsage, reserveTokens),
+              "",
+              formatWorkerWaitStatus(worker),
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            false,
+            {
+              worker: workerView(worker),
+              waiting: false,
+              contextCheckpoint: checkpoint,
+            },
+          ),
+          ...(checkpoint ? { terminate: true } : {}),
+        };
       }
 
       const bound = boundText(
@@ -2724,91 +2160,106 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         { worker: workerView(worker), waiting: false },
       );
     },
-    renderCall(args, theme, context: ToolRenderContext<AsyncRenderState, any>) {
-      context.state.startedAt ??= Date.now();
-      const worker = args.id ? workers.get(String(args.id)) : undefined;
-      // The worker already owns a canonical pinned card from task_start; a
-      // second card here would duplicate title/activity, so stay silent.
-      if (worker?.hasPinnedSurface) return new WidthText(() => []);
-      const view = worker
-        ? workerView(worker)
-        : {
-            id: String(args.id ?? "worker"),
-            agent: "agent",
-            mission: "Waiting for async worker",
-            lifecycle: "starting" as const,
-            phase: "none" as const,
-            generation: Number(args.generation ?? 1),
-            turns: 0,
-            maxTurns: DEFAULT_MAX_TURNS,
-            createdAt: context.state.startedAt,
-            pendingSteer: 0,
-            pendingFollowUp: 0,
-            activities: [],
-            waitingUi: [],
-            latestText: "",
-            countsTowardCap: true,
-          };
-      const call = renderWorkerCard(view, theme, context.expanded, true);
-      return new WidthText((width) =>
-        context.state.hasResult ? [] : call.render(width),
-      );
-    },
-    renderResult(result, options, theme, context: ToolRenderContext<AsyncRenderState, any>) {
-      context.state.hasResult = true;
-      const view = viewFromDetails(result.details);
-      const waitId =
-        view?.id ??
-        (context.args?.id != null ? String(context.args.id) : undefined);
-      const pinned = waitId ? workers.get(waitId) : undefined;
-      const resultText = textContent(result);
-      const isError = Boolean((result as { isError?: boolean }).isError);
-      const isTimeout = /wait timed out/i.test(resultText);
-      if (pinned?.hasPinnedSurface && !isError && !isTimeout) {
-        // Normal progress and settlement live on the canonical pinned card.
-        return new WidthText(() => []);
-      }
-      if (pinned?.hasPinnedSurface) {
-        // Timeout/validation failures are control outcomes the worker card
-        // cannot express. Render them as receipts rather than detached alert
-        // text so a routine wait timeout does not look like a warning.
-        if (isTimeout && !isError) {
-          const timeout = finiteNumber(context.args?.timeoutSec) ?? 600;
-          return new WidthText((width) => [
-            receiptHeader(theme, width, {
-              tool: "task_wait",
-              id: waitId,
-              subject: `wait ended after ${timeout}s`,
-              meta: metaText([
-                safeLine(view?.lifecycle, 20) || undefined,
-                view ? `gen ${view.generation}` : undefined,
-                "worker continues",
-              ]),
-              kind: "waiting",
-              label: "still running",
-              rootGlyph: TREE.receipt,
-            }),
-          ]);
-        }
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        context.state.startedAt ??= Date.now();
+        const worker = args.id ? workers.get(String(args.id)) : undefined;
+        // The worker already owns a canonical pinned card from task_start; a
+        // second card here would duplicate title/activity, so stay silent.
+        if (worker?.hasPinnedSurface) return new WidthText(() => []);
+        const view = worker
+          ? workerView(worker)
+          : {
+              id: String(args.id ?? "worker"),
+              agent: "agent",
+              mission: "Waiting for async worker",
+              lifecycle: "starting" as const,
+              phase: "none" as const,
+              generation: Number(args.generation ?? 1),
+              turns: 0,
+              maxTurns: DEFAULT_MAX_TURNS,
+              createdAt: context.state.startedAt,
+              pendingSteer: 0,
+              pendingFollowUp: 0,
+              activities: [],
+              waitingUi: [],
+              latestText: "",
+              countsTowardCap: true,
+            };
+        const call = renderWorkerCard(view, theme, context.expanded, true);
         return new WidthText((width) =>
-          controlLines(
-            theme,
-            width,
-            "task_wait",
-            {
-              id: waitId,
-              operation: "failed",
-              kind: "failed",
-              message: cleanOneLine(resultText, 240),
-            },
-            options.expanded,
-          ),
+          context.state.hasResult ? [] : call.render(width),
         );
-      }
-      if (!view) return new WidthText(() => [resultText || "(no output)"]);
-      const waiting = Boolean((result.details as { waiting?: boolean })?.waiting);
-      return renderWorkerCard(view, theme, options.expanded, waiting);
-    },
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        context.state.hasResult = true;
+        const view = viewFromDetails(result.details);
+        const waitId =
+          view?.id ??
+          (context.args?.id != null ? String(context.args.id) : undefined);
+        const pinned = waitId ? workers.get(waitId) : undefined;
+        const resultText = textContent(result);
+        const isError = Boolean((result as { isError?: boolean }).isError);
+        const isTimeout = /wait timed out/i.test(resultText);
+        if (pinned?.hasPinnedSurface && !isError && !isTimeout) {
+          // Normal progress and settlement live on the canonical pinned card.
+          return new WidthText(() => []);
+        }
+        if (pinned?.hasPinnedSurface) {
+          // Timeout/validation failures are control outcomes the worker card
+          // cannot express. Render them as receipts rather than detached alert
+          // text so a routine wait timeout does not look like a warning.
+          if (isTimeout && !isError) {
+            const timeout = finiteNumber(context.args?.timeoutSec) ?? 600;
+            return new WidthText((width) => [
+              receiptHeader(theme, width, {
+                tool: "task_wait",
+                id: waitId,
+                subject: `wait ended after ${timeout}s`,
+                meta: metaText([
+                  safeLine(view?.lifecycle, 20) || undefined,
+                  view ? `gen ${view.generation}` : undefined,
+                  "worker continues",
+                ]),
+                kind: "waiting",
+                label: (result.details as { contextCheckpoint?: boolean })
+                  ?.contextCheckpoint
+                  ? "context checkpoint"
+                  : "still running",
+                rootGlyph: TREE.receipt,
+              }),
+            ]);
+          }
+          return new WidthText((width) =>
+            controlLines(
+              theme,
+              width,
+              "task_wait",
+              {
+                id: waitId,
+                operation: "failed",
+                kind: "failed",
+                message: cleanOneLine(resultText, 240),
+              },
+              options.expanded,
+            ),
+          );
+        }
+        if (!view) return new WidthText(() => [resultText || "(no output)"]);
+        const waiting = Boolean((result.details as { waiting?: boolean })?.waiting);
+        return renderWorkerCard(view, theme, options.expanded, waiting);
+      },
+      }),
   });
 
   pi.registerTool({
@@ -2959,7 +2410,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       id: Type.String({ description: "Worker id from task_start." }),
     }),
     executionMode: "parallel",
-    renderShell: "self",
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
@@ -2991,98 +2441,105 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         },
       );
     },
-    renderCall(args, theme, context: ToolRenderContext<AsyncRenderState, any>) {
-      const id = cleanOneLine(args.id ?? "worker", 40);
-      const worker = args.id ? workers.get(String(args.id)) : undefined;
-      if (worker?.hasPinnedSurface) return new WidthText(() => []);
-      return new WidthText((width) =>
-        context.state.hasResult
-          ? []
-          : [
-              fitLine(
-                `${theme.fg("dim", TREE.receipt)} ${theme.fg("text", id)}`,
-                theme.fg("warning", "closing"),
-                width,
-              ),
-            ],
-      );
-    },
-    renderResult(
-      result,
-      options,
-      theme,
-      context: ToolRenderContext<AsyncRenderState, any>,
-    ) {
-      // Replace the transient "closing" call row in the same tool surface;
-      // do not leave it above the final compact close receipt.
-      context.state.hasResult = true;
-      const details = result.details as
-        | {
-            worker?: WorkerView;
-            close?: {
-              message?: string;
-              liveWorkers?: number;
-              maxWorkers?: number;
-              exitCode?: number | null;
-              sessionId?: string;
-              sessionFile?: string;
-              errors?: string[];
-            };
-          }
-        | undefined;
-      const view = details?.worker;
-      const close = details?.close;
-      if (!view || !close) {
-        return new WidthText(
-          (width) =>
-            controlFallbackLines(
-              theme,
-              width,
-              "task_close",
-              textContent(result),
-              Boolean((result as { isError?: boolean }).isError),
-            ),
-          "[task_close result unavailable]",
+    ...withApexPresentation({
+      renderShell: "self" as const,
+      renderCall(
+        args: any,
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        const id = cleanOneLine(args.id ?? "worker", 40);
+        const worker = args.id ? workers.get(String(args.id)) : undefined;
+        if (worker?.hasPinnedSurface) return new WidthText(() => []);
+        return new WidthText((width) =>
+          context.state.hasResult
+            ? []
+            : [
+                fitLine(
+                  `${theme.fg("dim", TREE.receipt)} ${theme.fg("text", id)}`,
+                  theme.fg("warning", "closing"),
+                  width,
+                ),
+              ],
         );
-      }
-      // A pinned worker reports completion inside its canonical card. Keep the
-      // task_close tool surface silent; legacy/unpinned workers retain this
-      // standalone receipt as a fallback.
-      const live = workers.get(view.id);
-      if (live?.hasPinnedSurface) return new WidthText(() => []);
-      return new WidthText((width) => {
-        const released = !view.countsTowardCap;
-        const left = released
-          ? `${theme.fg("success", "✓")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`
-          : `${theme.fg("dim", TREE.receipt)} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`;
-        const right = released
-          ? `${theme.fg("success", "task complete")} ${theme.fg("dim", `· slot released · ${close.liveWorkers}/${close.maxWorkers} workers`)}`
-          : theme.fg("warning", "closing · slot retained");
-        const lines = [fitLine(left, right, width)];
-        if (!options.expanded) return lines;
-
-        const diagnostics = [
-          `lifecycle: ${view.lifecycle}`,
-          `exit_code: ${close.exitCode ?? "pending"}`,
-          view.killReason ? `reason: ${view.killReason}` : undefined,
-          close.sessionId ? `session_id: ${close.sessionId}` : undefined,
-          close.sessionFile
-            ? `session_file: ${cleanOneLine(close.sessionFile, 240)}`
-            : undefined,
-          ...(close.errors ?? []).map((error) => `error: ${error}`),
-        ].filter((line): line is string => !!line);
-        for (let index = 0; index < diagnostics.length; index++) {
-          const rail = index === diagnostics.length - 1 ? TREE.last : TREE.branch;
-          lines.push(
-            safeTruncateToWidth(
-              `${theme.fg("dim", rail)} ${theme.fg("dim", diagnostics[index])}`,
-              width,
-            ),
+      },
+      renderResult(
+        result: any,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: any,
+        context: ToolRenderContext<AsyncRenderState, any>,
+      ) {
+        // Replace the transient "closing" call row in the same tool surface;
+        // do not leave it above the final compact close receipt.
+        context.state.hasResult = true;
+        const details = result.details as
+          | {
+              worker?: WorkerView;
+              close?: {
+                message?: string;
+                liveWorkers?: number;
+                maxWorkers?: number;
+                exitCode?: number | null;
+                sessionId?: string;
+                sessionFile?: string;
+                errors?: string[];
+              };
+            }
+          | undefined;
+        const view = details?.worker;
+        const close = details?.close;
+        if (!view || !close) {
+          return new WidthText(
+            (width) =>
+              controlFallbackLines(
+                theme,
+                width,
+                "task_close",
+                textContent(result),
+                Boolean((result as { isError?: boolean }).isError),
+              ),
+            "[task_close result unavailable]",
           );
         }
-        return lines;
-      });
-    },
+        // A pinned worker reports completion inside its canonical card. Keep the
+        // task_close tool surface silent; legacy/unpinned workers retain this
+        // standalone receipt as a fallback.
+        const live = workers.get(view.id);
+        if (live?.hasPinnedSurface) return new WidthText(() => []);
+        return new WidthText((width) => {
+          const released = !view.countsTowardCap;
+          const left = released
+            ? `${theme.fg("success", "✓")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`
+            : `${theme.fg("dim", TREE.receipt)} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`;
+          const right = released
+            ? `${theme.fg("success", "task complete")} ${theme.fg("dim", `· slot released · ${close.liveWorkers}/${close.maxWorkers} workers`)}`
+            : theme.fg("warning", "closing · slot retained");
+          const lines = [fitLine(left, right, width)];
+          if (!options.expanded) return lines;
+
+          const diagnostics = [
+            `lifecycle: ${view.lifecycle}`,
+            `exit_code: ${close.exitCode ?? "pending"}`,
+            view.killReason ? `reason: ${view.killReason}` : undefined,
+            close.sessionId ? `session_id: ${close.sessionId}` : undefined,
+            close.sessionFile
+              ? `session_file: ${cleanOneLine(close.sessionFile, 240)}`
+              : undefined,
+            ...(close.errors ?? []).map((error) => `error: ${error}`),
+          ].filter((line): line is string => !!line);
+          for (let index = 0; index < diagnostics.length; index++) {
+            const rail = index === diagnostics.length - 1 ? TREE.last : TREE.branch;
+            lines.push(
+              safeTruncateToWidth(
+                `${theme.fg("dim", rail)} ${theme.fg("dim", diagnostics[index])}`,
+                width,
+              ),
+            );
+          }
+          return lines;
+        });
+      },
+      }),
   });
 
   pi.registerTool({
@@ -3249,6 +2706,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   pi.registerMessageRenderer<{ workers?: unknown }>(
     "async-task-settled",
     (message, options, theme) => {
+      if (!apexPresentationEnabled()) return undefined;
       const raw = Array.isArray(message.details?.workers)
         ? message.details.workers
         : [];
@@ -3299,9 +2757,8 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   pi.on("session_shutdown", () => {
     shuttingDown = true;
     try {
-      for (const id of [...order]) {
-        const worker = workers.get(id);
-        if (!worker || worker.closed) continue;
+      for (const { item: worker } of workers.entries()) {
+        if (worker.closed) continue;
         try {
           closeWorker(worker, "session_shutdown", "sync");
         } catch {
@@ -3313,7 +2770,6 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         worker.pinnedInvalidate = undefined;
       }
       workers.clear();
-      order.length = 0;
     }
   });
 }
