@@ -85,6 +85,35 @@ function summarize(view: TodoListView): string {
   return active ? `${base} · ${active}` : base;
 }
 
+/** Plain widget lines that inherit Pi's default UI instead of Apex chrome. */
+function defaultTodoPanelLines(
+  view: TodoListView,
+  collapsed: boolean,
+  toggleHint: string,
+): string[] {
+  const limit = collapsed ? 5 : 9;
+  const anchor = Math.max(0, view.anchorIndex);
+  const start = Math.max(
+    0,
+    Math.min(anchor - Math.floor(limit / 2), view.items.length - limit),
+  );
+  const visible = view.items.slice(start, start + limit);
+  const glyph: Record<TodoStatus, string> = {
+    pending: "[ ]",
+    in_progress: "[>]",
+    blocked: "[!]",
+    completed: "[x]",
+    cancelled: "[-]",
+  };
+  const lines = [`Todos (${view.done}/${view.total} done)  ${toggleHint}`];
+  for (const item of visible) {
+    lines.push(`${glyph[item.status]} ${safeLine(item.title, 180)}`);
+  }
+  const omitted = view.items.length - visible.length;
+  if (omitted > 0) lines.push(`... ${omitted} more`);
+  return lines;
+}
+
 /** Cap on items serialized into the model-visible todo_read result. */
 const READ_ITEM_CAP = 50;
 /** Cap on each serialized item line (status + content + optional note). */
@@ -170,12 +199,16 @@ export default function (pi: ExtensionAPI) {
 
   function renderPanel(): void {
     const ctx = currentCtx;
-    if (!apexPresentationEnabled()) {
-      clearPanel();
-      return;
-    }
     if (!ctx?.hasUI || ctx.mode !== "tui" || !current) return;
     try {
+      if (!apexPresentationEnabled()) {
+        ctx.ui.setWidget(
+          PANEL_KEY,
+          defaultTodoPanelLines(current, panelCollapsed, TOGGLE_HINT),
+          { placement: "aboveEditor" },
+        );
+        return;
+      }
       ctx.ui.setWidget(
         PANEL_KEY,
         (_tui, theme) =>
@@ -205,33 +238,31 @@ export default function (pi: ExtensionAPI) {
     current = undefined;
   });
 
-  if (apexPresentationEnabled()) {
-    pi.registerShortcut("alt+t", {
-      description: "Collapse or expand the todo panel",
-      handler: (ctx) => {
-        currentCtx = ctx;
-        if (!current) {
-          ctx.ui.notify("No todo list for this session yet.", "info");
-          return;
-        }
-        panelCollapsed = !panelCollapsed;
-        renderPanel();
-      },
-    });
+  pi.registerShortcut("alt+t", {
+    description: "Collapse or expand the todo panel",
+    handler: (ctx) => {
+      currentCtx = ctx;
+      if (!current) {
+        ctx.ui.notify("No todo list for this session yet.", "info");
+        return;
+      }
+      panelCollapsed = !panelCollapsed;
+      renderPanel();
+    },
+  });
 
-    pi.registerCommand("todos", {
-      description: "Collapse or expand the todo panel above the input",
-      handler: async (_args, ctx) => {
-        currentCtx = ctx;
-        if (!current) {
-          ctx.ui.notify("No todo list for this session yet.", "info");
-          return;
-        }
-        panelCollapsed = !panelCollapsed;
-        renderPanel();
-      },
-    });
-  }
+  pi.registerCommand("todos", {
+    description: "Collapse or expand the todo panel above the input",
+    handler: async (_args, ctx) => {
+      currentCtx = ctx;
+      if (!current) {
+        ctx.ui.notify("No todo list for this session yet.", "info");
+        return;
+      }
+      panelCollapsed = !panelCollapsed;
+      renderPanel();
+    },
+  });
 
   pi.registerTool({
     name: "todo_write",
