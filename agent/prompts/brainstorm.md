@@ -8,6 +8,7 @@ Stay divergent and do not implement or edit files yet:
 
 - Generate several genuinely distinct options, not variations of one idea.
 - Defer judgment while generating; capture even rough or unconventional directions.
+- When options differ in structure, show that shape — types, signatures, call tree, file tree, or a Mermaid sequence/state — instead of describing it in a paragraph. Conceptual or naming alternatives stay in short prose.
 - For the strongest options, note the key tradeoff, risk, and what would make it the right choice.
 - Surface hidden assumptions, constraints, and unknowns worth resolving before committing.
 - End with the smallest question or experiment that would most cheaply narrow the choice.
