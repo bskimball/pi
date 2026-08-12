@@ -10,6 +10,7 @@ import {
   encodeJsonl,
   parseJsonlLine,
 } from "./jsonl-framing.ts";
+import { isolatedChildEnv } from "./child-process.ts";
 
 export const STDERR_CAP = 16_000;
 
@@ -61,7 +62,7 @@ export class RpcClient {
 
     this.child = spawn(process.execPath, options.args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: isolatedChildEnv(options.env),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

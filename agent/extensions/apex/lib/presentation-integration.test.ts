@@ -5,6 +5,7 @@ import ampTask from "../amp-task.ts";
 import asyncTask from "../async-task.ts";
 import bgProcess from "../../bg-process.ts";
 import powershell from "../../powershell.ts";
+import todoList from "../../todo-list.ts";
 import webSearch from "../../web-search.ts";
 
 interface RegisteredTool {
@@ -21,6 +22,8 @@ function register(extension: (pi: ExtensionAPI) => void): RegisteredTool[] {
     registerTool(tool: RegisteredTool) {
       tools.push(tool);
     },
+    registerShortcut() {},
+    registerCommand() {},
     registerMessageRenderer() {},
     on() {},
     sendMessage() {},
@@ -39,6 +42,7 @@ describe("default UI tool registration", () => {
         ...register(asyncTask),
         ...register(bgProcess),
         ...register(powershell),
+        ...register(todoList),
         ...register(webSearch),
       ];
       assert.ok(tools.length >= 15, `expected core tools, got ${tools.length}`);

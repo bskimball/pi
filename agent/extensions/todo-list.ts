@@ -6,7 +6,6 @@
 // There are no render timers and no pi-tui Text/Markdown/Container on this path.
 
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -21,24 +20,24 @@ import {
   apexPresentationEnabled,
   withApexPresentation,
 } from "./apex/lib/presentation.ts";
+import { padStartToWidth, safeTruncateToWidth } from "./apex/lib/safe-text-layout.ts";
 import {
+  DURATION_COLUMN,
   TREE,
   WidthText,
+  fitLine,
+  formatDuration,
   textContent,
   type ToolRenderContext,
 } from "./apex/lib/ui-common.ts";
-import {
-  receiptHeader,
-  safeLine,
-  type StatusTheme,
-} from "./apex/lib/status-view.ts";
+import { safeLine, type StatusTheme } from "./apex/lib/status-view.ts";
 
 // ---------------------------------------------------------------- types
 
 interface TodoWriteParams {
   todos: Array<{
     content: string;
-    status: TodoStatus;
+    status: string;
     id?: string;
     note?: string;
   }>;
@@ -136,43 +135,110 @@ function serializeForRead(view: TodoListView): string {
   return lines.join("\n");
 }
 
-/** One-line call row shown while todo_write is in flight. */
-function todoCallLine(
-  theme: StatusTheme,
-  width: number,
-  args: unknown,
-  started: boolean,
-): string {
+type TodoKind = "queued" | "running" | "succeeded" | "failed";
+type TodoRenderState = {
+  hasResult?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+};
+
+function markTodoStarted(context: {
+  executionStarted: boolean;
+  state: TodoRenderState;
+}): void {
+  if (context.executionStarted && context.state.startedAt === undefined) {
+    context.state.startedAt = Date.now();
+  }
+}
+
+function markTodoEnded(context: { state: TodoRenderState }): void {
+  context.state.endedAt ??= Date.now();
+}
+
+function writeItemCount(args: unknown): string | undefined {
   const raw =
     args && typeof args === "object" && !Array.isArray(args)
       ? (args as Record<string, unknown>)
       : undefined;
   const todos = Array.isArray(raw?.todos) ? raw.todos : [];
-  const count = todos.length;
-  return receiptHeader(theme, width, {
-    tool: "todo_write",
-    subject: count ? `${count} item${count === 1 ? "" : "s"}` : undefined,
-    kind: started ? "running" : "queued",
-    label: started ? "updating" : "queued",
-    rootGlyph: TREE.receipt,
-  });
+  return todos.length ? `${todos.length} item${todos.length === 1 ? "" : "s"}` : undefined;
 }
 
-/** Compact fallback when no structured view is available. */
+/**
+ * Same header shape as the generic Apex tool receipt:
+ *   ● todo_read
+ *   ✓ todo_read  1/3 done · Align the receipt
+ * Returning no lines lets Pi fall back to the default blue tool name.
+ */
+function todoReceiptLine(
+  theme: StatusTheme,
+  width: number,
+  options: {
+    tool: "todo_write" | "todo_read";
+    kind: TodoKind;
+    subject?: string;
+    startedAt?: number;
+    endedAt?: number;
+  },
+): string {
+  const glyph =
+    options.kind === "running"
+      ? theme.fg("warning", "\u25cf")
+      : options.kind === "queued"
+        ? theme.fg("dim", "\u25cb")
+        : options.kind === "failed"
+          ? theme.fg("error", "\u00d7")
+          : theme.fg("success", "\u2713");
+  const lead = `${glyph} ${theme.fg("toolTitle", options.tool)}`;
+  const subject = safeLine(options.subject, 120);
+  const left = subject ? `${lead} ${theme.fg("muted", subject)}` : lead;
+  if (options.startedAt === undefined) return safeTruncateToWidth(left, width);
+  const elapsedMs = (options.endedAt ?? Date.now()) - options.startedAt;
+  const elapsed = theme.fg(
+    "dim",
+    padStartToWidth(formatDuration(elapsedMs), DURATION_COLUMN),
+  );
+  return fitLine(left, elapsed, width);
+}
+
 function todoFallbackLines(
   theme: StatusTheme,
   width: number,
+  tool: "todo_write" | "todo_read",
   text: unknown,
   isError: boolean,
+  timing: { startedAt?: number; endedAt?: number } = {},
 ): string[] {
-  const message = safeLine(text, 300) || (isError ? "todo_write failed" : "todo_write");
+  const message =
+    safeLine(text, 300) || (isError ? `${tool} failed` : tool);
   return [
-    receiptHeader(theme, width, {
-      tool: "todo_write",
-      kind: isError ? "failed" : "unknown",
+    todoReceiptLine(theme, width, {
+      tool,
+      kind: isError ? "failed" : "succeeded",
       subject: message,
-      rootGlyph: TREE.receipt,
+      startedAt: timing.startedAt,
+      endedAt: timing.endedAt,
     }),
+  ];
+}
+
+function todoEmptyReadLines(
+  theme: StatusTheme,
+  width: number,
+  timing: { startedAt?: number; endedAt?: number } = {},
+): string[] {
+  return [
+    todoReceiptLine(theme, width, {
+      tool: "todo_read",
+      kind: "succeeded",
+      subject: "no todos yet",
+      startedAt: timing.startedAt,
+      endedAt: timing.endedAt,
+    }),
+    safeTruncateToWidth(
+      `${theme.fg("dim", TREE.last)} ${theme.fg("dim", "todo_write to start a plan")}`,
+      width,
+    ),
   ];
 }
 
@@ -287,13 +353,17 @@ export default function (pi: ExtensionAPI) {
           content: Type.String({
             description: "Task text shown in the list (required).",
           }),
-          status: StringEnum(
-            ["pending", "in_progress", "blocked", "completed", "cancelled"] as const,
-            {
-              description:
-                "pending | in_progress | blocked | completed | cancelled. Keep at most one in_progress; use blocked when waiting on a user decision, another agent, or an external service.",
-            },
-          ),
+          status: Type.String({
+            enum: [
+              "pending",
+              "in_progress",
+              "blocked",
+              "completed",
+              "cancelled",
+            ],
+            description:
+              "pending | in_progress | blocked | completed | cancelled. Keep at most one in_progress; use blocked when waiting on a user decision, another agent, or an external service.",
+          }),
           id: Type.Optional(
             Type.String({
               description: "Stable id for the item (optional; positional id is assigned if omitted).",
@@ -315,16 +385,24 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     ...withApexPresentation({
       renderShell: "self" as const,
-    renderCall(
+      renderCall(
         args: TodoWriteParams,
         theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
+        context: ToolRenderContext<TodoRenderState, TodoWriteParams>,
       ) {
+        markTodoStarted(context);
         return new WidthText(
           (width) =>
             context.state.hasResult
               ? []
-              : [todoCallLine(theme, width, args, context.executionStarted)],
+              : [
+                  todoReceiptLine(theme, width, {
+                    tool: "todo_write",
+                    kind: context.executionStarted ? "running" : "queued",
+                    subject: writeItemCount(args),
+                    startedAt: context.state.startedAt,
+                  }),
+                ],
           "[todo_write call unavailable]",
         );
       },
@@ -332,25 +410,39 @@ export default function (pi: ExtensionAPI) {
         result: { content?: unknown; details?: TodoDetails; isError?: boolean },
         options: { expanded: boolean; isPartial: boolean },
         theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, TodoWriteParams>,
+        context: ToolRenderContext<TodoRenderState, TodoWriteParams>,
       ) {
         context.state.hasResult = true;
+        markTodoEnded(context);
         const payload = todoPayload(result);
-        const isError = Boolean(result?.isError) || Boolean(payload?.message);
+        const isError = Boolean(context.isError) || Boolean(result?.isError);
         return new WidthText((width) => {
           const view = payload?.view;
           if (!view) {
             return todoFallbackLines(
               theme,
               width,
+              "todo_write",
               payload?.message ?? textContent(result),
               isError,
+              context.state,
             );
           }
           // In the interactive TUI the dock above the editor is the canonical
           // todo surface. Keep successful writes out of the transcript so the
-          // same list is not shown twice; non-TUI modes retain the receipt.
-          if (currentCtx?.mode === "tui") return [];
+          // same list is not shown twice. Still emit a compact receipt so Pi
+          // does not fall back to the default blue tool name.
+          if (currentCtx?.mode === "tui") {
+            return [
+              todoReceiptLine(theme, width, {
+                tool: "todo_write",
+                kind: isError ? "failed" : "succeeded",
+                subject: summarize(view),
+                startedAt: context.state.startedAt,
+                endedAt: context.state.endedAt,
+              }),
+            ];
+          }
           return renderTodoList(theme, width, view, {
             expanded: context.expanded || options.expanded,
             emptyHint: "todo_write to start a plan",
@@ -412,27 +504,64 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     ...withApexPresentation({
       renderShell: "self" as const,
-    renderResult(
+      renderCall(
+        _args: object,
+        theme: StatusTheme,
+        context: ToolRenderContext<TodoRenderState, object>,
+      ) {
+        markTodoStarted(context);
+        return new WidthText(
+          (width) =>
+            context.state.hasResult
+              ? []
+              : [
+                  todoReceiptLine(theme, width, {
+                    tool: "todo_read",
+                    kind: context.executionStarted ? "running" : "queued",
+                    startedAt: context.state.startedAt,
+                  }),
+                ],
+          "[todo_read call unavailable]",
+        );
+      },
+      renderResult(
         result: { content?: unknown; details?: TodoDetails; isError?: boolean },
         options: { expanded: boolean; isPartial: boolean },
         theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, unknown>,
+        context: ToolRenderContext<TodoRenderState, object>,
       ) {
         context.state.hasResult = true;
+        markTodoEnded(context);
         const payload = todoPayload(result);
+        const isError = Boolean(context.isError) || Boolean(result?.isError);
         return new WidthText((width) => {
           const view = payload?.view;
           if (!view) {
+            if (!isError) {
+              return todoEmptyReadLines(theme, width, context.state);
+            }
+            return todoFallbackLines(
+              theme,
+              width,
+              "todo_read",
+              payload?.message ?? textContent(result),
+              true,
+              context.state,
+            );
+          }
+          // Same TUI rule as todo_write: the dock owns the list, but a blank
+          // result lets Pi paint the default tool-name row instead of Apex.
+          if (currentCtx?.mode === "tui") {
             return [
-              receiptHeader(theme, width, {
+              todoReceiptLine(theme, width, {
                 tool: "todo_read",
-                kind: "unknown",
-                subject: safeLine(payload?.message ?? textContent(result), 300),
-                rootGlyph: TREE.receipt,
+                kind: isError ? "failed" : "succeeded",
+                subject: summarize(view),
+                startedAt: context.state.startedAt,
+                endedAt: context.state.endedAt,
               }),
             ];
           }
-          if (currentCtx?.mode === "tui") return [];
           return renderTodoList(theme, width, view, {
             expanded: context.expanded || options.expanded,
             emptyHint: "todo_write to start a plan",

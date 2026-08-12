@@ -1,10 +1,17 @@
 // Persist fatal JavaScript errors that Pi normally only prints to the terminal,
 // plus a separate bounded lifecycle trace for compaction and session exits.
 
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  markTerminalWatchdogClean,
+  markTerminalWatchdogLive,
+  restoreInteractiveTerminalSync,
+  shouldRestoreInteractiveTerminal,
+} from "./lib/terminal-restore.ts";
 
 const INSTALL_KEY = Symbol.for("pi.crashLogger.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
@@ -174,6 +181,10 @@ export default function (pi: ExtensionAPI): void {
     processError("stderr error", error);
   });
   process.on("exit", (code) => {
+    // 129 is Pi's emergencyTerminalExit: the TTY is already gone. Writing
+    // restore sequences here re-triggers EIO and can loop the emergency path.
+    const restored = code === 129 || restoreInteractiveTerminalSync();
+    if (restored) markTerminalWatchdogClean();
     if (code === 0 || code == null) return;
     processError(
       `process exit ${code}`,
@@ -183,4 +194,39 @@ export default function (pi: ExtensionAPI): void {
       ].join("\n"),
     );
   });
+
+  startTerminalRestoreWatchdog();
+}
+
+function startTerminalRestoreWatchdog(): void {
+  if (!shouldRestoreInteractiveTerminal()) return;
+  if (process.env.PI_TERMINAL_WATCHDOG === "0") return;
+  try {
+    const script = path.join(
+      os.homedir(),
+      ".pi",
+      "agent",
+      "extensions",
+      "lib",
+      "terminal-restore-watchdog.mjs",
+    );
+    if (!fs.existsSync(script)) return;
+    markTerminalWatchdogLive();
+    const child = spawn(process.execPath, [script, String(process.pid)], {
+      detached: true,
+      stdio: ["inherit", "inherit", "ignore"],
+      windowsHide: true,
+      env: {
+        ...process.env,
+        PI_TERMINAL_WATCHDOG_CHILD: "1",
+      },
+    });
+    child.once("error", () => {
+      markTerminalWatchdogClean();
+    });
+    child.unref();
+  } catch {
+    markTerminalWatchdogClean();
+    // A restore helper must never create another fatal error.
+  }
 }

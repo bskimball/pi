@@ -29,6 +29,7 @@ import {
   stderrDiagnostic,
   type AgentDef,
 } from "./lib/agent-discovery.ts";
+import { isolatedChildEnv } from "./lib/child-process.ts";
 import { missionFromPrompt, shortArgs } from "./lib/task-view.ts";
 import {
   boundText,
@@ -786,12 +787,12 @@ export default function (pi: ExtensionAPI) {
             child = spawn(process.execPath, args, {
               cwd: childCwd,
               stdio: ["ignore", "pipe", "pipe"],
-              env: {
-                ...process.env,
+              windowsHide: true,
+              env: isolatedChildEnv({
                 PI_SUBAGENT: "1",
                 PI_SUBAGENT_AGENT: def.name,
                 PI_SUBAGENT_MODEL: modelLabel,
-              },
+              }),
             });
             run.child = child;
           } catch (error) {
