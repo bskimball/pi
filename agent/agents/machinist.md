@@ -5,7 +5,7 @@ model: local-proxy/grok-4.6
 fallbackModels:
   - local-proxy/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
-thinking: medium
+thinking: low
 tools: read, grep, find, ls, bash, edit, write, task
 inheritSkills: true
 maxTurns: 80

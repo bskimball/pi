@@ -20,13 +20,27 @@ export function cleanInline(value: unknown, max = 120): string {
   return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
 }
 
-export function textContent(result: any): string {
-  return Array.isArray(result?.content)
-    ? result.content
-        .filter((item: any) => item?.type === "text")
-        .map((item: any) => String(item.text ?? ""))
-        .join("\n")
-    : "";
+/** Join text blocks, stopping once the optional character budget is filled. */
+function takeText(value: unknown, maxChars: number): string {
+  if (typeof value === "string") {
+    return value.length > maxChars ? value.slice(0, maxChars) : value;
+  }
+  const text = String(value ?? "");
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+export function textContent(result: any, maxChars = 50_000): string {
+  if (!Array.isArray(result?.content)) return "";
+  let text = "";
+  for (const item of result.content) {
+    if (item?.type !== "text") continue;
+    const remaining = maxChars - text.length - (text ? 1 : 0);
+    if (remaining <= 0) break;
+    const piece = takeText(item.text, remaining);
+    if (!piece) continue;
+    text = text ? `${text}\n${piece}` : piece;
+  }
+  return text;
 }
 
 export function formatDuration(ms: number): string {

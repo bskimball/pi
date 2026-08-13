@@ -40,22 +40,51 @@ export function formatAge(ms: number): string {
 }
 
 /** Visible assistant text only (content blocks with type === "text"). */
-export function extractAssistantText(message: unknown): string {
+export function extractAssistantText(message: unknown, maxChars = 12_000): string {
   if (!message || typeof message !== "object") return "";
   const m = message as { role?: string; content?: unknown };
   if (m.role && m.role !== "assistant") return "";
-  if (typeof m.content === "string") return m.content.trim();
+  if (typeof m.content === "string") {
+    const text =
+      m.content.length > maxChars
+        ? m.content.slice(m.content.length - maxChars)
+        : m.content;
+    return text.trim();
+  }
   if (!Array.isArray(m.content)) return "";
-  return m.content
-    .filter(
-      (item): item is { type: string; text?: string } =>
-        !!item &&
-        typeof item === "object" &&
-        (item as { type?: string }).type === "text",
-    )
-    .map((item) => String(item.text ?? ""))
-    .join("\n")
-    .trim();
+  let text = "";
+  for (const item of m.content) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      (item as { type?: string }).type !== "text"
+    ) {
+      continue;
+    }
+    const raw = (item as { text?: unknown }).text;
+    const piece =
+      typeof raw === "string"
+        ? raw.length > maxChars
+          ? raw.slice(raw.length - maxChars)
+          : raw
+        : String(raw ?? "");
+    if (!piece) continue;
+    if (piece.length >= maxChars) {
+      text = piece.slice(piece.length - maxChars);
+      continue;
+    }
+    if (!text) {
+      text = piece;
+      continue;
+    }
+    if (text.length + 1 + piece.length <= maxChars) {
+      text = `${text}\n${piece}`;
+      continue;
+    }
+    const keep = maxChars - piece.length - 1;
+    text = `${keep > 0 ? text.slice(text.length - keep) : ""}\n${piece}`;
+  }
+  return text.trim();
 }
 
 /**

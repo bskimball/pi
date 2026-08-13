@@ -857,8 +857,9 @@ export default function (pi: ExtensionAPI) {
       worker.lastEventAt != null
         ? formatAge(now - worker.lastEventAt)
         : "n/a";
-    const runningTools = worker.ledger
-      .running()
+    const running = worker.ledger.running();
+    const runningTools = running
+      .slice(0, 8)
       .map((a) => `${a.tool}(${a.summary})`);
     const recent = worker.ledger
       .snapshot()
@@ -873,18 +874,17 @@ export default function (pi: ExtensionAPI) {
       STATUS_TEXT_CAP,
       STATUS_LINE_CAP,
     );
-    const waitingUi = [...worker.pendingUi.values()]
-      .filter((r) => r.expectsReply)
-      .map(
-        (r) =>
-          `  - ${r.id} method=${r.method}${r.title ? ` title=${cleanOneLine(r.title, 60)}` : ""}`,
-      );
+    const waitingUiAll = [...worker.pendingUi.values()].filter((r) => r.expectsReply);
+    const waitingUi = waitingUiAll.slice(0, 4).map(
+      (r) =>
+        `  - ${r.id} method=${r.method}${r.title ? ` title=${cleanOneLine(r.title, 60)}` : ""}`,
+    );
 
     const lines = [
       `${worker.id}  lifecycle=${worker.lifecycle}  agent=${worker.agent}  model=${worker.model ?? "default"}`,
       `generation=${worker.generation}  turns=${worker.turns}/${worker.maxTurns}  phase=${worker.phase}  age=${age}  last_event_age=${lastEvent}`,
-      `mission: ${worker.mission}`,
-      `cwd: ${worker.cwd}`,
+      `mission: ${cleanOneLine(worker.mission, 140)}`,
+      `cwd: ${cleanOneLine(worker.cwd, 200)}`,
       `pid: ${worker.pid ?? "-"}  counts_toward_cap: ${worker.countsTowardCap}`,
       `pending_messages: steer=${worker.pendingSteer} follow_up=${worker.pendingFollowUp}`,
       worker.sessionId
@@ -897,7 +897,7 @@ export default function (pi: ExtensionAPI) {
       worker.killReason ? `kill_reason: ${worker.killReason}` : undefined,
       worker.exitCode != null ? `exit_code: ${worker.exitCode}` : undefined,
       "",
-      `running_tools (${runningTools.length}):`,
+      `running_tools (${running.length}):`,
       runningTools.length ? runningTools.map((t) => `  - ${t}`).join("\n") : "  (none)",
       "",
       "recent_activities:",
@@ -906,7 +906,7 @@ export default function (pi: ExtensionAPI) {
       "recent_errors:",
       errLines.length ? errLines.join("\n") : "  (none)",
       "",
-      `waiting_ui_requests (${waitingUi.length}):`,
+      `waiting_ui_requests (${waitingUiAll.length}):`,
       waitingUi.length ? waitingUi.join("\n") : "  (none)",
       // Checkpoint deferral note if no UI protocol hit
       "note: child-initiated checkpoints use extension_ui_request dialogs; reply via task_reply. Fire-and-forget UI methods are recorded but not blocking.",

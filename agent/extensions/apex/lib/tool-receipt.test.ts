@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   RECEIPT_OUTPUT_CHARS,
+  boundedOutput,
   toolRenderers,
   type ToolRenderState,
 } from "./tool-receipt.ts";
@@ -164,5 +165,33 @@ describe("Apex tool receipts", () => {
     ).render(72);
 
     assert.equal(converted, 2);
+  });
+
+  it("does not split an enormous single-line dump to count hidden lines", () => {
+    const huge = "x".repeat(2_000_000);
+    const lines = boundedOutput(huge, 4, 80);
+    assert.equal(lines[0], "x".repeat(80));
+    assert.equal(lines.at(-1), "... output truncated at 80 characters");
+    assert.ok(lines.length <= 2);
+  });
+
+  it("stops after the line budget instead of materializing every newline", () => {
+    const huge = `${"line\n".repeat(200_000)}tail`;
+    const lines = boundedOutput(huge, 3, 8000);
+    assert.deepEqual(lines.slice(0, 3), ["line", "line", "line"]);
+    assert.match(lines.at(-1) ?? "", /\+ more lines$/);
+    assert.equal(lines.length, 4);
+  });
+
+  it("keeps exact character and line budgets without a truncation suffix", () => {
+    assert.deepEqual(boundedOutput("", 4, 80), [""]);
+    assert.deepEqual(boundedOutput("abcd", 4, 4), ["abcd"]);
+    assert.deepEqual(boundedOutput("a\r\nb", 4, 80), ["a", "b"]);
+    assert.deepEqual(boundedOutput("a\x00b", 4, 80), ["ab"]);
+    assert.deepEqual(boundedOutput("one\ntwo\nthree", 3, 80), [
+      "one",
+      "two",
+      "three",
+    ]);
   });
 });

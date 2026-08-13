@@ -52,23 +52,22 @@ When modifying Apex UI or task rendering:
 - Preserve task activity visibility. A stability fix must not collapse subagents to a one-line summary unless explicitly used as a diagnostic fallback.
 - Validate with a large Bash result and a real delegated `task`.
 
-### Custom Footer Incident and Invariants
+### Footer and Task Presentation Incident
 
-In August 2026, repeated Windows Terminal sessions ended abruptly without `session_shutdown` or a JavaScript exception, leaving the parent shell in raw mode. At that time, `PI_APEX_UI=0` only skipped `apex-ui` while separately loaded Apex task renderers could remain active; the strongest isolated suspect was the custom footer in `agent/extensions/apex/apex-ui.ts`, which was removed. Task/tool receipts are now also gated by the same opt-out (`withApexPresentation`), so `PI_APEX_UI=0` isolates the full Apex presentation layer.
+In August 2026, repeated Windows Terminal sessions ended abruptly without `session_shutdown` or a JavaScript exception, leaving the parent shell in raw mode. The custom footer was initially treated as the strongest suspect and was removed during isolation. The corrected project understanding is that the actual issue was in sub-agent/task presentation; that task-rendering issue has since been fixed. The footer was not established as the root cause.
 
-The likely failure mechanism was downstream of the footer's own `render()` guard: the footer returned dynamically sized and ANSI-styled frames, then Pi's fullscreen layout/compositor measured, clipped, diffed, and wrote them through Windows ConPTY. A compositor or terminal-write failure there would bypass the footer's `try/catch`, take Pi's emergency terminal-exit path, and skip normal raw-mode restoration. The footer also duplicated Pi's git-branch repaint subscription and changed between one and two rows as task, MCP, VS Code, token, model, branch, and context statuses changed.
+At the time, `PI_APEX_UI=0` only skipped `apex-ui` while separately loaded Apex task renderers could remain active. Task/tool receipts are now also gated by the same opt-out (`withApexPresentation`), so `PI_APEX_UI=0` isolates the full Apex presentation layer.
 
-For future footer work:
+For future footer and task-presentation work:
 
-- Do not restore the removed status-heavy, responsive custom footer.
-- Prefer Pi's built-in footer until interactive Windows stability has been demonstrated over long sessions, resumes, large tool results, and real delegated tasks.
-- Any replacement custom footer MUST return exactly one row at every width and state. Its height must never depend on terminal width, status count, context usage, or content.
-- A replacement MUST NOT mirror task, MCP, VS Code, background-job, or other extension statuses. Those surfaces already render elsewhere and independently trigger repaints.
-- A replacement MUST NOT subscribe to branch changes or call `tui.requestRender()`; Pi already owns the branch watcher and render scheduling.
-- A replacement MUST NOT scan the full session during `render()`. Cache data outside the render path and update it only from bounded lifecycle events.
-- Sanitize all dynamic text, hard-truncate every returned line to the supplied width with `safe-text-layout.ts`, and avoid ambiguous-width/combining glyphs.
+- Prefer targeted additions to Pi's built-in footer renderer when existing sections should remain unchanged.
+- Keep rendered line counts stable for a given surface; do not make height depend on terminal width, status count, context usage, or content unless the host component explicitly owns that behavior.
+- Do not add presentation timers that call `tui.requestRender()`; Pi owns render scheduling.
+- Do not duplicate Pi's git-branch subscription or mirror task, MCP, VS Code, background-job, or other statuses that already render elsewhere.
+- Do not scan the full session during a high-frequency custom render. Cache derived data outside the render path or preserve Pi's stock renderer.
+- Sanitize dynamic text, hard-truncate custom additions with `safe-text-layout.ts`, and avoid ambiguous-width or combining glyphs.
 - Keep ANSI styling simple and balanced. Do not splice styled strings by JavaScript code-unit offsets or return partial escape sequences.
-- Treat a clean noninteractive import or smoke test as syntax validation only. The acceptance test is sustained interactive use in Windows Terminal with fullscreen mode, a large Bash result, session resume, and a real delegated `task`.
+- Treat a clean noninteractive import or smoke test as syntax validation only. Acceptance still requires sustained interactive use in Windows Terminal with fullscreen mode, a large Bash result, session resume, and a real delegated `task`.
 
 ## Observatory Landing Screen
 

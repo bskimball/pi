@@ -15,6 +15,34 @@ export const MAX_SETTLED_META = 24;
 export const MODEL_IDLE_MS = 300_000;
 export const TOOL_IDLE_MS = 900_000;
 export const RETRY_COMPACT_BUDGET_MS = 600_000;
+/** Stored assistant/result preview. Full child output lives in the worker session file. */
+export const LATEST_RESULT_CHARS = 12_000;
+
+function storeLatestText(text: string): string {
+  if (text.length <= LATEST_RESULT_CHARS) return text;
+  return text.slice(text.length - LATEST_RESULT_CHARS);
+}
+
+function appendLatestText(current: string, next: string): string {
+  if (!next) return current;
+  if (next.length >= LATEST_RESULT_CHARS) {
+    return next.slice(next.length - LATEST_RESULT_CHARS);
+  }
+  if (current.length + next.length <= LATEST_RESULT_CHARS) return current + next;
+  return current.slice(current.length - (LATEST_RESULT_CHARS - next.length)) + next;
+}
+
+function extractTextDelta(event: Record<string, unknown>): string {
+  const update = event.assistantMessageEvent;
+  if (!update || typeof update !== "object") return "";
+  const delta = (update as { type?: string; delta?: unknown }).delta;
+  if ((update as { type?: string }).type !== "text_delta" || typeof delta !== "string") {
+    return "";
+  }
+  return delta.length > LATEST_RESULT_CHARS
+    ? delta.slice(delta.length - LATEST_RESULT_CHARS)
+    : delta;
+}
 
 export type WorkerLifecycle =
   | "starting"
@@ -569,6 +597,17 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         if (worker.lifecycle === "running") this.armIdle(worker);
         break;
       }
+      case "message_update": {
+        const delta = extractTextDelta(event);
+        if (delta) {
+          worker.latestAssistantText = appendLatestText(
+            worker.latestAssistantText,
+            delta,
+          );
+          worker.latestResult = worker.latestAssistantText;
+        }
+        break;
+      }
       case "message_end": {
         const message = event.message;
         if (message && typeof message === "object") {
@@ -580,8 +619,8 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
           if (assistant.role === "assistant") {
             const text = hooks.extractAssistantText(message);
             if (text) {
-              worker.latestAssistantText = text;
-              worker.latestResult = text;
+              worker.latestAssistantText = storeLatestText(text);
+              worker.latestResult = worker.latestAssistantText;
             }
             if (assistant.stopReason === "error" || assistant.errorMessage) {
               const error = String(
@@ -672,26 +711,14 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         break;
       }
     }
-    // Streaming delta events do not change anything rendered by the pinned
-    // worker card: message text is committed on message_end, and tool rows on
-    // tool_execution_start/end. Invalidating here turns every token/output
-    // chunk into a full parent fullscreen repaint, which can overwhelm Windows
-    // ConPTY during long async generations without improving the display.
+    // Streaming deltas do not change pinned-card or task_wait status text.
+    // Pushing every token/output chunk through onUpdate rebuilds the parent
+    // tool-result surface and can native-abort Windows ConPTY / V8.
     const isStreamingDelta =
       type === "message_update" ||
       type === "tool_execution_update" ||
       type === "bash_execution_update";
-    if (isStreamingDelta) {
-      // Detached task_wait subscribers need fresh model-facing progress, but the
-      // pinned fullscreen card has no delta content to repaint.
-      for (const subscriber of worker.subscribers ?? []) {
-        try {
-          subscriber();
-        } catch {
-          // Subscriber errors are isolated from worker lifecycle state.
-        }
-      }
-    } else {
+    if (!isStreamingDelta) {
       this.notify(worker);
     }
   }

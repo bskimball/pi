@@ -42,10 +42,27 @@ export function shortArgs(args: unknown): string {
   }
 }
 
+function compactArgs(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return value.length > 200 ? `${value.slice(0, 197)}...` : value;
+  }
+  if (!value || typeof value !== "object" || depth > 2) return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item) => compactArgs(item, depth + 1));
+  }
+  const compact: Record<string, unknown> = {};
+  let count = 0;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    compact[key] = compactArgs(item, depth + 1);
+    if (++count >= 12) break;
+  }
+  return compact;
+}
+
 /** JSON-shaped args summary for activity logs that need the full payload. */
 export function argsSummary(args: unknown, max = 120): string {
   try {
-    return cleanInline(JSON.stringify(args ?? {}), max);
+    return cleanInline(JSON.stringify(compactArgs(args ?? {})), max);
   } catch {
     return cleanInline(String(args ?? ""), max);
   }

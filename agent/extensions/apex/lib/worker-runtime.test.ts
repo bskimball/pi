@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  LATEST_RESULT_CHARS,
   WorkerRuntime,
   isModelFallbackError,
   shouldRetryModelFallback,
@@ -181,11 +182,78 @@ describe("WorkerRuntime control plane", () => {
     }
 
     assert.equal(invalidations, 0);
-    assert.equal(subscriberCalls, 6_000);
+    assert.equal(subscriberCalls, 0);
 
     runtime.handleEvent(item, { type: "turn_start" }, eventHooks);
     assert.equal(invalidations, 1);
-    assert.equal(subscriberCalls, 6_001);
+    assert.equal(subscriberCalls, 1);
+    runtime.clearTimers(item);
+  });
+
+  it("stores only a bounded tail of assistant result text", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    const huge = "x".repeat(LATEST_RESULT_CHARS + 4_000);
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_end",
+        message: { role: "assistant", text: huge },
+      },
+      hooks(),
+    );
+    assert.equal(item.latestAssistantText.length, LATEST_RESULT_CHARS);
+    assert.equal(item.latestResult, item.latestAssistantText);
+    assert.equal(item.latestResult, "x".repeat(LATEST_RESULT_CHARS));
+    runtime.clearTimers(item);
+  });
+
+  it("keeps a stream-delta tail when the final message_end is stubbed", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hello " },
+      },
+      hooks(),
+    );
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "world" },
+      },
+      hooks(),
+    );
+    assert.equal(item.latestAssistantText, "hello world");
+    runtime.handleEvent(
+      item,
+      { type: "message_end", truncated: true },
+      hooks(),
+    );
+    assert.equal(item.latestResult, "hello world");
+    runtime.clearTimers(item);
+  });
+
+  it("keeps only a bounded tail from a huge text_delta", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: `keep-${"x".repeat(LATEST_RESULT_CHARS + 8_000)}`,
+        },
+      },
+      hooks(),
+    );
+    assert.equal(item.latestAssistantText.length, LATEST_RESULT_CHARS);
+    assert.equal(item.latestAssistantText.endsWith("x".repeat(80)), true);
+    assert.equal(item.latestAssistantText.startsWith("keep-"), false);
     runtime.clearTimers(item);
   });
 

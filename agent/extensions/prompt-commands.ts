@@ -10,6 +10,11 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  installRuntimeOrchestrateFooterPatch,
+  ORCHESTRATE_STATUS_KEY,
+  ORCHESTRATE_STATUS_LABEL,
+} from "./apex/lib/orchestrate-footer-patch.ts";
 
 const PREVIEW_CHARS = 8_000;
 const PREVIEW_LINES = 120;
@@ -105,6 +110,27 @@ function notify(
     return;
   }
   process.stderr.write(`${message}\n`);
+}
+
+export function orchestrateStatusText(
+  enabled: boolean,
+  theme?: { fg?(key: string, text: string): string },
+): string | undefined {
+  if (!enabled) return undefined;
+  try {
+    const styled = theme?.fg?.("warning", ORCHESTRATE_STATUS_LABEL);
+    if (typeof styled === "string" && styled.length > 0) return styled;
+  } catch {}
+  return ORCHESTRATE_STATUS_LABEL;
+}
+
+function syncOrchestrateStatus(ctx: ExtensionContext, enabled: boolean): void {
+  try {
+    ctx.ui.setStatus(
+      ORCHESTRATE_STATUS_KEY,
+      orchestrateStatusText(enabled, ctx.ui.theme),
+    );
+  } catch {}
 }
 
 function handOff(
@@ -569,11 +595,15 @@ export async function runFeaturedExtensionCommand(
 
 export default function (pi: ExtensionAPI): void {
   let orchestrateMode = false;
+  const footerPatchReady = installRuntimeOrchestrateFooterPatch();
 
   const setOrchestrateMode = (
     enabled: boolean,
     ctx: ExtensionContext,
   ): void => {
+    // Sync first, unconditionally: another extension may clear the key, so a
+    // no-op /orchestrate on must still repair a missing indicator.
+    syncOrchestrateStatus(ctx, enabled);
     if (orchestrateMode === enabled) {
       notify(
         ctx,
@@ -597,6 +627,7 @@ export default function (pi: ExtensionAPI): void {
     description:
       "Toggle strict orchestrator mode (no inline edits; delegate everything)",
     handler: async (args, ctx) => {
+      await footerPatchReady;
       const arg = args.trim().toLowerCase();
       if (arg === "on") setOrchestrateMode(true, ctx);
       else if (arg === "off") setOrchestrateMode(false, ctx);
@@ -609,6 +640,9 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    await footerPatchReady;
+    // Restore from the session alone; the handler closure may be reused.
+    orchestrateMode = false;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (
         entry.type === "custom" &&
@@ -618,6 +652,7 @@ export default function (pi: ExtensionAPI): void {
         orchestrateMode = data?.enabled === true;
       }
     }
+    syncOrchestrateStatus(ctx, orchestrateMode);
   });
 
   pi.on("before_agent_start", async (event) => {

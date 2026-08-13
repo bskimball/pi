@@ -146,23 +146,82 @@ export function paddedSection(
   };
 }
 
+function isStrippedControl(code: number): boolean {
+  return (
+    (code >= 0 && code <= 8) ||
+    code === 11 ||
+    code === 12 ||
+    (code >= 14 && code <= 31) ||
+    code === 127
+  );
+}
+
 /** Clip text to a hard line and character budget, reporting what was dropped. */
 export function boundedOutput(
   text: string,
   maxLines: number,
   maxChars = 8000,
 ): string[] {
-  const clean = text.replace(
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
-    "",
-  );
-  const totalLines = clean.split(/\r?\n/).length;
-  const lines = clean.slice(0, maxChars).split(/\r?\n/);
-  if (totalLines <= maxLines && clean.length <= maxChars) return lines;
-  const shown = lines.slice(0, maxLines);
-  const hiddenLines = Math.max(0, totalLines - shown.length);
+  const shown: string[] = [];
+  let current = "";
+  let used = 0;
+  let hiddenLines = 0;
+  let truncatedByChars = false;
+  let stopped = false;
+
+  const commit = (): boolean => {
+    if (shown.length >= maxLines) {
+      hiddenLines++;
+      return false;
+    }
+    shown.push(current);
+    current = "";
+    return true;
+  };
+
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (isStrippedControl(code)) continue;
+
+    const crlf = code === 13 && text.charCodeAt(index + 1) === 10;
+    if (code === 10 || code === 13) {
+      if (used >= maxChars) {
+        truncatedByChars = true;
+        stopped = true;
+        break;
+      }
+      used++;
+      if (!commit()) {
+        stopped = true;
+        break;
+      }
+      if (crlf) index++;
+      continue;
+    }
+
+    if (shown.length >= maxLines) {
+      hiddenLines++;
+      stopped = true;
+      break;
+    }
+    if (used >= maxChars) {
+      truncatedByChars = true;
+      stopped = true;
+      break;
+    }
+    current += text[index]!;
+    used++;
+  }
+
+  if (!stopped) {
+    if (current.length > 0 || shown.length === 0) commit();
+  } else if (current.length > 0 && shown.length < maxLines) {
+    shown.push(current);
+  }
+
+  if (hiddenLines === 0 && !truncatedByChars) return shown;
   const suffix = hiddenLines
-    ? `... ${hiddenLines} more lines`
+    ? `... ${hiddenLines}+ more lines`
     : `... output truncated at ${maxChars} characters`;
   return [...shown, suffix];
 }
@@ -173,19 +232,16 @@ function boundedRenderedOutput(
   maxLines: number,
   maxChars: number,
 ): string[] {
-  const source = values.flatMap((value) =>
-    String(value ?? "")
-      .replace(/\r\n?/g, "\n")
-      .split("\n"),
-  );
   const shown: string[] = [];
   let remaining = maxChars;
-  let truncated = source.length > maxLines;
+  let truncated = false;
+  let consumed = 0;
 
-  for (const line of source.slice(0, maxLines)) {
-    if (remaining <= 0) {
+  const consumeLine = (line: string): boolean => {
+    consumed++;
+    if (shown.length >= maxLines || remaining <= 0) {
       truncated = true;
-      break;
+      return false;
     }
     // A small look-ahead lets the safe truncator close ANSI state even when
     // the source row itself is far larger than the receipt budget.
@@ -199,10 +255,26 @@ function boundedRenderedOutput(
       safeVisibleWidth(candidate) > safeVisibleWidth(clipped)
     ) {
       truncated = true;
-      break;
+      return false;
     }
+    return true;
+  };
+
+  outer: for (const value of values) {
+    const raw = String(value ?? "");
+    const clippedRaw =
+      raw.length > maxChars + 1024 ? raw.slice(0, maxChars + 1024) : raw;
+    const text = clippedRaw.replace(/\r\n?/g, "\n");
+    let start = 0;
+    for (let index = 0; index < text.length; index++) {
+      if (text.charCodeAt(index) !== 10) continue;
+      if (!consumeLine(text.slice(start, index))) break outer;
+      start = index + 1;
+    }
+    if (start <= text.length && !consumeLine(text.slice(start))) break;
   }
 
+  if (!truncated && consumed > shown.length) truncated = true;
   if (truncated) shown.push("... output truncated for display");
   return shown;
 }
@@ -390,7 +462,8 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
       const title = asTitle(spec.title, context.args, asDetails(result));
       // Scrub first so a secret that crosses the presentation boundary cannot
       // be split into an unrecognizable prefix by the intake cap.
-      const output = scrub(textContent(result))
+      // Extra window lets a secret that sits on the cap still be scrubbed whole.
+      const output = scrub(textContent(result, RECEIPT_OUTPUT_CHARS + 1_024))
         .slice(0, RECEIPT_OUTPUT_CHARS)
         .trim();
       const hasBody = output.length > 0;
