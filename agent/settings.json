@@ -1,7 +1,7 @@
 {
-  "defaultModel": "kimi-k3",
-  "defaultProvider": "github-copilot",
-  "defaultThinkingLevel": "medium",
+  "defaultModel": "grok-4.6",
+  "defaultProvider": "local-proxy",
+  "defaultThinkingLevel": "low",
   "lastChangelogVersion": "0.84.1",
   "packages": [],
   "skills": [

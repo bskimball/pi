@@ -6,6 +6,7 @@
 // failures in the text renderers that consume model and extension payloads.
 
 import { Markdown, Text } from "@earendil-works/pi-tui";
+import { installSegmenterSafety } from "../../lib/segmenter-safety.ts";
 import { reportRenderFailure } from "./tool-receipt.ts";
 
 // Native Intl.Segmenter can terminate Node on Windows while pi-tui breaks very
@@ -18,6 +19,10 @@ const BREAK_OPPORTUNITY = "\u200b";
 
 const INSTALL_KEY = Symbol.for("pi.apex.renderSafety.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
+
+// Module load: the compositor can measure lines as soon as this file is
+// imported. The wrap is idempotent with crash-logger's install.
+installSegmenterSafety();
 
 function safeString(value: unknown, fallback = "[unrenderable]"): string {
   if (typeof value === "string") return value;
@@ -150,6 +155,7 @@ function installMarkdownBoundary(): void {
 
 /** Install once per Pi process, even when extensions are reloaded. */
 export function installRenderSafety(): void {
+  installSegmenterSafety();
   if (state[INSTALL_KEY]) return;
   installTextBoundary();
   installMarkdownBoundary();

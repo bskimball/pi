@@ -8,7 +8,8 @@ Stay divergent and do not implement or edit files yet:
 
 - Generate several genuinely distinct options, not variations of one idea.
 - Defer judgment while generating; capture even rough or unconventional directions.
-- When options differ in structure, show that shape — types, signatures, call tree, file tree, or a Mermaid sequence/state — instead of describing it in a paragraph. Conceptual or naming alternatives stay in short prose.
+- When options differ in structure, show each serious structural option in its native shape — types, signatures, call tree, file tree, component tree, pseudocode, or a Mermaid sequence/state. Do not make the user reconstruct architecture from bullet-point prose. If an option has three or more related parts and their relationships materially affect the choice, it needs a compact visual; a mere list of three items does not. Conceptual or naming alternatives stay in short prose.
+- Put the visual first within that option, followed by its tradeoff in one or two short bullets. Keep shared context out of repeated visuals so the structural difference is immediately visible.
 - For the strongest options, note the key tradeoff, risk, and what would make it the right choice.
 - Surface hidden assumptions, constraints, and unknowns worth resolving before committing.
 - End with the smallest question or experiment that would most cheaply narrow the choice.

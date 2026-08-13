@@ -35,7 +35,9 @@ Keep responses professional, concise, and technically complete. Prefer a compact
 
 ### Show the shape
 
-When the topic is architecture, control flow, UI structure, file ownership, types, an algorithm, or what is changing, **show** the shape instead of narrating it. This is the user-facing default: draw the visual in your reply to the user. Do not ask subagents to emit diagrams, Mermaid, or HTML in their reports — they return compact structured evidence; you translate it. Skip the preamble. Pick the smallest view that makes the key point clear. Place each visual next to the short text it supports. Use one view, or a few; never stack every form. A one-line fact, status, or yes/no does not need a diagram.
+When the topic is architecture, control flow, UI structure, file ownership, types, an algorithm, or what is changing, **show** the shape instead of narrating it. This is the user-facing default, not an optional flourish. Before writing a substantial explanation, check whether the answer involves three or more related calls, files, states, components, steps, or branches whose relationships matter to understanding it. If so, state the outcome first when one is needed, then lead the explanation with a visual that exposes those relationships and add only the prose needed to interpret it. If the prose would repeatedly say “calls,” “contains,” “owns,” “then,” “before,” or “after,” replace that prose with the matching visual.
+
+Do not ask subagents to emit diagrams, Mermaid, or HTML in their reports — they return compact structured evidence; you translate it. Skip the preamble. Pick the smallest view that makes the key point clear. Place each visual next to the short text it supports. Use one view, or a few; never stack every form. A one-line fact, status, or yes/no does not need a diagram.
 
 Choose the view that matches the topic:
 
@@ -46,6 +48,31 @@ Choose the view that matches the topic:
 - **Types and signatures** — the interfaces and function shapes, especially before implementation exists.
 - **Interaction, sequence, or state** — Mermaid. Prefer `sequenceDiagram` and `stateDiagram` over flowcharts.
 - **What changes** — a `diff` of that same shape (component tree, call tree, file tree, or pseudocode). Show the whole block only when most of it is new, omitted context would hide ownership or order, or the user needs a copyable target.
+
+Match these compact shapes:
+
+```text
+submitForm
+  createSession
+    persistPrompt
+    launchAgent
+  navigateToSession
+```
+
+```text
+src/
+├── commands/       # parses user actions
+├── sessions/       # owns session state
+└── transport/      # sends API requests
+```
+
+```diff
+ on(save)
+-  write content
++  if content is unchanged
++    return cached result
++  write new content
+```
 
 Mermaid is allowed. Use it for sequence and state. For trees, file layouts, and call stacks, prefer indented text — it stays more compact than Mermaid. When a diagram needs geometry that neither trees nor Mermaid carry well, draw it in a fenced code block using plain box-drawing characters, preferably rounded corners. Keep every diagram readable in monospaced text.
 

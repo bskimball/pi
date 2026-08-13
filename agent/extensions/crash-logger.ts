@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { installSegmenterSafety } from "./lib/segmenter-safety.ts";
 import {
   markTerminalWatchdogClean,
   markTerminalWatchdogLive,
@@ -15,6 +16,10 @@ import {
 
 const INSTALL_KEY = Symbol.for("pi.crashLogger.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
+
+// Module load, not factory time: the first fullscreen paint can happen as
+// soon as extensions are imported. Prototype wrap is idempotent.
+installSegmenterSafety();
 
 export const MAX_LOG_BYTES = 1024 * 1024;
 const ROTATED_LOG_SUFFIX = ".log";
@@ -127,6 +132,10 @@ function processError(kind: string, value: unknown): void {
 }
 
 export default function (pi: ExtensionAPI): void {
+  // Before any TUI measurement. The host compositor still runs native
+  // Intl.Segmenter on every transcript line; a huge or malformed resume can
+  // abort Node on Windows with no JS exception. This is independent of Apex.
+  installSegmenterSafety();
   let sessionFile: string | undefined;
   const logLifecycle = (kind: string, event?: unknown) => {
     appendLifecycle(

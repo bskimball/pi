@@ -41,6 +41,8 @@ The Windows Pi TUI has had intermittent renderer failures during long or resumed
 
 If renderer crashes resume, check the render evidence in those logs before blaming a provider or subagent failure, and run once with `PI_APEX_UI=0` to isolate the presentation layer. Record whether the exit happened during a tool-result, task-update, footer, working-indicator, or session-transition render, then disable one surface at a time in this order: final task-report styling, live task activity presentation, built-in tool presentation, footer, working-indicator styling. Noninteractive smoke tests do not prove interactive Windows Terminal stability.
 
+Unclean Windows deaths with no JS stack and leftover mouse CSI are also consistent with native `Intl.Segmenter` abort inside pi-tui `visibleWidth()` / `truncateToWidth()` while the host compositor measures transcript lines. Apex receipts already avoid that path; the compositor does not. `agent/extensions/lib/segmenter-safety.ts` wraps grapheme `Intl.Segmenter.prototype.segment` process-wide (installed from `crash-logger.ts`, including `PI_APEX_UI=0`) so ICU never sees more than 2048 UTF-16 units plus a 32-unit lookahead. Word/sentence segmentation stays native so editor word-nav keeps `isWordLike`. This is a defense, not proof that every silent exit is Segmenter.
+
 ### Stability Constraints
 
 When modifying Apex UI or task rendering:
