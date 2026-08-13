@@ -7,7 +7,7 @@ fallbackModels:
   - local-proxy/claude-fable-5
   - local-proxy/grok-4.6
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
-thinking: medium
+thinking: high
 tools: read, grep, find, ls, edit, write, task
 inheritSkills: true
 maxTurns: 40
