@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  agentParamDescription,
   agentProvider,
   composeSpecialistSharedPrompts,
   discoverAgents,
@@ -543,7 +544,7 @@ export default function (pi: ExtensionAPI) {
 
   const TaskParams = Type.Object({
     agent: Type.String({
-      description: `Agent to run. One of: ${[...agents.keys()].join(", ")}. Route UI/frontend/styling/layout implementation to artisan; routine read-only browser/screenshot verification to inspector; non-visual code to machinist.`,
+      description: agentParamDescription(agents),
     }),
     prompt: Type.String({
       description:

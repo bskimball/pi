@@ -1,6 +1,6 @@
 ---
 name: scribe
-description: Editorial writing specialist for blog posts, articles, documentation narratives, launch copy, essays, and polished long-form prose.
+description: Editorial writing specialist for blog posts, articles, documentation narratives, READMEs, changelogs, guides, launch copy, essays, and polished long-form prose, including Markdown docs inside code repositories.
 model: local-proxy/claude-sonnet-5
 fallbackModels:
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'

@@ -105,6 +105,44 @@ export function discoverAgents(cwd: string = process.cwd()): Map<string, AgentDe
   return agents;
 }
 
+/**
+ * Routing hint for the `agent` parameter of the task tools. Kept here so the
+ * sync and async schemas cannot drift apart, and so clauses naming an agent the
+ * catalog does not contain are dropped instead of pointing at nothing.
+ */
+const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
+  {
+    agents: ["artisan"],
+    text: "UI/frontend/styling/layout implementation to artisan",
+  },
+  {
+    agents: ["inspector"],
+    text: "routine read-only browser/screenshot verification to inspector",
+  },
+  {
+    agents: ["scribe"],
+    text: "units whose deliverable is prose (docs, READMEs, changelogs, guides, copy) to scribe",
+  },
+  {
+    agents: ["machinist"],
+    text: "other non-visual code, config, and tests to machinist",
+  },
+];
+
+export function routingHint(agents: Map<string, AgentDef>): string {
+  const clauses = ROUTING_CLAUSES.filter((clause) =>
+    clause.agents.every((name) => agents.has(name)),
+  ).map((clause) => clause.text);
+  if (clauses.length === 0) return "";
+  return `Route ${clauses.join("; ")}. Route by deliverable, not file extension.`;
+}
+
+/** `agent` parameter description shared by the sync `task` and async `task_start` tools. */
+export function agentParamDescription(agents: Map<string, AgentDef>): string {
+  const hint = routingHint(agents);
+  return `Agent to run. One of: ${[...agents.keys()].join(", ")}.${hint ? ` ${hint}` : ""}`;
+}
+
 /** True when an agent definition lives under the project-local `.pi/agents` tree. */
 export function isProjectAgentFile(file: string, cwd: string = process.cwd()): boolean {
   const projectAgents = path.resolve(cwd, ".pi", "agents");

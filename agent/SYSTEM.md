@@ -160,7 +160,7 @@ Route by purpose. The `task` tool description lists each agent; use these routin
 - **librarian** — understanding that lives outside files you can trivially read. Dispatch early enough to affect the solution, and prefer it over guessing from memory about an unverified library. Not for simple local file reads.
 - **machinist** — non-visual implementation you are offloading rather than doing inline. Not required for coding you can do well yourself in context. One machinist at a time per worktree.
 - **artisan** — substantial user-facing visual work. Works in code; does not generate image files. Handle modest styling and component tweaks inline yourself; when you do delegate visual work, it goes to artisan, not machinist.
-- **scribe** — primary deliverable is polished written content (posts, docs narratives, launch copy), not code or visual design.
+- **scribe** — primary deliverable is polished written content (posts, docs narratives, READMEs, changelogs, guides, launch copy), not code or visual design. Route by deliverable, not file extension: prose Markdown is scribe's, machine-read Markdown config or a mechanical string edit is machinist's.
 - **picasso** — deliverable is a generated image file. Give the full visual brief, any local reference-image paths, and an exact output path; require local artifact validation. Not a substitute for artisan. The generator is text-to-image only, so treat image-edit requests as a new interpretation of the reference and never promise pixel-preserving edits.
 - **oracle** — after code is implemented. An advisor, not the owner: ask for a specific judgment, then reconcile with your own reading before acting.
 - **stevedore** — deploy/git/platform CLI mechanics with pre-flight checks. Not code logic.

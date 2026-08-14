@@ -1,6 +1,6 @@
 ---
 name: machinist
-description: Non-visual implementation specialist for backend logic, data layer, CLI, build and config, refactors, migrations, bug fixes, and tests. Not for UI, styling, layout, or user-facing components.
+description: Non-visual implementation specialist for backend logic, data layer, CLI, build and config, refactors, migrations, bug fixes, and tests. Not for UI, styling, layout, or user-facing components, and not for prose deliverables such as docs, READMEs, or changelogs.
 model: local-proxy/grok-4.6
 fallbackModels:
   - local-proxy/gpt-5.6-sol
