@@ -25,10 +25,10 @@ export const TERMINAL_RESTORE_SEQUENCE = [
 ].join("");
 
 export function watchdogStateDirectory(): string {
-  return (
-    process.env.PI_TERMINAL_WATCHDOG_STATE_DIR ??
-    path.join(os.homedir(), ".pi", "agent", ".tmp")
-  );
+  const dir = process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;
+  return dir && dir.length
+    ? dir
+    : path.join(os.homedir(), ".pi", "agent", ".tmp");
 }
 
 export function watchdogStatePath(pid = process.pid): string {

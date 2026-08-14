@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import {
   TERMINAL_RESTORE_SEQUENCE,
   watchdogStatePath,
 } from "../lib/terminal-restore.ts";
+import { lastPhasePath } from "../lib/last-phase.ts";
 
 const watchdogScript = fileURLToPath(
   new URL("../lib/terminal-restore-watchdog.mjs", import.meta.url),
@@ -46,12 +47,19 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function watchdogEnv(stateDir: string, logPath: string): NodeJS.ProcessEnv {
+function watchdogEnv(
+  stateDir: string,
+  logPath: string,
+  crashLogPath?: string,
+): NodeJS.ProcessEnv {
   return {
     ...process.env,
     PI_TERMINAL_WATCHDOG_CHILD: "1",
     PI_TERMINAL_WATCHDOG_STATE_DIR: stateDir,
     PI_TERMINAL_WATCHDOG_LOG_PATH: logPath,
+    ...(crashLogPath
+      ? { PI_TERMINAL_WATCHDOG_CRASH_LOG_PATH: crashLogPath }
+      : {}),
   };
 }
 
@@ -110,6 +118,7 @@ describe("interactive terminal restore", () => {
   it("stays silent while the parent is alive, then restores after unclean death", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "pi-watchdog-state-"));
     const logPath = join(stateDir, "lifecycle.log");
+    const crashLogPath = join(stateDir, "crash.log");
     const previous = process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;
     process.env.PI_TERMINAL_WATCHDOG_STATE_DIR = stateDir;
     const parent = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -118,10 +127,15 @@ describe("interactive terminal restore", () => {
     });
     assert.ok(parent.pid);
     markTerminalWatchdogLive(parent.pid);
+    writeFileSync(
+      lastPhasePath(parent.pid),
+      `${new Date().toISOString()} pid=${parent.pid} task_start:pre-spawn\n`,
+      "utf8",
+    );
     const watchdog = spawn(process.execPath, [watchdogScript, String(parent.pid)], {
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
-      env: watchdogEnv(stateDir, logPath),
+      env: watchdogEnv(stateDir, logPath, crashLogPath),
     });
     try {
       await sleep(350);
@@ -131,7 +145,14 @@ describe("interactive terminal restore", () => {
       assert.equal(result.code, 0);
       assert.match(result.stdout, /\x1b\[\?1006l/);
       assert.match(result.stdout, /\x1b\[\?1049l/);
-      assert.match(readFileSync(logPath, "utf8"), /disappeared uncleanly/);
+      const lifecycle = readFileSync(logPath, "utf8");
+      const crashLog = readFileSync(crashLogPath, "utf8");
+      assert.match(lifecycle, /disappeared uncleanly/);
+      assert.match(crashLog, /disappeared uncleanly/);
+      assert.match(lifecycle, /last-phase:/);
+      assert.match(crashLog, /last-phase:/);
+      assert.match(lifecycle, /task_start:pre-spawn/);
+      assert.match(crashLog, /task_start:pre-spawn/);
     } finally {
       parent.kill();
       if (previous === undefined) delete process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;

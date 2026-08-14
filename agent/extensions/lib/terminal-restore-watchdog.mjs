@@ -36,10 +36,15 @@ function isAlive(pid) {
   }
 }
 
+function envOrDefault(name, fallback) {
+  const value = process.env[name];
+  return value && value.length ? value : fallback;
+}
+
 function stateDirectory() {
-  return (
-    process.env.PI_TERMINAL_WATCHDOG_STATE_DIR ||
-    path.join(os.homedir(), ".pi", "agent", ".tmp")
+  return envOrDefault(
+    "PI_TERMINAL_WATCHDOG_STATE_DIR",
+    path.join(os.homedir(), ".pi", "agent", ".tmp"),
   );
 }
 
@@ -48,10 +53,44 @@ function statePath(pid) {
 }
 
 function lifecycleLogPath() {
-  return (
-    process.env.PI_TERMINAL_WATCHDOG_LOG_PATH ||
-    path.join(os.homedir(), ".pi", "agent", "pi-lifecycle.log")
+  return envOrDefault(
+    "PI_TERMINAL_WATCHDOG_LOG_PATH",
+    path.join(os.homedir(), ".pi", "agent", "pi-lifecycle.log"),
   );
+}
+
+function crashLogPath() {
+  return envOrDefault(
+    "PI_TERMINAL_WATCHDOG_CRASH_LOG_PATH",
+    path.join(os.homedir(), ".pi", "agent", "pi-crash.log"),
+  );
+}
+
+function lastPhasePath(pid) {
+  return path.join(stateDirectory(), `last-phase-${pid}`);
+}
+
+function readLastPhaseLine(pid) {
+  try {
+    const value = fs.readFileSync(lastPhasePath(pid), "utf8").trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendCrashLog(message) {
+  try {
+    const logPath = crashLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(
+      logPath,
+      `\n=== terminal restore watchdog at ${new Date().toISOString()} ===\n${message}\n`,
+      "utf8",
+    );
+  } catch {
+    // ignore
+  }
 }
 
 function readState(pid) {
@@ -126,7 +165,11 @@ function onParentGone() {
   const state = readState(pid);
   if (state === "live") {
     writeRestore();
-    logLifecycle(`parent pid=${pid} disappeared uncleanly; restored terminal`);
+    const lastPhase = readLastPhaseLine(pid);
+    const lastPhaseLine = lastPhase ? `last-phase: ${lastPhase}` : "last-phase: (none)";
+    const message = `parent pid=${pid} disappeared uncleanly; restored terminal\n${lastPhaseLine}`;
+    logLifecycle(message);
+    appendCrashLog(message);
   }
   clearState(pid);
   process.exit(0);

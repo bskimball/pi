@@ -4,8 +4,8 @@ description: Editorial writing specialist for blog posts, articles, documentatio
 model: local-proxy/claude-sonnet-5
 fallbackModels:
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
-  - local-proxy/gemini-3.1-pro-low
-thinking: high
+  - local-proxy/gemini-3.7-flash-high
+thinking: medium
 tools: read, grep, find, ls, bash, edit, write
 inheritSkills: true
 maxTurns: 60

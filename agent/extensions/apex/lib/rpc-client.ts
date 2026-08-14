@@ -11,6 +11,7 @@ import {
   parseJsonlLine,
 } from "./jsonl-framing.ts";
 import { isolatedChildEnv } from "./child-process.ts";
+import { writeLastPhase } from "../../lib/last-phase.ts";
 
 export const STDERR_CAP = 16_000;
 
@@ -60,6 +61,7 @@ export class RpcClient {
     this.onEvent = options.onEvent;
     this.onUiRequest = options.onUiRequest;
 
+    writeLastPhase("rpc:pre-spawn");
     this.child = spawn(process.execPath, options.args, {
       cwd: options.cwd,
       env: isolatedChildEnv(options.env),
@@ -67,6 +69,7 @@ export class RpcClient {
       windowsHide: true,
     });
     this.pid = this.child.pid;
+    writeLastPhase(`rpc:spawned pid=${String(this.pid ?? "none")}`);
 
     this.stdoutReader = attachJsonlReader(this.child.stdout, (line) => {
       this.handleStdoutLine(line);

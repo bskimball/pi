@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -9,7 +9,7 @@ import { installRenderSafety, normalizeRenderedLines } from "./render-safety.ts"
 const require = createRequire(import.meta.url);
 const extensionTuiPackage = require.resolve("@earendil-works/pi-tui/package.json");
 const nodeModulesRoot = join(dirname(extensionTuiPackage), "..", "..");
-const codingAgentTuiPackage = join(
+const nestedCodingAgentTuiPackage = join(
   nodeModulesRoot,
   "@earendil-works",
   "pi-coding-agent",
@@ -18,6 +18,9 @@ const codingAgentTuiPackage = join(
   "pi-tui",
   "package.json",
 );
+const codingAgentTuiPackage = existsSync(nestedCodingAgentTuiPackage)
+  ? nestedCodingAgentTuiPackage
+  : extensionTuiPackage;
 
 const nativeContainerRender = Container.prototype.render;
 

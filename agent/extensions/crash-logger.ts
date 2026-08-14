@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { writeLastPhase } from "./lib/last-phase.ts";
 import { installSegmenterSafety } from "./lib/segmenter-safety.ts";
 import {
   markTerminalWatchdogClean,
@@ -20,6 +21,7 @@ const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
 // Module load, not factory time: the first fullscreen paint can happen as
 // soon as extensions are imported. Prototype wrap is idempotent.
 installSegmenterSafety();
+writeLastPhase("startup");
 
 export const MAX_LOG_BYTES = 1024 * 1024;
 const ROTATED_LOG_SUFFIX = ".log";
@@ -132,10 +134,11 @@ function processError(kind: string, value: unknown): void {
 }
 
 export default function (pi: ExtensionAPI): void {
-  // Before any TUI measurement. The host compositor still runs native
-  // Intl.Segmenter on every transcript line; a huge or malformed resume can
-  // abort Node on Windows with no JS exception. This is independent of Apex.
+  // Before any TUI measurement. The host compositor still measures every
+  // transcript line via Intl.Segmenter; default grapheme path is JS-only so
+  // native ICU cannot abort Node on Windows. This is independent of Apex.
   installSegmenterSafety();
+  writeLastPhase("startup");
   let sessionFile: string | undefined;
   const logLifecycle = (kind: string, event?: unknown) => {
     appendLifecycle(
@@ -151,6 +154,7 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     sessionFile = ctx.sessionManager.getSessionFile();
+    writeLastPhase(`session_start ${event.reason}`);
     logLifecycle(`session start (${event.reason})`);
   });
   pi.on("session_before_compact", (event) => {
@@ -169,6 +173,7 @@ export default function (pi: ExtensionAPI): void {
     });
   });
   pi.on("session_shutdown", (event) => {
+    writeLastPhase(`session_shutdown ${event.reason}`);
     logLifecycle(`session shutdown (${event.reason})`, {
       targetSessionFile: event.targetSessionFile,
     });
@@ -190,6 +195,7 @@ export default function (pi: ExtensionAPI): void {
     processError("stderr error", error);
   });
   process.on("exit", (code) => {
+    writeLastPhase(`exit ${code}`);
     // 129 is Pi's emergencyTerminalExit: the TTY is already gone. Writing
     // restore sequences here re-triggers EIO and can loop the emergency path.
     const restored = code === 129 || restoreInteractiveTerminalSync();

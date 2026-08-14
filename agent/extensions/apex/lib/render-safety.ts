@@ -6,6 +6,7 @@
 // failures in the text renderers that consume model and extension payloads.
 
 import { Markdown, Text } from "@earendil-works/pi-tui";
+import { writeLastPhase } from "../../lib/last-phase.ts";
 import { installSegmenterSafety } from "../../lib/segmenter-safety.ts";
 import { reportRenderFailure } from "./tool-receipt.ts";
 
@@ -19,6 +20,23 @@ const BREAK_OPPORTUNITY = "\u200b";
 
 const INSTALL_KEY = Symbol.for("pi.apex.renderSafety.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
+const PHASE_LEN_THRESHOLD = 4096;
+const PHASE_WRITE_INTERVAL_MS = 1000;
+let lastPhase = "";
+let lastPhaseAt = 0;
+
+function noteRenderPhase(kind: string, len: number): void {
+  if (len < PHASE_LEN_THRESHOLD) return;
+  const phase =
+    kind === "guard-runs"
+      ? `guard-runs len=${len}`
+      : `text-render kind=${kind} len=${len}`;
+  const now = Date.now();
+  if (phase === lastPhase && now - lastPhaseAt < PHASE_WRITE_INTERVAL_MS) return;
+  lastPhase = phase;
+  lastPhaseAt = now;
+  writeLastPhase(phase);
+}
 
 // Module load: the compositor can measure lines as soon as this file is
 // imported. The wrap is idempotent with crash-logger's install.
@@ -86,6 +104,7 @@ function terminalSequenceLength(text: string, index: number): number {
 /** Add invisible break opportunities to pathological unbroken text runs. */
 export function guardUnbrokenRuns(value: unknown): string {
   const text = safeString(value);
+  noteRenderPhase("guard-runs", text.length);
   let result = "";
   let run = 0;
   for (let index = 0; index < text.length; ) {
@@ -125,6 +144,8 @@ function installTextBoundary(): void {
     try {
       const instance = this as unknown as TextLikeInstance;
       instance.text = guardUnbrokenRuns(instance.text);
+      const textLen = safeString(instance.text).length;
+      noteRenderPhase("text", textLen);
       return normalizeRenderedLines(originalRender.call(this, width));
     } catch (error) {
       reportRenderFailure("text", error);
@@ -145,6 +166,8 @@ function installMarkdownBoundary(): void {
     try {
       const instance = this as unknown as TextLikeInstance;
       instance.text = guardUnbrokenRuns(instance.text);
+      const textLen = safeString(instance.text).length;
+      noteRenderPhase("markdown", textLen);
       return normalizeRenderedLines(originalRender.call(this, width));
     } catch (error) {
       reportRenderFailure("markdown", error);

@@ -1,25 +1,24 @@
 // Process-wide shield around `Intl.Segmenter`.
 //
-// Pi TUI measures every compositor line with a shared native Segmenter
-// (`visibleWidth` / `truncateToWidth` / alt-screen clip). On Windows that
-// native path can abort the Node process — no JS exception, no pi-crash.log —
-// and leave the parent shell in raw/mouse mode. Apex receipts already avoid
-// calling those helpers, but the host compositor still does.
+// Pi TUI measures every compositor line with a shared Segmenter
+// (`visibleWidth` / `truncateToWidth` / alt-screen clip). On Windows the
+// native ICU grapheme path can abort the Node process — no JS exception,
+// no pi-crash.log — and leave the parent shell in raw/mouse mode.
 //
-// This patch is the only hook that covers already-imported pi-tui bindings.
-// Word/sentence segmentation stays native so editor Ctrl/Alt word movement
-// keeps `isWordLike`. Grapheme measurement is chunked so ICU never sees a
-// 50k-character resume line in one call, and every yielded `segment` is a
-// real string (the historical `segment.codePointAt is not a function` failure).
+// Default grapheme segmentation is a JS extended-grapheme scan and never
+// calls native ICU. Word/sentence stay native so editor Ctrl/Alt word
+// movement keeps `isWordLike`. Set PI_SEGMENTER_NATIVE=1 to force native
+// grapheme calls for diagnostics only. Every yielded `segment` is a real
+// string (the historical `segment.codePointAt is not a function` failure).
+//
+// Grapheme and fallback results are lazy Intl.Segments: they re-scan per
+// iterator() / containing() and never materialize an items[] of every
+// cluster. Eager arrays OOMed the compositor on 100k+ nearly-ASCII jsonl.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-
-/** Native ICU is only trusted up to this many UTF-16 code units per call. */
-export const MAX_NATIVE_SEGMENT_CHARS = 2048;
-/** Extra units peeked past the cap so a cluster at the seam is not split. */
-const CHUNK_LOOKAHEAD = 32;
+import { writeLastPhase } from "./last-phase.ts";
 
 const INSTALL_KEY = Symbol.for("pi.segmenterSafety.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
@@ -29,6 +28,26 @@ type SegmentFn = (input: string) => Intl.Segments;
 
 const nativeCallLengths: number[] = [];
 let reportedNativeFailure = false;
+let nativeGraphemeOptIn = false;
+let lastGraphemeYieldCount = 0;
+let lastLargeInputLogAt = 0;
+let largeInputCount = 0;
+
+const MARK_RE = /\p{M}/u;
+const EXT_PICT_RE = /\p{Extended_Pictographic}/u;
+
+const CP_CR = 0x0d;
+const CP_LF = 0x0a;
+const CP_ZWJ = 0x200d;
+const CP_VS15 = 0xfe0e;
+const CP_VS16 = 0xfe0f;
+const SKIN_TONE_MIN = 0x1f3fb;
+const SKIN_TONE_MAX = 0x1f3ff;
+const RI_MIN = 0x1f1e6;
+const RI_MAX = 0x1f1ff;
+const LARGE_INPUT_MIN = 32768;
+const LARGE_INPUT_LOG_MS = 2000;
+const LARGE_INPUT_LOG_MAX = 8;
 
 function safeString(value: unknown): string {
   if (typeof value === "string") return value;
@@ -50,16 +69,54 @@ export function recentNativeSegmentLengths(): readonly number[] {
   return nativeCallLengths;
 }
 
+/** Clusters yielded by the most recent iterateGraphemes / iterator / containing scan. */
+export function recentGraphemeYieldCount(): number {
+  return lastGraphemeYieldCount;
+}
+
+function agentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+}
+
 function reportOnce(error: unknown): void {
   if (reportedNativeFailure) return;
   reportedNativeFailure = true;
   const message =
     error instanceof Error ? error.stack || error.message : String(error);
   const entry = `\n=== segmenter-safety fallback at ${new Date().toISOString()} ===\n${message}\n`;
-  const agentDir =
-    process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
   try {
-    fs.appendFileSync(path.join(agentDir, "pi-render.log"), entry, "utf8");
+    fs.appendFileSync(path.join(agentDir(), "pi-render.log"), entry, "utf8");
+  } catch {
+    // A safety net must never throw.
+  }
+}
+
+let lastPhaseGran: string | undefined;
+let lastPhaseBucket = -1;
+const PHASE_INPUT_MIN = 4096;
+
+function noteLargeInput(text: string, granularity: string): void {
+  if (text.length >= PHASE_INPUT_MIN) {
+    const bucket = Math.floor(text.length / PHASE_INPUT_MIN);
+    if (granularity !== lastPhaseGran || bucket !== lastPhaseBucket) {
+      lastPhaseGran = granularity;
+      lastPhaseBucket = bucket;
+      writeLastPhase(`segment gran=${granularity} len=${text.length}`);
+    }
+  }
+  if (text.length < LARGE_INPUT_MIN) return;
+  largeInputCount += 1;
+  if (largeInputCount > LARGE_INPUT_LOG_MAX) return;
+  const now = Date.now();
+  if (now - lastLargeInputLogAt < LARGE_INPUT_LOG_MS) return;
+  lastLargeInputLogAt = now;
+  try {
+    const mem = process.memoryUsage();
+    const line =
+      `segmenter-safety large-input at ${new Date().toISOString()} ` +
+      `n=${largeInputCount} len=${text.length} gran=${granularity} ` +
+      `heap=${mem.heapUsed} rss=${mem.rss}\n`;
+    fs.appendFileSync(path.join(agentDir(), "pi-render.log"), line, "utf8");
   } catch {
     // A safety net must never throw.
   }
@@ -89,38 +146,196 @@ function toIntegerOrInfinity(value: unknown): number {
   return Math.trunc(numeric);
 }
 
-function makeSegments(items: SegmentItem[], inputLength: number): Intl.Segments {
+function isCombiningMark(cp: number): boolean {
+  return MARK_RE.test(String.fromCodePoint(cp));
+}
+
+function isExtendedPictographic(cp: number): boolean {
+  return EXT_PICT_RE.test(String.fromCodePoint(cp));
+}
+
+function isExtend(cp: number): boolean {
+  if (cp === CP_ZWJ || cp === CP_VS15 || cp === CP_VS16) return true;
+  if (cp >= SKIN_TONE_MIN && cp <= SKIN_TONE_MAX) return true;
+  return isCombiningMark(cp);
+}
+
+function isRegionalIndicator(cp: number): boolean {
+  return cp >= RI_MIN && cp <= RI_MAX;
+}
+
+function isHangulL(cp: number): boolean {
+  return (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0xa960 && cp <= 0xa97c);
+}
+
+function isHangulV(cp: number): boolean {
+  return (cp >= 0x1160 && cp <= 0x11a7) || (cp >= 0xd7b0 && cp <= 0xd7c6);
+}
+
+function isHangulT(cp: number): boolean {
+  return (cp >= 0x11a8 && cp <= 0x11ff) || (cp >= 0xd7cb && cp <= 0xd7fb);
+}
+
+function hangulSyllableType(cp: number): "LV" | "LVT" | null {
+  if (cp < 0xac00 || cp > 0xd7a3) return null;
+  const sIndex = cp - 0xac00;
+  return sIndex % 28 === 0 ? "LV" : "LVT";
+}
+
+function isHangulLBase(cp: number): boolean {
+  return isHangulL(cp);
+}
+
+function isHangulLVOrV(cp: number): boolean {
+  return isHangulV(cp) || hangulSyllableType(cp) === "LV";
+}
+
+function isHangulLVTOrT(cp: number): boolean {
+  return isHangulT(cp) || hangulSyllableType(cp) === "LVT";
+}
+
+function isControlBreak(cp: number): boolean {
+  return cp === CP_CR || cp === CP_LF;
+}
+
+function codePointWidth(cp: number): number {
+  return cp > 0xffff ? 2 : 1;
+}
+
+function shouldExtend(
+  prev: number,
+  next: number,
+  riOdd: boolean,
+  inPictographSeq: boolean,
+): boolean {
+  if (isControlBreak(prev) || isControlBreak(next)) return false;
+  // GB9: any Extend (ZWJ, VS, skin tone, combining marks) joins.
+  if (isExtend(next)) return true;
+  // GB11: EP Extend* ZWJ × Extended_Pictographic only.
+  if (prev === CP_ZWJ && inPictographSeq && isExtendedPictographic(next)) {
+    return true;
+  }
+  if (isRegionalIndicator(prev) && isRegionalIndicator(next) && riOdd) {
+    return true;
+  }
+  // GB6: L × (L | V | LV | LVT)
+  if (isHangulLBase(prev) && (isHangulL(next) || isHangulV(next) || hangulSyllableType(next))) {
+    return true;
+  }
+  // GB7: (LV | V) × (V | T)
+  if (isHangulLVOrV(prev) && (isHangulV(next) || isHangulT(next))) {
+    return true;
+  }
+  // GB8: (LVT | T) × T
+  if (isHangulLVTOrT(prev) && isHangulT(next)) {
+    return true;
+  }
+  return false;
+}
+
+function* iterateCodePoints(text: string): Generator<SegmentItem> {
+  lastGraphemeYieldCount = 0;
+  for (let index = 0; index < text.length; ) {
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) break;
+    const segment = String.fromCodePoint(codePoint);
+    lastGraphemeYieldCount += 1;
+    yield { segment, index, input: text };
+    index += segment.length;
+  }
+}
+
+function* iterateGraphemes(text: string): Generator<SegmentItem> {
+  lastGraphemeYieldCount = 0;
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const start = i;
+    const first = text.codePointAt(i);
+    if (first === undefined) break;
+    i += codePointWidth(first);
+
+    if (first === CP_CR) {
+      const lf = text.codePointAt(i);
+      if (lf === CP_LF) {
+        i += 1;
+      }
+      lastGraphemeYieldCount += 1;
+      yield { segment: text.slice(start, i), index: start, input: text };
+      continue;
+    }
+    if (first === CP_LF) {
+      lastGraphemeYieldCount += 1;
+      yield { segment: text.slice(start, i), index: start, input: text };
+      continue;
+    }
+
+    let last = first;
+    let riOdd = isRegionalIndicator(first);
+    let inPictographSeq = isExtendedPictographic(first);
+    while (i < n) {
+      const nextUnit = text.charCodeAt(i);
+      // No Extend / ZWJ / RI / Hangul jamo / VS below U+0300.
+      if (nextUnit < 0x0300) break;
+      const next = text.codePointAt(i);
+      if (next === undefined) break;
+      if (!shouldExtend(last, next, riOdd, inPictographSeq)) break;
+      i += codePointWidth(next);
+      if (isExtendedPictographic(next)) {
+        inPictographSeq = true;
+      } else if (!isExtend(next)) {
+        inPictographSeq = false;
+      }
+      if (isRegionalIndicator(next) && isRegionalIndicator(last) && riOdd) {
+        riOdd = false;
+      } else if (isRegionalIndicator(next)) {
+        riOdd = true;
+      } else if (!isExtend(next)) {
+        riOdd = isRegionalIndicator(next);
+      }
+      last = next;
+    }
+    lastGraphemeYieldCount += 1;
+    yield { segment: text.slice(start, i), index: start, input: text };
+  }
+}
+
+function lazyFromGenerator(
+  text: string,
+  iterate: (input: string) => Generator<SegmentItem>,
+): Intl.Segments {
   return {
     *[Symbol.iterator]() {
-      yield* items;
+      yield* iterate(text);
     },
     containing(codeUnitIndex: number) {
       const index = toIntegerOrInfinity(codeUnitIndex);
-      if (!Number.isFinite(index) || index < 0 || index >= inputLength) {
+      if (!Number.isFinite(index) || index < 0 || index >= text.length) {
+        lastGraphemeYieldCount = 0;
         return undefined;
       }
-      if (items.length === 0) return undefined;
-      let chosen = items[0];
-      for (const item of items) {
-        if (item.index > index) break;
-        chosen = item;
+      for (const item of iterate(text)) {
+        if (index >= item.index && index < item.index + item.segment.length) {
+          return item;
+        }
       }
-      return chosen;
+      return undefined;
     },
   } as Intl.Segments;
 }
 
 /** Code-point segments. Safe for terminal width; never calls ICU. */
 export function fallbackSegments(text: string): Intl.Segments {
-  const items: SegmentItem[] = [];
-  for (let index = 0; index < text.length; ) {
-    const codePoint = text.codePointAt(index);
-    if (codePoint === undefined) break;
-    const segment = String.fromCodePoint(codePoint);
-    items.push({ segment, index, input: text });
-    index += segment.length;
-  }
-  return makeSegments(items, text.length);
+  return lazyFromGenerator(text, iterateCodePoints);
+}
+
+/**
+ * JS extended-grapheme clusters. Never calls `Intl.Segmenter`.
+ * Matches native UAX #29 well enough that pi-tui width is not doubled
+ * for emoji ZWJ / flags / combining / Hangul.
+ */
+export function graphemeSegments(text: string): Intl.Segments {
+  return lazyFromGenerator(text, iterateGraphemes);
 }
 
 function collectAllOrFail(
@@ -172,125 +387,6 @@ function wrapNativeSegments(
   } as Intl.Segments;
 }
 
-function takeGraphemeWindow(
-  segmenter: Intl.Segmenter,
-  text: string,
-  offset: number,
-  original: SegmentFn,
-): { items: SegmentItem[]; nextOffset: number } {
-  const remaining = text.length - offset;
-  const peekLen = Math.min(remaining, MAX_NATIVE_SEGMENT_CHARS + CHUNK_LOOKAHEAD);
-  const window = text.slice(offset, offset + peekLen);
-  const collected = collectAllOrFail(
-    callNative(segmenter, window, original),
-    offset,
-  );
-  if (!collected.ok) {
-    reportOnce(new Error("native segment iteration failed"));
-    return {
-      items: [...fallbackSegments(window)].map((item) =>
-        preserveItem(item, offset),
-      ),
-      nextOffset: offset + window.length,
-    };
-  }
-
-  if (offset + peekLen >= text.length) {
-    return { items: collected.items, nextOffset: text.length };
-  }
-
-  const limit = offset + MAX_NATIVE_SEGMENT_CHARS;
-  const kept: SegmentItem[] = [];
-  for (const item of collected.items) {
-    const end = item.index + item.segment.length;
-    if (end <= limit) {
-      kept.push(item);
-      continue;
-    }
-    if (kept.length === 0) {
-      // One cluster is larger than the cap. Take it whole.
-      kept.push(item);
-    }
-    break;
-  }
-
-  if (kept.length === 0) {
-    return {
-      items: [...fallbackSegments(window)].map((item) =>
-        preserveItem(item, offset),
-      ),
-      nextOffset: offset + window.length,
-    };
-  }
-
-  const last = kept[kept.length - 1];
-  return { items: kept, nextOffset: last.index + last.segment.length };
-}
-
-function* iterateGraphemes(
-  segmenter: Intl.Segmenter,
-  text: string,
-  original: SegmentFn,
-): Generator<SegmentItem> {
-  for (let offset = 0; offset < text.length; ) {
-    const window = takeGraphemeWindow(segmenter, text, offset, original);
-    if (window.nextOffset <= offset) {
-      yield {
-        segment: text.slice(offset, offset + 1),
-        index: offset,
-        input: text,
-      };
-      offset += 1;
-      continue;
-    }
-    yield* window.items;
-    offset = window.nextOffset;
-  }
-}
-
-function segmentGraphemes(
-  segmenter: Intl.Segmenter,
-  text: string,
-  original: SegmentFn,
-): Intl.Segments {
-  if (text.length <= MAX_NATIVE_SEGMENT_CHARS) {
-    try {
-      return wrapNativeSegments(callNative(segmenter, text, original), text);
-    } catch (error) {
-      reportOnce(error);
-      return fallbackSegments(text);
-    }
-  }
-
-  return {
-    *[Symbol.iterator]() {
-      try {
-        yield* iterateGraphemes(segmenter, text, original);
-      } catch (error) {
-        reportOnce(error);
-        yield* fallbackSegments(text);
-      }
-    },
-    containing(codeUnitIndex: number) {
-      const index = toIntegerOrInfinity(codeUnitIndex);
-      if (!Number.isFinite(index) || index < 0 || index >= text.length) {
-        return undefined;
-      }
-      try {
-        let chosen: SegmentItem | undefined;
-        for (const item of iterateGraphemes(segmenter, text, original)) {
-          if (item.index > index) break;
-          chosen = item;
-        }
-        return chosen;
-      } catch (error) {
-        reportOnce(error);
-        return fallbackSegments(text).containing(codeUnitIndex);
-      }
-    },
-  } as Intl.Segments;
-}
-
 /**
  * Install once per process. Safe to call from several extensions and after
  * `/reload`. Existing Segmenter instances pick this up because they call
@@ -298,6 +394,8 @@ function segmentGraphemes(
  */
 export function installSegmenterSafety(): void {
   if (state[INSTALL_KEY]) return;
+
+  nativeGraphemeOptIn = process.env.PI_SEGMENTER_NATIVE === "1";
 
   const prototype = Intl.Segmenter.prototype;
   const original = prototype.segment;
@@ -318,6 +416,8 @@ export function installSegmenterSafety(): void {
       granularity = "grapheme";
     }
 
+    noteLargeInput(text, granularity);
+
     // Word/sentence stay native so `isWordLike` and editor word-nav survive.
     // Still wrap the result so a non-string `segment` cannot reach codePointAt.
     if (granularity !== "grapheme") {
@@ -329,8 +429,17 @@ export function installSegmenterSafety(): void {
       }
     }
 
+    if (nativeGraphemeOptIn) {
+      try {
+        return wrapNativeSegments(callNative(this, text, original), text);
+      } catch (error) {
+        reportOnce(error);
+        return fallbackSegments(text);
+      }
+    }
+
     try {
-      return segmentGraphemes(this, text, original);
+      return graphemeSegments(text);
     } catch (error) {
       reportOnce(error);
       return fallbackSegments(text);

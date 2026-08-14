@@ -1,8 +1,8 @@
 {
-  "defaultModel": "claude-opus-5",
+  "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "high",
-  "lastChangelogVersion": "0.84.1",
+  "defaultThinkingLevel": "medium",
+  "lastChangelogVersion": "0.84.2",
   "packages": [],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"

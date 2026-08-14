@@ -27,6 +27,7 @@ import {
   argsSummary,
   missionFromPrompt,
 } from "./lib/task-view.ts";
+import { writeLastPhase } from "../lib/last-phase.ts";
 import { RpcClient } from "./lib/rpc-client.ts";
 import {
   killProcessTree,
@@ -1066,6 +1067,7 @@ export default function (pi: ExtensionAPI) {
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
     const id = `task_${nextId++}`;
+    writeLastPhase(`task_start:pre-spawn agent=${def.name} id=${id}`);
     const sessionDir = ensureSessionDir(id);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -1172,6 +1174,7 @@ export default function (pi: ExtensionAPI) {
 
     let client: RpcClient;
     try {
+      writeLastPhase(`task_start:rpc-client id=${id}`);
       client = new RpcClient({
         args,
         cwd: params.cwd,
@@ -1202,6 +1205,9 @@ export default function (pi: ExtensionAPI) {
 
     worker.client = client;
     worker.pid = client.pid;
+    writeLastPhase(
+      `task_start:spawned id=${id} pid=${String(client.pid ?? "none")}`,
+    );
 
     runtime.armHard(worker, timeoutMs);
 
@@ -2490,24 +2496,39 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         const view = details?.worker;
         const close = details?.close;
         if (!view || !close) {
-          return new WidthText(
-            (width) =>
-              controlFallbackLines(
-                theme,
-                width,
-                "task_close",
-                textContent(result),
-                Boolean((result as { isError?: boolean }).isError),
-              ),
-            "[task_close result unavailable]",
-          );
+          let entered = false;
+          let exited = false;
+          return new WidthText((width) => {
+            if (!entered) {
+              entered = true;
+              writeLastPhase("task_close:receipt-render:enter fallback");
+            }
+            const lines = controlFallbackLines(
+              theme,
+              width,
+              "task_close",
+              textContent(result),
+              Boolean((result as { isError?: boolean }).isError),
+            );
+            if (!exited) {
+              exited = true;
+              writeLastPhase("task_close:receipt-render:exit fallback");
+            }
+            return lines;
+          }, "[task_close result unavailable]");
         }
         // A pinned worker reports completion inside its canonical card. Keep the
         // task_close tool surface silent; legacy/unpinned workers retain this
         // standalone receipt as a fallback.
         const live = workers.get(view.id);
         if (live?.hasPinnedSurface) return new WidthText(() => []);
+        let entered = false;
+        let exited = false;
         return new WidthText((width) => {
+          if (!entered) {
+            entered = true;
+            writeLastPhase(`task_close:receipt-render:enter id=${view.id} standalone`);
+          }
           const released = !view.countsTowardCap;
           const left = released
             ? `${theme.fg("success", "✓")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`
@@ -2516,7 +2537,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             ? `${theme.fg("success", "task complete")} ${theme.fg("dim", `· slot released · ${close.liveWorkers}/${close.maxWorkers} workers`)}`
             : theme.fg("warning", "closing · slot retained");
           const lines = [fitLine(left, right, width)];
-          if (!options.expanded) return lines;
+          if (!options.expanded) {
+            if (!exited) {
+              exited = true;
+              writeLastPhase(`task_close:receipt-render:exit id=${view.id} standalone`);
+            }
+            return lines;
+          }
 
           const diagnostics = [
             `lifecycle: ${view.lifecycle}`,
@@ -2536,6 +2563,10 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
                 width,
               ),
             );
+          }
+          if (!exited) {
+            exited = true;
+            writeLastPhase(`task_close:receipt-render:exit id=${view.id} standalone`);
           }
           return lines;
         });
