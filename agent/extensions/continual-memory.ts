@@ -1,7 +1,8 @@
 // Continual memory: small evidence-backed prompt notes and memories that live
-// outside the chat transcript. Local entries are session-scoped (resume via
-// appendEntry on the active branch); global entries persist under
-// ~/.pi/agent/harness/global.json. Manual only — never rewrites SYSTEM.md.
+// outside the chat transcript. Default write scope is global. Local entries
+// are session-scoped (resume via appendEntry on the active branch); global
+// entries persist under ~/.pi/agent/harness/global.json. Manual only — never
+// rewrites SYSTEM.md.
 // Injected overview treats entry bodies as untrusted data, not system policy.
 //
 // Store logic lives in apex/lib/memory-store.ts; this file is the tool adapter.
@@ -273,12 +274,12 @@ export default function (pi: ExtensionAPI): void {
     name: "memory_write",
     label: "Memory Write",
     description:
-      "Create, update, or delete a small continual-memory entry. Prefer session-local scope. Kinds: memory (durable facts/preferences/failures) or prompt (narrow policy addendum). Never rewrite SYSTEM.md. Keep entries evidence-backed and short.",
+      "Create, update, or delete a small continual-memory entry. Prefer global for durable facts the next chat should see; use local only for this-session scratch. Kinds: memory (durable facts/preferences/failures) or prompt (narrow policy addendum). Never rewrite SYSTEM.md. Keep entries evidence-backed and short.",
     promptSnippet:
       "Create/update/delete a small session-local or global memory/prompt note (manual continual harness).",
     promptGuidelines: [
-      "Use memory_write only for small evidence-backed lessons: repeated failures, durable preferences, project facts worth reuse, or narrow policy addendums.",
-      "Default scope is local (this session). Use global only for stable cross-session lessons the user would want in future sessions.",
+      "Use memory_write only for small evidence-backed lessons worth reuse: repeated failures, durable preferences, project facts, or narrow policy addendums. Do not dump the current task; prefer update/delete of stale entries over growing toward the 20/kind cap.",
+      "Default scope is global (cross-session). Use local only for this-session scratch that must not follow into a new chat.",
       "Prefer 0–3 focused entries over large dumps. Never rewrite the base system prompt; prompt kind is a narrow supplemental note only.",
       "Do not store secrets, tokens, credentials, or full transcripts.",
     ],
@@ -288,7 +289,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       scope: Type.Optional(
         StringEnum(["local", "global"] as const, {
-          description: "local (default) or global.",
+          description: "global (default) or local (this session only).",
         }),
       ),
       kind: Type.Optional(
@@ -378,7 +379,7 @@ export default function (pi: ExtensionAPI): void {
     ) {
       const action = params?.action;
       const scope: MemoryScope =
-        params?.scope === "global" ? "global" : "local";
+        params?.scope === "local" ? "local" : "global";
       const maxPerKind =
         scope === "local" ? MAX_LOCAL_PER_KIND : MAX_GLOBAL_PER_KIND;
 

@@ -1,12 +1,11 @@
 ---
 name: inspector
 description: Fast, cheap read-only UI verification through browser interaction, screenshots, responsive checks, and focused visual regression analysis.
-model: local-proxy/gemini-3-flash-agent
+model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-# Prefer AGY agent Flash (gemini-default) over gemini-3.6-flash-high for more
-# reliable visible text handoffs after multi-tool turns.
+# Prefer gemini-3.7-flash-high over the older AGY agent Flash alias.
 thinking: low
 tools: read, grep, find, ls, bash
 inheritSkills: false

@@ -3,8 +3,8 @@ name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
 model: local-proxy/gpt-5.6-luna
 fallbackModels:
-  - local-proxy/grok-composer-2.5-fast
-  - local-proxy/gemini-3-flash-agent
+  - local-proxy/gemini-3.7-flash-high
+  - local-proxy/grok-composer-2.5-fast  
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: off
 tools: read, grep, find, ls, bash

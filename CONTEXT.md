@@ -103,7 +103,7 @@ When changing Apex UI / task / receipt rendering:
 - **MemoryStore** module: `apex/lib/memory-store.ts` (normalize/load/lock/mutate/overview; local + global adapters).
 - Tools: `memory_list`, `memory_write` (create/update/delete).
 - Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only).
-- Local store: session custom entry `continual-memory-local` (survives resume).
+- Local store: session custom entry `continual-memory-local` (survives resume). Default writes go to global; local is this-session scratch that survives resume only.
 - Global store: `agent/harness/global.json` (gitignored runtime state).
 - Injected each turn via `before_agent_start` as a compact overview; never rewrites `SYSTEM.md`.
 

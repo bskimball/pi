@@ -1,12 +1,12 @@
 ---
 name: artisan
 description: Frontend and UI engineer for any user-facing visual surface — screens, components, styling, layout, design systems, interaction states — plus diagrams, slides, and data visualization.
-model: local-proxy/claude-opus-5
+model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
+  - local-proxy/claude-opus-5
   - github-copilot/kimi-k3
-  - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
-thinking: medium
+thinking: high
 tools: read, grep, find, ls, bash, edit, write, task
 inheritSkills: true
 maxTurns: 60

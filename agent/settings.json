@@ -1,7 +1,7 @@
 {
-  "defaultModel": "grok-4.6",
+  "defaultModel": "claude-opus-5",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "lastChangelogVersion": "0.84.1",
   "packages": [],
   "skills": [
