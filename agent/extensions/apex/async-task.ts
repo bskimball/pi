@@ -28,6 +28,7 @@ import {
   missionFromPrompt,
 } from "./lib/task-view.ts";
 import { writeLastPhase } from "../lib/last-phase.ts";
+import { paintPinnedSurface } from "./lib/render-safety.ts";
 import { RpcClient } from "./lib/rpc-client.ts";
 import {
   killProcessTree,
@@ -1488,8 +1489,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         const pinned = workers.get(workerId);
         if (pinned) {
           pinned.hasPinnedSurface = true;
-          // Store only a callback, never the render context itself.
-          pinned.pinnedInvalidate = () => context.invalidate();
+          // Live cards reread the registry on paint. Prefer a coalesced host
+          // frame over remounting this tool row on every worker event.
+          pinned.pinnedInvalidate = () => {
+            paintPinnedSurface(() => context.invalidate());
+          };
         }
         // Last observed live state, so the card keeps its final appearance if the
         // worker is later reaped out of the registry by pruneSettled.
@@ -2024,21 +2028,24 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const timeoutMs = Math.max(0, timeoutSec) * 1000;
 
       const notifyLive = () => {
+        if (worker.hasPinnedSurface) return;
         const text = formatWorkerStatus(worker);
         onUpdate?.({
           content: [{ type: "text", text }],
           details: { worker: workerView(worker), waiting: true },
         });
       };
-      worker.subscribers = worker.subscribers || new Set();
-      worker.subscribers.add(notifyLive);
-      notifyLive();
+      if (!worker.hasPinnedSurface) {
+        worker.subscribers = worker.subscribers || new Set();
+        worker.subscribers.add(notifyLive);
+        notifyLive();
+      }
 
       const alreadySettled =
         (worker.lifecycle === "settled" || worker.lifecycle === "failed") &&
         worker.generation === targetGen;
       if (alreadySettled) {
-        worker.subscribers.delete(notifyLive);
+        worker.subscribers?.delete(notifyLive);
         const bound = boundText(
           worker.latestResult || worker.latestAssistantText,
           RESULT_TEXT_CAP,
@@ -2070,6 +2077,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             timer: undefined,
           };
           worker.waiters.push(waiter);
+          // The pinned card derives its waiting hint from the waiter list.
+          notifySubscribers(worker);
 
           // If settlement races registration, re-check. All later completion
           // is event-driven through resolveWaiters; no presentation poll timer.
@@ -2091,7 +2100,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         },
       });
 
-      worker.subscribers.delete(notifyLive);
+      worker.subscribers?.delete(notifyLive);
 
       if (snapshot === "interrupted") {
         // A cancelled parent turn must not become an implicit task_abort. The

@@ -4,7 +4,16 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { installRenderSafety, normalizeRenderedLines } from "./render-safety.ts";
+import { readLastPhase } from "../../lib/last-phase.ts";
+import {
+  attachHostPainter,
+  guardUnbrokenRuns,
+  installRenderSafety,
+  normalizeRenderedLines,
+  paintPinnedSurface,
+  requestHostRender,
+  SAFE_UNBROKEN_RUN_CHARS,
+} from "./render-safety.ts";
 
 const require = createRequire(import.meta.url);
 const extensionTuiPackage = require.resolve("@earendil-works/pi-tui/package.json");
@@ -33,16 +42,24 @@ const markdownTheme = new Proxy(
 
 describe("Apex render safety", () => {
   let priorAgentDir: string | undefined;
+  let priorWatchdogDir: string | undefined;
   let testAgentDir = "";
   before(() => {
     priorAgentDir = process.env.PI_CODING_AGENT_DIR;
+    priorWatchdogDir = process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;
     testAgentDir = join(process.cwd(), ".tmp", "render-safety-test");
     process.env.PI_CODING_AGENT_DIR = testAgentDir;
+    process.env.PI_TERMINAL_WATCHDOG_STATE_DIR = testAgentDir;
     mkdirSync(testAgentDir, { recursive: true });
   });
   after(() => {
     if (priorAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = priorAgentDir;
+    if (priorWatchdogDir === undefined) {
+      delete process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;
+    } else {
+      process.env.PI_TERMINAL_WATCHDOG_STATE_DIR = priorWatchdogDir;
+    }
     rmSync(testAgentDir, { recursive: true, force: true });
   });
 
@@ -130,5 +147,126 @@ describe("Apex render safety", () => {
     };
 
     assert.deepEqual(widthFailure.render(80), ["[markdown unavailable]"]);
+  });
+
+  it("returns the same string when no unbroken run needs a break", () => {
+    const text = "short words stay intact";
+    assert.equal(guardUnbrokenRuns(text), text);
+  });
+
+  it("inserts break opportunities only after a long unbroken run", () => {
+    const run = "a".repeat(SAFE_UNBROKEN_RUN_CHARS + 8);
+    const guarded = guardUnbrokenRuns(run);
+    assert.notEqual(guarded, run);
+    assert.match(guarded, /\u200b/);
+    assert.equal(guardUnbrokenRuns(guarded), guarded);
+  });
+
+  it("keeps Markdown text identity across remounts so the TUI cache can hit", () => {
+    installRenderSafety();
+    const source = "# heading\n\nordinary cached markdown";
+    const markdown = new Markdown(source, 0, 0, markdownTheme);
+    const first = markdown.render(80);
+    const firstText = (markdown as unknown as { text: string }).text;
+    const second = markdown.render(80);
+    assert.equal((markdown as unknown as { text: string }).text, firstText);
+    assert.equal(second, first);
+    assert.equal(second[0], first[0]);
+  });
+
+  it("returns the same line array when every row is already a clean string", () => {
+    const lines = ["alpha", "beta"];
+    assert.equal(normalizeRenderedLines(lines), lines);
+  });
+
+  it("paints an attached host instead of requiring a tool-row remount", () => {
+    let paints = 0;
+    const detach = attachHostPainter({
+      requestRender() {
+        paints++;
+      },
+    });
+    assert.equal(requestHostRender(), true);
+    assert.equal(paints, 1);
+    detach();
+    assert.equal(requestHostRender(), false);
+  });
+
+  it("remounts a pinned surface only when no host painter is attached", () => {
+    let remounts = 0;
+    assert.equal(
+      paintPinnedSurface(() => {
+        remounts++;
+      }),
+      false,
+    );
+    assert.equal(remounts, 1);
+
+    const detach = attachHostPainter({
+      requestRender() {},
+    });
+    assert.equal(
+      paintPinnedSurface(() => {
+        remounts++;
+      }),
+      true,
+    );
+    assert.equal(remounts, 1);
+    detach();
+  });
+
+  it("drops a throwing painter and remounts instead of reporting a paint", () => {
+    const detach = attachHostPainter({
+      requestRender() {
+        throw new Error("disposed");
+      },
+    });
+    let remounts = 0;
+    assert.equal(
+      paintPinnedSurface(() => {
+        remounts++;
+      }),
+      false,
+    );
+    assert.equal(remounts, 1);
+    detach();
+  });
+
+  it("rate-limits last-phase writes across cached remounts", () => {
+    const phaseKey = Symbol.for("pi.apex.renderSafety.phaseState");
+    (globalThis as typeof globalThis & Record<symbol, unknown>)[phaseKey] = {
+      lastPhase: "",
+      lastPhaseAt: 0,
+    };
+    installRenderSafety();
+    const markdown = new Markdown(`# ${"x".repeat(5000)}`, 0, 0, markdownTheme);
+    markdown.render(80);
+    const first = readLastPhase(process.pid);
+    assert.ok(first);
+    markdown.render(80);
+    requestHostRender();
+    assert.equal(readLastPhase(process.pid), first);
+  });
+
+  it("shares the host painter registry across separately loaded modules", async () => {
+    let paints = 0;
+    const detach = attachHostPainter({
+      requestRender() {
+        paints++;
+      },
+    });
+    const other = await import(
+      new URL("./render-safety.ts?instance=other", import.meta.url).href,
+    );
+    let remounts = 0;
+    assert.equal(
+      other.paintPinnedSurface(() => {
+        remounts++;
+      }),
+      true,
+    );
+    assert.equal(paints, 1);
+    assert.equal(remounts, 0);
+    detach();
   });
 });
