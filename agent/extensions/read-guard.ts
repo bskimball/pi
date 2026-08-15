@@ -30,6 +30,26 @@ const RESIZE_MIN_BASE64_CHARS = 256 * 1024;
 /** Bash output size that triggers the piping advisory. */
 const BASH_ADVISORY_CHARS = 20 * 1024;
 
+const WILDCARD_ONLY =
+  /^(?:\.\*|\.\+|\[\\s\\S\][*+]|\[\\S\\s\][*+]|\[\\w\\W\][*+]|\[\\W\\w\][*+]|\[\\d\\D\][*+]|\[\\D\\d\][*+])$/;
+
+/**
+ * Conservative: true only when the regex can only mean "every line/file".
+ * Literal searches and discriminating regexes stay allowed.
+ */
+export function isWildcardOnlyGrepPattern(pattern: string): boolean {
+  let p = pattern;
+  if (!p) return false;
+  const flags = /^\(\?[ims]+\)/.exec(p);
+  if (flags) p = p.slice(flags[0].length);
+  if (p.startsWith("^")) p = p.slice(1);
+  if (p.endsWith("$")) p = p.slice(0, -1);
+  return WILDCARD_ONLY.test(p);
+}
+
+const GREP_WILDCARD_REASON =
+  "This is a catch-all grep pattern. Use read with offset/limit for file contents, or 1–2 discriminating search terms.";
+
 interface ImageReadRecord {
   mtimeMs: number;
   size: number;
@@ -113,6 +133,13 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if (isToolCallEventType("grep", event)) {
+      const { pattern, literal } = event.input;
+      if (literal === true || typeof pattern !== "string") return;
+      if (!isWildcardOnlyGrepPattern(pattern)) return;
+      return { block: true, reason: GREP_WILDCARD_REASON };
+    }
+
     if (!isToolCallEventType("read", event)) return;
 
     const raw = event.input.path;

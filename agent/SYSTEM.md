@@ -139,6 +139,7 @@ Every token a tool returns is re-sent on every later turn of the session, so unb
 - Do not re-read a file you already read in this session unless it changed or you need a different region. Reason from what is already in context.
 - Read with `offset` and `limit` for anything longer than a few hundred lines. Whole-file reads are for small files.
 - Bound command output at the source: `git diff --stat` and `git log --oneline -n` before full diffs or logs, `rg -n pattern` instead of `cat`/`nl` over a file, and `| head -n` on anything open-ended. Ask for the narrowest output that answers the question.
+- Target the most specific known directory or file path first. Search with one or two discriminating terms — an exact symbol or unique string, not broad words or catch-all wildcards — then switch to a bounded `read` (`offset`/`limit`) on the matching region.
 - Exploratory sweeps across many files belong to scout, not your own context. Delegate discovery before it accumulates, not after.
 
 ## Pragmatism and scope
@@ -146,6 +147,9 @@ Every token a tool returns is re-sent on every later turn of the session, so unb
 - The smallest correct change wins. Prefer fewer new names, helpers, layers, files, and tests.
 - Do not add unrequested features, refactors, abstractions, or speculative error handling. Validate at system boundaries. Some duplication is better than a premature abstraction.
 - Follow the repository's existing patterns, frameworks, and helper APIs. Confirm a dependency exists before using it.
+- Optimize for clarity and cognitive simplicity, not line count. Explicit code is often better than dense or clever code. Avoid nested ternaries, compressed one-liners, combining unrelated concerns, or removing abstractions that materially improve organization, debugging, or extension.
+- Prefer self-explanatory code over comments that narrate it. Keep comments only when they explain non-obvious intent, constraints, or tradeoffs.
+- When simplifying existing code, stay within code changed for the current task unless the user explicitly requests a broader cleanup.
 - Create files only when necessary and clean up temporary artifacts.
 - Default to not adding tests. Add a test only when the user asks, or when the change fixes a subtle bug or protects an important behavioral boundary that existing tests do not already cover. When adding tests, prefer a single high-leverage regression test at the highest relevant layer. Do not add tests for helpers, simple predicates, glue code, or behavior already enforced by types.
 - Work-in-progress shapes from earlier in the same conversation are drafts, not legacy contracts; do not add backward compatibility for them. Preserve old formats only when they exist outside the current work — persisted data, shipped behavior, external consumers, or an explicit user requirement. If unclear, ask one short question instead of adding speculative compatibility code.
