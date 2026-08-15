@@ -148,6 +148,27 @@ function handOff(
   notify(ctx, busyNotice, "info");
 }
 
+function handOffHidden(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  customType: string,
+  prompt: string,
+  busyNotice: string,
+): void {
+  const idle = ctx.isIdle();
+  pi.sendMessage(
+    {
+      customType,
+      content: prompt,
+      display: false,
+    },
+    idle
+      ? { triggerTurn: true }
+      : { triggerTurn: true, deliverAs: "followUp" },
+  );
+  if (!idle) notify(ctx, busyNotice, "info");
+}
+
 function resolveBrowserConnectHelper(): string {
   return join(getAgentDir(), "bin", "browser-connect.mjs");
 }
@@ -545,7 +566,13 @@ export async function runBrowserCommand(
     ? wrapSkill("agent-browser", skill.body)
     : undefined;
   const prompt = buildBrowserPrompt(args, connectBlock, skillBlock);
-  handOff(pi, ctx, prompt, "Browser prompt queued as follow-up.");
+  handOffHidden(
+    pi,
+    ctx,
+    "browser-handoff",
+    prompt,
+    "Browser prompt queued as follow-up.",
+  );
   notify(ctx, "Browser attached; handed off to agent.", "info");
 }
 
