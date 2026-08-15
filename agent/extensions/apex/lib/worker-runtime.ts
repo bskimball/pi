@@ -86,6 +86,8 @@ export interface RuntimeWorker extends CapWorker {
   lifecycle: WorkerLifecycle;
   phase: WorkerPhase;
   updatedAt: number;
+  /** Monotonic renderer invalidation token; advances with each published state. */
+  renderVersion: number;
   lastEventAt?: number;
   idleTimer?: NodeJS.Timeout;
   hardTimer?: NodeJS.Timeout;
@@ -268,6 +270,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
   }
 
   notify(worker: TWorker): void {
+    worker.renderVersion += 1;
     try {
       worker.pinnedInvalidate?.();
     } catch {

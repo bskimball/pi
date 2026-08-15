@@ -174,6 +174,28 @@ describe("Apex render safety", () => {
     assert.equal(second[0], first[0]);
   });
 
+  it("keeps Text and Markdown caches when setText receives identical input", () => {
+    installRenderSafety();
+
+    const text = new Text("unchanged text", 0, 0);
+    const textLines = text.render(80);
+    text.setText("unchanged text");
+    assert.equal(text.render(80), textLines);
+
+    const source = `# ${"x".repeat(SAFE_UNBROKEN_RUN_CHARS + 8)}`;
+    const markdown = new Markdown(source, 0, 0, markdownTheme);
+    const markdownLines = markdown.render(80);
+    const guarded = (markdown as unknown as { text: string }).text;
+    assert.notEqual(guarded, source);
+
+    markdown.setText(source);
+    assert.equal((markdown as unknown as { text: string }).text, guarded);
+    assert.equal(markdown.render(80), markdownLines);
+
+    markdown.setText(guarded);
+    assert.equal(markdown.render(80), markdownLines);
+  });
+
   it("returns the same line array when every row is already a clean string", () => {
     const lines = ["alpha", "beta"];
     assert.equal(normalizeRenderedLines(lines), lines);

@@ -92,6 +92,7 @@ describe("WorkerRuntime control plane", () => {
       lifecycle: "running",
       phase: "model",
       updatedAt: 0,
+      renderVersion: 0,
       fallbackEpoch: 0,
       fallbackInProgress: false,
       fallbackAwaitingAgentStart: false,
@@ -153,6 +154,7 @@ describe("WorkerRuntime control plane", () => {
     runtime.notify(live);
     assert.deepEqual(live.errors, ["TWO", "THREE"]);
     assert.equal(notifications, 1);
+    assert.equal(live.renderVersion, 1);
   });
 
   it("does not repaint pinned cards for streamed worker deltas", () => {
@@ -183,10 +185,12 @@ describe("WorkerRuntime control plane", () => {
 
     assert.equal(invalidations, 0);
     assert.equal(subscriberCalls, 0);
+    assert.equal(item.renderVersion, 0);
 
     runtime.handleEvent(item, { type: "turn_start" }, eventHooks);
     assert.equal(invalidations, 1);
     assert.equal(subscriberCalls, 1);
+    assert.equal(item.renderVersion, 1);
     runtime.clearTimers(item);
   });
 

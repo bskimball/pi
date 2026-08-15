@@ -24,6 +24,7 @@ const HOST_DO_RENDER_KEY = Symbol.for("pi.apex.renderSafety.hostDoRenderWrapped"
 const HOST_PAINTERS_KEY = Symbol.for("pi.apex.renderSafety.hostPainters");
 const PHASE_STATE_KEY = Symbol.for("pi.apex.renderSafety.phaseState");
 const GUARDED_TEXT = Symbol.for("pi.apex.renderSafety.guardedText");
+const RAW_TEXT = Symbol.for("pi.apex.renderSafety.rawText");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
 const PHASE_LEN_THRESHOLD = 4096;
 const PHASE_WRITE_INTERVAL_MS = 1000;
@@ -136,6 +137,7 @@ interface TextLikePrototype {
 interface TextLikeInstance {
   text?: unknown;
   [GUARDED_TEXT]?: string;
+  [RAW_TEXT]?: string;
 }
 
 function isRunBoundary(codePoint: number): boolean {
@@ -198,7 +200,9 @@ export function guardUnbrokenRuns(value: unknown): string {
 
 function applyGuardedText(instance: TextLikeInstance, value: unknown): boolean {
   if (typeof value === "string" && instance[GUARDED_TEXT] === value) return false;
-  const guarded = guardUnbrokenRuns(value);
+  const raw = safeString(value);
+  const guarded = guardUnbrokenRuns(raw);
+  instance[RAW_TEXT] = raw;
   instance[GUARDED_TEXT] = guarded;
   if (instance.text !== guarded) instance.text = guarded;
   return true;
@@ -307,7 +311,14 @@ function installTextBoundary(): void {
 
   prototype.setText = function setSafeText(value: string): void {
     const instance = this as unknown as TextLikeInstance;
+    if (
+      instance.text === instance[GUARDED_TEXT] &&
+      (value === instance[RAW_TEXT] || value === instance[GUARDED_TEXT])
+    ) {
+      return;
+    }
     const guarded = guardUnbrokenRuns(value);
+    instance[RAW_TEXT] = value;
     instance[GUARDED_TEXT] = guarded;
     originalSetText.call(this, guarded);
   };
@@ -331,7 +342,14 @@ function installMarkdownBoundary(): void {
 
   prototype.setText = function setSafeMarkdown(value: string): void {
     const instance = this as unknown as TextLikeInstance;
+    if (
+      instance.text === instance[GUARDED_TEXT] &&
+      (value === instance[RAW_TEXT] || value === instance[GUARDED_TEXT])
+    ) {
+      return;
+    }
     const guarded = guardUnbrokenRuns(value);
+    instance[RAW_TEXT] = value;
     instance[GUARDED_TEXT] = guarded;
     originalSetText.call(this, guarded);
   };

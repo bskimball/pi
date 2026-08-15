@@ -1100,6 +1100,7 @@ export default function (pi: ExtensionAPI) {
       generation: 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      renderVersion: 0,
       phase: "none",
       turns: 0,
       maxTurns,
@@ -1270,9 +1271,13 @@ export default function (pi: ExtensionAPI) {
         if (data.sessionId) worker.sessionId = String(data.sessionId);
         if (data.sessionFile) worker.sessionFile = String(data.sessionFile);
         if (data.model?.id) {
-          worker.model = data.model.provider
+          const model = data.model.provider
             ? `${data.model.provider}/${data.model.id}`
             : data.model.id;
+          if (worker.model !== model) {
+            worker.model = model;
+            notifySubscribers(worker);
+          }
         }
       })
       .catch(() => {});
@@ -1498,6 +1503,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         // Last observed live state, so the card keeps its final appearance if the
         // worker is later reaped out of the registry by pruneSettled.
         let lastView: WorkerView = initial;
+        let cached:
+          | {
+              width: number;
+              expanded: boolean;
+              waiting: boolean;
+              renderVersion: number;
+              timeBucket: number;
+              lines: string[];
+            }
+          | undefined;
         return new WidthText((width) => {
           // Read the registry on every render so the card never shows a stale
           // snapshot captured at result time.
@@ -1510,7 +1525,32 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
           }
           const expanded = context.expanded || options.expanded;
           const waiting = !!live?.waiters.length;
-          return renderWorkerCard(lastView, theme, expanded, waiting).render(width);
+          const renderVersion = live?.renderVersion ?? -1;
+          const timeBucket = Math.floor(Date.now() / 1000);
+          if (
+            cached?.width === width &&
+            cached.expanded === expanded &&
+            cached.waiting === waiting &&
+            cached.renderVersion === renderVersion &&
+            cached.timeBucket === timeBucket
+          ) {
+            return cached.lines;
+          }
+          const lines = renderWorkerCard(
+            lastView,
+            theme,
+            expanded,
+            waiting,
+          ).render(width);
+          cached = {
+            width,
+            expanded,
+            waiting,
+            renderVersion,
+            timeBucket,
+            lines,
+          };
+          return lines;
         }, "[async worker display unavailable]");
       },
     }),
@@ -1866,6 +1906,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           worker.fallbackAwaitingAgentStart = false;
           if (worker.lifecycle === "retrying") worker.lifecycle = "running";
           armIdle(worker);
+          notifySubscribers(worker);
           return textResult(
             [
               `${id} steer queued.`,
@@ -1914,6 +1955,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         worker.fallbackAwaitingAgentStart = false;
         if (worker.lifecycle === "retrying") worker.lifecycle = "running";
         armIdle(worker);
+        notifySubscribers(worker);
         return textResult(
           [
             `${id} follow_up queued.`,
