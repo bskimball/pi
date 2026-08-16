@@ -29,10 +29,9 @@ Pi discovers extensions two ways: a bare `*.ts` file in `agent/extensions/`, or 
 
 ```text
 agent/extensions/
-├── apex/            → apex-ui.ts          the UI layer (see below)
+├── apex/            → apex-ui.ts          the UI layer (Observatory, tool receipts, edit, todo)
 ├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
 ├── lsp/             → index.ts            language-server navigation
-├── unified-edit/    → adapter.ts          the `edit` tool (row edit scripts)
 ├── bg-process.ts    + bg-process/         bg_start/status/list/kill
 ├── powershell.ts    + powershell/         direct PowerShell child process
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
@@ -41,7 +40,6 @@ agent/extensions/
 ├── graphify.ts                            local knowledge-graph query
 ├── mcp-adapter.ts                         pi-mcp-adapter bridge
 ├── read-guard.ts                          duplicate-image + downscale guard
-├── todo-list.ts                           session todo tools + widget
 ├── user-profile.ts                        private user context injection
 ├── web-search.ts                          Exa search + fetch_content
 └── test/                                  cross-extension tests
@@ -63,11 +61,14 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 
 ```text
 apex/apex-ui.ts                      interactive layout, working indicator, header mount
-├── builtin-tools.ts                 read/bash/write/edit adapters (execution delegates to Pi)
+├── builtin-tools.ts                 read/bash/write/edit/todo adapters (delegates to Pi or Apex-internal)
+├── internal/edit/                   edit tool and row edit planner
+├── internal/todo/                   todo_write / todo_read and session todo panel
 ├── internal/presentation/
 │   ├── presentation.ts              withApexPresentation() — the PI_APEX_UI=0 gate
 │   ├── tool-receipt.ts              bounded tool receipts
 │   ├── edit-diff.ts                 diff rendering for edit/write
+│   ├── receipt-tree.ts              receipt tree structures
 │   ├── render-safety.ts             guards Pi TUI text/markdown renderers
 │   ├── safe-text-layout.ts          measure/truncate; never use .length
 │   └── ui-common.ts                 shared width/ANSI primitives
@@ -76,9 +77,9 @@ apex/apex-ui.ts                      interactive layout, working indicator, head
 └── observatory/                     blank-chat landing screen (see below)
 ```
 
-- `PI_APEX_UI=0` is the installation-wide presentation opt-out. `apex-ui.ts` installs nothing, and `withApexPresentation()` strips `renderCall`/`renderResult`/`renderShell` so tools fall back to Pi's stock boxed renderer over model-facing text. Execution and tool registration are unaffected.
+- `PI_APEX_UI=0` is the installation-wide presentation opt-out. Apex-owned tools remain registered and executable; `apex-ui.ts` does not install custom presentation hooks, widgets, or header/chrome, and `withApexPresentation()` strips `renderCall`/`renderResult`/`renderShell` so tools fall back to Pi's stock boxed renderer over model-facing text. Execution and tool registration are unaffected.
 - `task/` renders its own cards through its own gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task child processes are spawned with `PI_APEX_UI=0` so workers never paint chrome.
-- Headless by design — these use Pi's stock rendering: `bg-process`, `powershell`, `mcp-adapter`, `todo-list`, `web-search`, `graphify`, `continual-memory`, `read-guard`, `lsp`.
+- Headless by design — these use Pi's stock rendering: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `graphify`, `continual-memory`, `read-guard`, `lsp`.
 - There is no custom footer. Pi owns the footer; `prompt-commands` and `graphify` publish status through `ctx.ui.setStatus(key, …)` only.
 
 ### Rendering Constraints
@@ -165,7 +166,7 @@ Renders four inventory scenarios (populated user, balanced project, extension pa
 npm run typecheck                                        # tsc --noEmit, whole config
 node --experimental-transform-types --test agent/extensions/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/lsp/test/*.test.ts
-node --experimental-transform-types --test agent/extensions/unified-edit/test/*.test.ts
+node --experimental-transform-types --test agent/extensions/apex/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/task/*.test.ts agent/extensions/task/runtime/test/*.test.ts
 ```
 

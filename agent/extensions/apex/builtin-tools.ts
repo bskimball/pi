@@ -1,6 +1,7 @@
-// builtin-tools: Apex adapters for Pi's built-in read/bash/write tools plus
-// the unified EditPlanner adapter. Execution delegates to Pi's definitions;
-// optional receipt slots are attached through the presentation gate.
+// builtin-tools: Apex adapters for Pi's built-in read/bash/write tools, plus
+// the Apex-owned `edit` and todo tools. Execution delegates to Pi's definitions
+// (read/bash/write) or to Apex-private modules (edit/todo); optional receipt
+// slots are attached through the presentation gate.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -27,6 +28,8 @@ import {
   resultDiff,
 } from "./internal/presentation/edit-diff.ts";
 import { cleanInline, type ToolRenderContext } from "./internal/presentation/ui-common.ts";
+import { installEditTool } from "./internal/edit/edit-tool.ts";
+import { installTodoTools } from "./internal/todo/todo-tools.ts";
 
 type BuiltinName = "read" | "bash" | "write";
 type BuiltinRenderState = ToolRenderState;
@@ -229,4 +232,15 @@ export function installBuiltinTools(pi: ExtensionAPI): void {
   registerBuiltin(pi, "read", createReadToolDefinition);
   registerBuiltin(pi, "bash", createBashToolDefinition);
   registerBuiltin(pi, "write", createWriteToolDefinition);
+}
+
+/**
+ * Tools Apex owns outright rather than re-skinning: the unified row-edit `edit`
+ * tool and the session todo list (tools, docked panel, alt+t). These must be
+ * installed even under PI_APEX_UI=0 — the gate strips their chrome, not their
+ * behavior — so apex-ui calls this before the presentation opt-out.
+ */
+export function installApexOwnedTools(pi: ExtensionAPI): void {
+  installEditTool(pi);
+  installTodoTools(pi);
 }

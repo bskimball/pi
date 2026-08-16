@@ -1,6 +1,0 @@
-{
-  "type": "module",
-  "pi": {
-    "extensions": ["adapter.ts"]
-  }
-}

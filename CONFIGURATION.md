@@ -348,8 +348,8 @@ selection but are not the active default or agent frontmatter path.
 ## Agent markdown (`agent/agents/*.md`, local custom)
 
 **Not an upstream Pi format.** Parsed entirely by this repo's
-`agent/extensions/apex/lib/agent-discovery.ts` (`parseAgentFile`), consumed by
-`apex/amp-task.ts` (sync `task` tool) and `apex/async-task.ts` (async
+`agent/extensions/task/runtime/agent-discovery.ts` (`parseAgentFile`), consumed by
+`task/amp-task.ts` (sync `task` tool) and `task/async-task.ts` (async
 `task_*` tools).
 
 **Locations (project overrides global on name collision):**
@@ -529,14 +529,15 @@ reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
 `mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
-`crash-logger.ts`, `todo-list.ts`, `continual-memory.ts`, `read-guard.ts`),
-`agent/extensions/lsp/` and `agent/extensions/apex/` (directory-style
-extensions: `apex-ui.ts`, `amp-task.ts`, `async-task.ts` plus a shared `lib/`
-of helper modules that are imported directly rather than loaded as separate
-extensions). See `CONTEXT.md` for the local architecture (seams, tool
-receipts, agent catalog, sync-vs-async task tools, Apex UI stability rules) —
-that file documents *how these extensions are built*, complementary to this
-file's focus on *config/markdown parameter shapes*.
+`crash-logger.ts`, `continual-memory.ts`, `read-guard.ts`),
+`agent/extensions/apex/`, `agent/extensions/task/`, and
+`agent/extensions/lsp/` (declared directory extensions with private support
+directories: Apex UI, task cards/runtime, and LSP navigation respectively).
+Flat `*.ts` files remain standalone extensions. Todo and edit tools are
+Apex-owned under `apex/internal/`. See `CONTEXT.md` for the local architecture
+(seams, tool receipts, agent catalog, sync-vs-async task tools, Apex UI
+stability rules) — that file documents *how these extensions are built*,
+complementary to this file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
 `agent/extensions/` is used. `agent/settings.json` `packages` is empty — the

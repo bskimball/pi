@@ -14,7 +14,7 @@ import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
-import { installBuiltinTools } from "./builtin-tools.ts";
+import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
   stripAnsi,
@@ -181,6 +181,11 @@ function applyRandomWorkingIndicator(
 }
 
 export default function (pi: ExtensionAPI) {
+  // Tools Apex owns outright (`edit`, `todo_write`/`todo_read` and the todo
+  // panel) register before the presentation opt-out: PI_APEX_UI=0 removes the
+  // custom receipts and widget chrome, never the tools themselves.
+  installApexOwnedTools(pi);
+
   // PI_APEX_UI=0 is a complete presentation-layer opt-out. Do not install any
   // Apex process-wide rendering hooks in diagnostic fallback mode.
   if (process.env.PI_APEX_UI === "0") return;

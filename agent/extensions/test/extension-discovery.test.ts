@@ -71,7 +71,6 @@ describe("extension discovery layout", () => {
       "lsp/index.ts",
       "task/amp-task.ts",
       "task/async-task.ts",
-      "unified-edit/adapter.ts",
     ]) {
       assert.equal(relative.filter((entry) => entry === required).length, 1, required);
     }
@@ -80,6 +79,11 @@ describe("extension discovery layout", () => {
     assert.equal(relative.some((entry) => entry.includes("/test/")), false);
     assert.equal(relative.some((entry) => entry.includes("observatory/")), false);
     assert.equal(relative.some((entry) => entry.includes("runtime/")), false);
+    assert.equal(relative.some((entry) => entry.includes("internal/")), false);
+    // The `edit` and todo tools are Apex-owned; no standalone entry may
+    // register them a second time.
+    assert.equal(relative.includes("todo-list.ts"), false);
+    assert.equal(relative.some((entry) => entry.startsWith("unified-edit/")), false);
   });
 
   it("keeps every extension entry source-independent", () => {

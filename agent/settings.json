@@ -1,6 +1,6 @@
 {
-  "defaultModel": "gpt-5.6-sol",
-  "defaultProvider": "local-proxy",
+  "defaultModel": "@cf/moonshotai/kimi-k2.6",
+  "defaultProvider": "cloudflare-workers-ai",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.2",
   "packages": [],

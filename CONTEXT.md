@@ -10,13 +10,13 @@ agent/extensions/
 │   ├── apex-ui.ts
 │   ├── builtin-tools.ts
 │   ├── observatory/
-│   └── internal/           # Apex-only presentation/runtime helpers
+│   ├── internal/           # Apex-only presentation/runtime/edit/todo modules
+│   └── test/
 ├── task/                   # standalone sync + async delegation
 │   ├── amp-task.ts
 │   ├── async-task.ts
 │   ├── presentation/       # Task-owned essential activity UI
 │   └── runtime/
-├── unified-edit/           # standalone planner + stock-rendered adapter
 ├── lsp/                    # standalone LSP extension
 ├── crash-logger/           # crash/watchdog implementation
 ├── bg-process/             # background-process implementation
@@ -38,14 +38,14 @@ Every extension entry may import only:
 
 It must not import another extension's source tree. Small process, bounding, or safety helpers are intentionally duplicated when two independently removable extensions need the same behavior.
 
-Directory packages (`apex`, `task`, `lsp`, `unified-edit`) declare their entry points in their own `package.json`. Top-level extension files own same-named support directories where required.
+Directory packages (`apex`, `task`, `lsp`) declare their entry points in their own `package.json`. Top-level extension files own same-named support directories where required.
 
 ## Presentation ownership
 
 - Apex is the only general custom-presentation extension. Its Observatory, built-in tool receipts, layout safety, and width-safe primitives live under `apex/`.
 - Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
 - Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
-- Todo owns a small plain-text above-editor session widget; it does not import Apex or custom receipt infrastructure.
+- Todo is Apex-private (`apex/internal/todo/`): receipts and the docked above-editor panel, or stock rendering under `PI_APEX_UI=0`.
 - `PI_APEX_UI=0` remains the emergency opt-out for every custom presentation surface. It disables Apex UI and Task cards without disabling either extension's tool behavior.
 - Rendering remains passive and event-driven. No extension presentation timer calls `requestRender()`.
 
@@ -84,9 +84,8 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 
 - Background jobs: `bg-process.ts` plus `bg-process/internal/`; stock tool rendering.
 - Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; stock tool rendering.
-- Todo list: standalone `todo-list.ts`; stock tool rendering plus its own plain widget.
 - Web search: standalone `web-search.ts`; stock tool rendering.
-- Unified edit: `unified-edit/`; stock tool rendering.
+- Todo list and unified edit: Apex-owned (`apex/internal/todo/`, `apex/internal/edit/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todo panel, or stock rendering under `PI_APEX_UI=0`.
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
 - User profile: loader owned directly by `user-profile.ts`.
 - MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.
