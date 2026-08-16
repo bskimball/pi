@@ -2,10 +2,7 @@
 //
 // Tools: bg_start, bg_status, bg_list, bg_kill.
 //
-// Results stay plain bounded text for the model, and every result also carries
-// a structured `details.bg` payload that the Apex receipts in
-// apex/lib/bg-view.ts render. Presentation is flat and width-aware; there are
-// no render timers and no pi-tui layout primitives on this path.
+// Results stay bounded plain text and use Pi's stock tool rendering.
 
 import {
   spawn,
@@ -18,33 +15,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  bgCallLine,
-  bgFallbackLines,
-  bgJobCard,
-  bgListCard,
-  bgPayload,
-  type BgJobView,
-} from "./apex/lib/bg-view.ts";
-import {
-  WidthText,
-  textContent,
-  type ToolRenderContext,
-} from "./apex/lib/ui-common.ts";
-import { noticeComponent, type NoticeRow } from "./apex/lib/notice-view.ts";
-import {
-  bgStatusKind,
-  finiteNumber,
-  metaText,
-  safeLine,
-} from "./apex/lib/status-view.ts";
-import { killProcessTree, killProcessTreeSync } from "./apex/lib/process-tree-kill.ts";
-import { JobRegistry } from "./apex/lib/job-registry.ts";
-import { textResult, resolveCwd, validateCwd } from "./apex/lib/tool-result.ts";
-import {
-  apexPresentationEnabled,
-  withApexPresentation,
-} from "./apex/lib/presentation.ts";
+import { killProcessTree, killProcessTreeSync } from "./bg-process/internal/process-tree-kill.ts";
+import { JobRegistry } from "./bg-process/internal/job-registry.ts";
+import { textResult, resolveCwd, validateCwd } from "./bg-process/internal/tool-result.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -173,11 +146,16 @@ function tailForStatus(buf: StreamBuf, maxChars = STATUS_STREAM_CAP): {
 }
 
 
-/**
- * Structured presentation payload for one job. Kept separate from the text
- * body so the Apex receipt never has to re-parse human-readable output.
- * `withOutput` is false in listings, where per-job tails would be unbounded.
- */
+type BgJobView = Omit<BgJob, "child" | "stdout" | "stderr" | "notified"> & {
+  stdoutTail?: string;
+  stderrTail?: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+};
+
+/** Structured bounded job details for programmatic consumers. */
 function jobView(job: BgJob, withOutput: boolean): BgJobView {
   const stdout = withOutput ? tailForStatus(job.stdout) : undefined;
   const stderr = withOutput ? tailForStatus(job.stderr) : undefined;
@@ -205,67 +183,6 @@ function jobView(job: BgJob, withOutput: boolean): BgJobView {
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
-  /**
-   * Shared Apex receipt wiring for one bg tool.
-   *
-   * `card` builds the flat, width-aware body from the structured payload; the
-   * call row is blanked as soon as a result exists so a single receipt
-   * represents the whole tool call. Every builder is invoked inside WidthText,
-   * which clips each line and falls back to a single safe line on throw.
-   */
-  const receipt = (
-    tool: string,
-    card: (
-      theme: any,
-      width: number,
-      payload: NonNullable<ReturnType<typeof bgPayload>>,
-      expanded: boolean,
-    ) => string[],
-  ) =>
-    withApexPresentation({
-      renderShell: "self" as const,
-      renderCall(
-        args: any,
-        theme: any,
-        context: ToolRenderContext<{ hasResult?: boolean }, any>,
-      ) {
-        return new WidthText(
-          (width) =>
-            context.state.hasResult
-              ? []
-              : [bgCallLine(theme, width, tool, args, context.executionStarted)],
-          `[${tool} call unavailable]`,
-        );
-      },
-      renderResult(
-        result: any,
-        options: { expanded: boolean; isPartial: boolean },
-        theme: any,
-        context: ToolRenderContext<{ hasResult?: boolean }, any>,
-      ) {
-        context.state.hasResult = true;
-        const payload = bgPayload(result);
-        const isError = Boolean(result?.isError);
-        return new WidthText((width) => {
-          if (!payload) {
-            return bgFallbackLines(
-              theme,
-              width,
-              tool,
-              textContent(result),
-              isError,
-            );
-          }
-          return card(
-            theme,
-            width,
-            payload,
-            context.expanded || options.expanded,
-          );
-        }, `[${tool} result unavailable]`);
-      },
-    });
-
   const jobs = new JobRegistry<BgJob>();
   let nextId = 1;
   let agentBusy = false;
@@ -494,17 +411,6 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "parallel",
-    ...receipt("bg_start", (theme, width, payload, expanded) =>
-      payload.job
-        ? bgJobCard(theme, width, payload.job, {
-            tool: "bg_start",
-            expanded,
-            hint: expanded
-              ? `bg_status id="${payload.job.id}" for logs · bg_kill to stop`
-              : undefined,
-          })
-        : bgFallbackLines(theme, width, "bg_start", payload.message, true),
-    ),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const command = params.command?.trim();
       if (!command) {
@@ -590,11 +496,6 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
-    ...receipt("bg_status", (theme, width, payload, expanded) =>
-      payload.job
-        ? bgJobCard(theme, width, payload.job, { tool: "bg_status", expanded })
-        : bgFallbackLines(theme, width, "bg_status", payload.message, true),
-    ),
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       if (!id) {
@@ -628,9 +529,6 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "parallel",
-    ...receipt("bg_list", (theme, width, payload, expanded) =>
-      bgListCard(theme, width, payload, expanded),
-    ),
     async execute(_toolCallId, params) {
       const includeSettled = params.include_settled !== false;
       const now = Date.now();
@@ -677,18 +575,6 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
-    ...receipt("bg_kill", (theme, width, payload, expanded) =>
-      payload.job
-        ? bgJobCard(theme, width, payload.job, {
-            tool: "bg_kill",
-            expanded,
-            // A still-running job after bg_kill means the tree has not exited
-            // yet; say so rather than claiming it was killed.
-            label:
-              payload.job.status === "running" ? "stopping" : undefined,
-          })
-        : bgFallbackLines(theme, width, "bg_kill", payload.message, true),
-    ),
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       if (!id) {
@@ -709,48 +595,6 @@ export default function (pi: ExtensionAPI) {
       });
     },
   });
-
-  // ---------------------------------------------------- settlement notice
-
-  // Same rationale as async-task: a settled background job is a background
-  // event, not conversation, so it gets notice chrome instead of a raw
-  // `[bg-process-settled]` prose block.
-  pi.registerMessageRenderer<{ jobs?: unknown }>(
-    "bg-process-settled",
-    (message, options, theme) => {
-      if (!apexPresentationEnabled()) return undefined;
-      const raw = Array.isArray(message.details?.jobs)
-        ? message.details.jobs
-        : [];
-      const rows: NoticeRow[] = [];
-      for (const entry of raw.slice(0, 24)) {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry))
-          continue;
-        const record = entry as Record<string, unknown>;
-        const id = safeLine(record.id, 40);
-        if (!id) continue;
-        const exitCode = finiteNumber(record.exitCode);
-        rows.push({
-          kind: bgStatusKind(record.status),
-          id,
-          subject: safeLine(record.title, 80) || undefined,
-          detail: metaText([
-            exitCode !== undefined ? `exit ${exitCode}` : undefined,
-            safeLine(record.signal, 20) || undefined,
-          ]),
-          preview: safeLine(record.command, 300) || undefined,
-        });
-      }
-      if (!rows.length) return undefined;
-      return noticeComponent(theme, {
-        channel: "background job",
-        rows,
-        hint: BG_SETTLED_HINT,
-        expanded: options.expanded,
-        pad: options.outputPad,
-      });
-    },
-  );
 
   // ------------------------------------------------------------ lifecycle
 

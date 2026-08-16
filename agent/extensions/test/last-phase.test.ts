@@ -5,7 +5,7 @@ import {
   lastPhasePath,
   readLastPhase,
   writeLastPhase,
-} from "../lib/last-phase.ts";
+} from "../crash-logger/internal/last-phase.ts";
 
 describe("last-phase", () => {
   it("writes and reads a roundtrip for this pid", () => {

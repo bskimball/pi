@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, normalize, resolve } from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { killWindowsProcessTree as killSharedWindowsProcessTree } from "../apex/lib/process-tree-kill.ts";
+import { killWindowsProcessTree as killSharedWindowsProcessTree } from "./internal/process-tree-kill.ts";
 
 export interface SpawnCommand {
   command: string;

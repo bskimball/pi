@@ -5,7 +5,7 @@
 // rewrites SYSTEM.md.
 // Injected overview treats entry bodies as untrusted data, not system policy.
 //
-// Store logic lives in apex/lib/memory-store.ts; this file is the tool adapter.
+// Store logic lives in continual-memory/store.ts; this file is the tool adapter.
 
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -13,18 +13,6 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import {
-  TREE,
-  WidthText,
-  textContent,
-  type ToolRenderContext,
-} from "./apex/lib/ui-common.ts";
-import { withApexPresentation } from "./apex/lib/presentation.ts";
-import {
-  receiptHeader,
-  safeLine,
-  type StatusTheme,
-} from "./apex/lib/status-view.ts";
 import {
   LOCAL_ENTRY_TYPE,
   SCHEMA,
@@ -54,7 +42,7 @@ import {
   type MemoryKind,
   type MemoryScope,
   type MemoryStore,
-} from "./apex/lib/memory-store.ts";
+} from "./continual-memory/store.ts";
 
 interface WriteParams {
   action: "create" | "update" | "delete";
@@ -82,32 +70,6 @@ function textResult(text: string, isError = false, details: ToolDetails = {}) {
     details,
     isError,
   };
-}
-
-function toolPayload(result: unknown): ToolDetails | undefined {
-  const details =
-    result && typeof result === "object"
-      ? (result as { details?: unknown }).details
-      : undefined;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return undefined;
-  }
-  return details as ToolDetails;
-}
-
-function simpleReceipt(
-  theme: StatusTheme,
-  width: number,
-  tool: string,
-  subject: string,
-  kind: "running" | "queued" | "failed" | "unknown" | "succeeded" = "succeeded",
-): string {
-  return receiptHeader(theme, width, {
-    tool,
-    subject: safeLine(subject, 120),
-    kind,
-    rootGlyph: TREE.receipt,
-  });
 }
 
 function storeFromBranch(ctx: ExtensionContext): MemoryStore {
@@ -190,53 +152,6 @@ export default function (pi: ExtensionAPI): void {
       ),
     }),
     executionMode: "sequential",
-    ...withApexPresentation({
-      renderShell: "self" as const,
-    renderCall(
-        _args: ListParams,
-        theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, ListParams>,
-      ) {
-        return new WidthText(
-          (width) =>
-            context.state.hasResult
-              ? []
-              : [
-                  simpleReceipt(
-                    theme,
-                    width,
-                    "memory_list",
-                    "listing",
-                    context.executionStarted ? "running" : "queued",
-                  ),
-                ],
-          "[memory_list call unavailable]",
-        );
-      },
-      renderResult(
-        result: { content?: unknown; details?: ToolDetails; isError?: boolean },
-        _options: { expanded: boolean; isPartial: boolean },
-        theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, ListParams>,
-      ) {
-        context.state.hasResult = true;
-        const payload = toolPayload(result);
-        const subject =
-          safeLine(payload?.message ?? textContent(result), 120) || "memory_list";
-        return new WidthText(
-          (width) => [
-            simpleReceipt(
-              theme,
-              width,
-              "memory_list",
-              subject,
-              result?.isError ? "failed" : "succeeded",
-            ),
-          ],
-          "[memory_list result unavailable]",
-        );
-      },
-    }),
     async execute(_toolCallId: string, params: ListParams) {
       reloadGlobal();
       const scope = params?.scope ?? "all";
@@ -321,55 +236,6 @@ export default function (pi: ExtensionAPI): void {
       ),
     }),
     executionMode: "sequential",
-    ...withApexPresentation({
-      renderShell: "self" as const,
-    renderCall(
-        args: WriteParams,
-        theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, WriteParams>,
-      ) {
-        const subject = `${args?.action ?? "write"}${args?.title ? ` · ${args.title}` : args?.id ? ` · ${args.id}` : ""}`;
-        return new WidthText(
-          (width) =>
-            context.state.hasResult
-              ? []
-              : [
-                  simpleReceipt(
-                    theme,
-                    width,
-                    "memory_write",
-                    subject,
-                    context.executionStarted ? "running" : "queued",
-                  ),
-                ],
-          "[memory_write call unavailable]",
-        );
-      },
-      renderResult(
-        result: { content?: unknown; details?: ToolDetails; isError?: boolean },
-        _options: { expanded: boolean; isPartial: boolean },
-        theme: StatusTheme,
-        context: ToolRenderContext<{ hasResult?: boolean }, WriteParams>,
-      ) {
-        context.state.hasResult = true;
-        const payload = toolPayload(result);
-        const subject =
-          safeLine(payload?.message ?? textContent(result), 120) ||
-          "memory_write";
-        return new WidthText(
-          (width) => [
-            simpleReceipt(
-              theme,
-              width,
-              "memory_write",
-              subject,
-              result?.isError ? "failed" : "succeeded",
-            ),
-          ],
-          "[memory_write result unavailable]",
-        );
-      },
-    }),
     async execute(
       _toolCallId: string,
       params: WriteParams,

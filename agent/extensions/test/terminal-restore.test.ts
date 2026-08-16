@@ -14,11 +14,11 @@ import {
   shouldRestoreInteractiveTerminal,
   TERMINAL_RESTORE_SEQUENCE,
   watchdogStatePath,
-} from "../lib/terminal-restore.ts";
-import { lastPhasePath } from "../lib/last-phase.ts";
+} from "../crash-logger/internal/terminal-restore.ts";
+import { lastPhasePath } from "../crash-logger/internal/last-phase.ts";
 
 const watchdogScript = fileURLToPath(
-  new URL("../lib/terminal-restore-watchdog.mjs", import.meta.url),
+  new URL("../crash-logger/internal/terminal-restore-watchdog.mjs", import.meta.url),
 );
 
 function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 3_000) {

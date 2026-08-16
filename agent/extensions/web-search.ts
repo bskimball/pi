@@ -8,20 +8,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  fetchContentSpec,
-  getSearchContentSpec,
-  hostOf,
-  webSearchSpec,
-  webToolRenderers,
-} from "./apex/lib/web-search-ui.ts";
-import { withApexPresentation } from "./apex/lib/presentation.ts";
-
-// Apex receipts for these tools. Presentation lives in apex/lib/web-search-ui.ts
-// and reuses the same primitives as the built-in and MCP rows.
-const searchUi = webToolRenderers(webSearchSpec);
-const fetchUi = webToolRenderers(fetchContentSpec);
-const sliceUi = webToolRenderers(getSearchContentSpec);
 
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -29,6 +15,14 @@ const STORE_TTL_MS = 60 * 60 * 1000;
 const INLINE_LIMIT = 30_000;
 const MAX_RESULTS = 20;
 const MAX_OUTPUT = 60_000;
+
+export function hostOf(raw: string): string {
+  try {
+    return new URL(raw).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
 type SearchResult = { title: string; url: string; text: string };
 type StoredResponse =
@@ -198,10 +192,7 @@ export default function (pi: ExtensionAPI): void {
       numResults: Type.Optional(Type.Number()), includeContent: Type.Optional(Type.Boolean()),
       recencyFilter: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")])),
       domainFilter: Type.Optional(Type.Array(Type.String())), provider: Type.Optional(Type.String()), workflow: Type.Optional(Type.String()),
-    }), executionMode: "parallel", ...withApexPresentation({
-      renderShell: "self" as const,
-    renderCall: searchUi.renderCall, renderResult: searchUi.renderResult,
-    }),
+    }), executionMode: "parallel",
     async execute(_id: string, params: any, signal: AbortSignal | undefined) {
       const credential = requireKey();
       if ("error" in credential) return textResult(credential.error, {}, true);
@@ -245,10 +236,7 @@ export default function (pi: ExtensionAPI): void {
     description: "Fetch readable text from one or more public HTTP(S) pages. Stores complete fetched content temporarily for get_search_content.",
     parameters: Type.Object({
       url: Type.Optional(Type.String()), urls: Type.Optional(Type.Array(Type.String())), forceClone: Type.Optional(Type.Boolean()), prompt: Type.Optional(Type.String()), timestamp: Type.Optional(Type.String()), frames: Type.Optional(Type.Boolean()), model: Type.Optional(Type.String()),
-    }), executionMode: "parallel", ...withApexPresentation({
-      renderShell: "self" as const,
-    renderCall: fetchUi.renderCall, renderResult: fetchUi.renderResult,
-    }),
+    }), executionMode: "parallel",
     async execute(_id: string, params: any, signal: AbortSignal | undefined) {
       const urls = [...(params.url?.trim() ? [params.url.trim()] : []), ...(params.urls ?? []).map((url: string) => url.trim()).filter(Boolean)];
       if (!urls.length) return textResult("url or urls is required.", {}, true);
@@ -274,10 +262,7 @@ export default function (pi: ExtensionAPI): void {
     description: "Retrieve a bounded slice of content stored by web_search or fetch_content using its responseId.",
     parameters: Type.Object({
       responseId: Type.String(), query: Type.Optional(Type.String()), queryIndex: Type.Optional(Type.Number()), url: Type.Optional(Type.String()), urlIndex: Type.Optional(Type.Number()), offset: Type.Optional(Type.Number()), limit: Type.Optional(Type.Number()),
-    }), executionMode: "parallel", ...withApexPresentation({
-      renderShell: "self" as const,
-    renderCall: sliceUi.renderCall, renderResult: sliceUi.renderResult,
-    }),
+    }), executionMode: "parallel",
     async execute(_id: string, params: any) {
       const entry = store.get(params.responseId);
       if (!entry || Date.now() - entry.createdAt > STORE_TTL_MS) { store.delete(params.responseId); return textResult("Unknown or expired responseId. Search and fetch content is retained in memory for about one hour.", {}, true); }

@@ -1,8 +1,7 @@
 // First-class PowerShell tool: runs a direct PowerShell/pwsh child process,
 // independent of the host shell (bash, cmd, or otherwise).
 //
-// Results are plain bounded text for the model; presentation reuses Apex's
-// shared tool receipt (no bespoke chrome, no presentation timers).
+// Results are bounded plain text and use Pi's stock tool renderer.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,15 +10,7 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  boundedOutput,
-  toolRenderers,
-  type ToolRenderState,
-} from "./apex/lib/tool-receipt.ts";
-import { cleanInline, type ToolRenderContext } from "./apex/lib/ui-common.ts";
-import { safeTruncateToWidth } from "./apex/lib/safe-text-layout.ts";
-import { killProcessTree } from "./apex/lib/process-tree-kill.ts";
-import { withApexPresentation } from "./apex/lib/presentation.ts";
+import { killProcessTree } from "./powershell/internal/process-tree-kill.ts";
 
 type PowerShellArgs = { command?: string; timeout?: number };
 
@@ -39,10 +30,13 @@ export function formatPowerShellCommand(
     .filter((line) => line.trim().length > 0);
   if (!lines.length) return "";
   const extra = lines.length - 1;
-  if (extra <= 0) return safeTruncateToWidth(cleanInline(lines[0], max), max);
+  const clean = (value: string) => value.replace(/\s+/g, " ").trim();
+  const truncate = (value: string) =>
+    value.length <= max ? value : value.slice(0, max);
+  if (extra <= 0) return truncate(clean(lines[0]));
   const suffix = ` +${extra} ${extra === 1 ? "line" : "lines"}`;
-  const head = cleanInline(lines[0], Math.max(0, max - suffix.length));
-  return safeTruncateToWidth(`${head}${suffix}`, max);
+  const head = clean(lines[0]).slice(0, Math.max(0, max - suffix.length));
+  return truncate(`${head}${suffix}`);
 }
 
 const DEFAULT_MAX_LINES = 2000;
@@ -666,17 +660,6 @@ export async function executePowerShell(
 }
 
 export default function (pi: ExtensionAPI): void {
-  // Shared Apex receipt chrome: same glyphs, duration column, collapsed rail
-  // preview, and ctrl+o expansion as read/bash/edit/write and MCP tools.
-  const ui = toolRenderers<PowerShellArgs>({
-    surface: "powershell",
-    title: "powershell",
-    arg: (args, budget) => formatPowerShellCommand(args?.command, budget),
-    stats: (result) =>
-      result?.details?.truncated ? "truncated" : "",
-    preview: (output) => (output ? boundedOutput(output, 3, 1200) : []),
-  });
-
   pi.registerTool({
     name: "powershell",
     label: "PowerShell",
@@ -741,23 +724,5 @@ export default function (pi: ExtensionAPI): void {
         return textResult(message, { executable }, true);
       }
     },
-    ...withApexPresentation({
-      renderShell: "self" as const,
-      renderCall(
-        args: PowerShellArgs,
-        theme: any,
-        context: ToolRenderContext<ToolRenderState, PowerShellArgs>,
-      ) {
-        return ui.renderCall(args, theme, context);
-      },
-      renderResult(
-        result: any,
-        options: { expanded: boolean; isPartial: boolean },
-        theme: any,
-        context: ToolRenderContext<ToolRenderState, PowerShellArgs>,
-      ) {
-        return ui.renderResult(result, options, theme, context);
-      },
-    }),
   });
 }

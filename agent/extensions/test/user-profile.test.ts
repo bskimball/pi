@@ -7,7 +7,7 @@ import {
   loadUserProfile,
   MAX_USER_PROFILE_CHARS,
   USER_PROFILE_FILE,
-} from "../lib/user-profile.ts";
+} from "../user-profile.ts";
 
 function withAgentDir(run: (directory: string) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "pi-user-profile-"));

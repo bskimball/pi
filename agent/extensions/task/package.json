@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "pi": {
+    "extensions": ["amp-task.ts", "async-task.ts"]
+  }
+}

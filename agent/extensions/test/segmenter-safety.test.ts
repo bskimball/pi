@@ -9,7 +9,7 @@ import {
   isSegmenterSafetyInstalled,
   recentGraphemeYieldCount,
   recentNativeSegmentLengths,
-} from "../lib/segmenter-safety.ts";
+} from "../crash-logger/internal/segmenter-safety.ts";
 
 const require = createRequire(import.meta.url);
 const { findWordBackward, findWordForward } = require(

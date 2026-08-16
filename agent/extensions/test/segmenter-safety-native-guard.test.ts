@@ -8,7 +8,7 @@ Intl.Segmenter.prototype.segment = function throwingNativeSegment() {
 void realNative;
 
 const { installSegmenterSafety, recentNativeSegmentLengths } = await import(
-  "../lib/segmenter-safety.ts"
+  "../crash-logger/internal/segmenter-safety.ts"
 );
 installSegmenterSafety();
 

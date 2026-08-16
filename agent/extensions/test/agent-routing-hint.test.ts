@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 const { agentParamDescription, discoverAgents, routingHint } = await import(
-  "../apex/lib/agent-discovery.ts"
+  "../task/runtime/agent-discovery.ts"
 );
 
 type Catalog = Parameters<typeof routingHint>[0];

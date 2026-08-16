@@ -6,14 +6,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { writeLastPhase } from "./lib/last-phase.ts";
-import { installSegmenterSafety } from "./lib/segmenter-safety.ts";
+import { writeLastPhase } from "./crash-logger/internal/last-phase.ts";
+import { installSegmenterSafety } from "./crash-logger/internal/segmenter-safety.ts";
 import {
   markTerminalWatchdogClean,
   markTerminalWatchdogLive,
   restoreInteractiveTerminalSync,
   shouldRestoreInteractiveTerminal,
-} from "./lib/terminal-restore.ts";
+} from "./crash-logger/internal/terminal-restore.ts";
 
 const INSTALL_KEY = Symbol.for("pi.crashLogger.installed");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
@@ -222,7 +222,8 @@ function startTerminalRestoreWatchdog(): void {
       ".pi",
       "agent",
       "extensions",
-      "lib",
+      "crash-logger",
+      "internal",
       "terminal-restore-watchdog.mjs",
     );
     if (!fs.existsSync(script)) return;

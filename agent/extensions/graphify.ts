@@ -6,10 +6,6 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { boundedOutput, toolRenderers, type ToolRenderState } from "./apex/lib/tool-receipt.ts";
-import { withApexPresentation } from "./apex/lib/presentation.ts";
-import { textResult } from "./apex/lib/tool-result.ts";
-import { cleanInline, type ToolRenderContext } from "./apex/lib/ui-common.ts";
 
 export const GRAPHIFY_TOOL_NAME = "graphify";
 export const GRAPHIFY_STATUS_KEY = "graphify";
@@ -24,6 +20,10 @@ export const MAX_BUDGET = 50_000;
 export const OUTPUT_CAP_CHARS = 12_288;
 export const TRUNCATION_MARKER = "\n...[truncated]";
 const SYSTEM_BLOCK_MAX_LINES = 10;
+
+function textResult(text: string, isError = false, details: unknown = {}) {
+  return { content: [{ type: "text" as const, text }], details, isError };
+}
 
 export type GraphifyOperation = "query" | "path" | "explain";
 export type GraphifyQueryMode = "bfs" | "dfs";
@@ -484,20 +484,6 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
     return { config, artifacts };
   };
 
-  const ui = toolRenderers<GraphifyArgs>({
-    surface: "graphify",
-    title: (args) => {
-      const op = typeof args?.operation === "string" ? args.operation.trim() : "";
-      return op ? `graphify ${cleanInline(op, 24)}` : "graphify";
-    },
-    arg: (args, budget) => {
-      const text =
-        args?.question ?? args?.concept ?? (args?.from && args?.to ? `${args.from} -> ${args.to}` : "");
-      return cleanInline(String(text ?? ""), budget ?? 80);
-    },
-    preview: (output) => (output ? boundedOutput(output, 3, 1200) : []),
-  });
-
   pi.registerCommand("graphify", {
     description: "Handoff Graphify build/query instructions to the agent.",
     handler: async (args, ctx) => {
@@ -618,24 +604,6 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
         return textResult(`graphify failed: ${message}`, true);
       }
     },
-    ...withApexPresentation({
-      renderShell: "self" as const,
-      renderCall(
-        args: GraphifyArgs,
-        theme: any,
-        context: ToolRenderContext<ToolRenderState, GraphifyArgs>,
-      ) {
-        return ui.renderCall(args, theme, context);
-      },
-      renderResult(
-        result: any,
-        options: { expanded: boolean; isPartial: boolean },
-        theme: any,
-        context: ToolRenderContext<ToolRenderState, GraphifyArgs>,
-      ) {
-        return ui.renderResult(result, options, theme, context);
-      },
-    }),
   });
 
   pi.on("session_start", async (_event, ctx) => {

@@ -1,5 +1,6 @@
 {
+  "type": "module",
   "pi": {
-    "extensions": ["amp-task.ts", "async-task.ts", "apex-ui.ts"]
+    "extensions": ["apex-ui.ts"]
   }
 }

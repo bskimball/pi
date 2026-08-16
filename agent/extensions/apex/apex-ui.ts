@@ -9,19 +9,16 @@ import {
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import {
   fallbackTruncateToWidth,
-} from "./lib/safe-text-layout.ts";
+} from "./internal/presentation/safe-text-layout.ts";
 import {
   reportRenderFailure,
-} from "./lib/tool-receipt.ts";
-import { installRenderSafety } from "./lib/render-safety.ts";
-import { installBuiltinTools } from "./lib/builtin-tools.ts";
-// Re-export so callers that still look for installMcpPresentation on apex-ui
-// keep working; preferred import is ./lib/mcp-presentation.ts.
-export { installMcpPresentation } from "./lib/mcp-presentation.ts";
+} from "./internal/presentation/tool-receipt.ts";
+import { installRenderSafety } from "./internal/presentation/render-safety.ts";
+import { installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
   stripAnsi,
-} from "./lib/ui-common.ts";
+} from "./internal/presentation/ui-common.ts";
 import {
   buildObservatory,
   expandFeatured,
@@ -37,12 +34,12 @@ import {
   specialistLaunchDraft,
   type FeaturedEntry,
   type Observatory,
-} from "./lib/observatory.ts";
+} from "./observatory/observatory.ts";
 import {
   createObservatoryOrb,
   type ObservatoryOrbResult,
-} from "./lib/observatory-orb.ts";
-import { runFeaturedExtensionCommand } from "../prompt-commands.ts";
+} from "./observatory/observatory-orb.ts";
+import { runFeaturedExtensionCommand } from "./internal/runtime/featured-commands.ts";
 
 const RANDOM_INDICATOR_FRAME_COUNT = 256;
 const RANDOM_INDICATOR_INTERVAL_MS = 120;
@@ -184,15 +181,14 @@ function applyRandomWorkingIndicator(
 }
 
 export default function (pi: ExtensionAPI) {
-  // Install the process-wide boundary before any Apex surface is mounted. This
-  // keeps malformed model/extension values from terminating the TUI while
-  // preserving the full Apex UI; it is a repair boundary, not a fallback mode.
-  installRenderSafety();
-
-  // PI_APEX_UI=0 remains an emergency opt-out. The extension stays enabled by
-  // default and uses dependency-free tool/footer rendering plus Pi's built-in
-  // editor and working indicator.
+  // PI_APEX_UI=0 is a complete presentation-layer opt-out. Do not install any
+  // Apex process-wide rendering hooks in diagnostic fallback mode.
   if (process.env.PI_APEX_UI === "0") return;
+
+  // Install the process-wide boundary only when Apex presentation is active.
+  // It keeps malformed model/extension values from terminating the TUI while
+  // preserving the full Apex UI.
+  installRenderSafety();
 
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns

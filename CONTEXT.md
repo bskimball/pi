@@ -2,123 +2,95 @@
 
 Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; reference material under `reference/`.
 
-## Layout
+## Extension layout
 
-| Path | Role |
-|------|------|
-| `agent/extensions/` | Pi extensions (Apex UI, tasks, web search, continual memory, MCP) |
-| `agent/extensions/apex/` | Apex package: UI, sync/async tasks, shared `lib/` |
-| `agent/agents/` | Specialist agent markdown catalog |
-| `agent/prompts/`, `agent/skills/`, `agent/themes/` | Prompts, skills, themes |
-| `agent/SYSTEM.md` | System instructions |
-| `AGENTS.md` | Agent/workspace rules (incl. Apex stability) |
+```text
+agent/extensions/
+├── apex/                   # optional custom UI; owns all Apex rendering
+│   ├── apex-ui.ts
+│   ├── builtin-tools.ts
+│   ├── observatory/
+│   └── internal/           # Apex-only presentation/runtime helpers
+├── task/                   # standalone sync + async delegation
+│   ├── amp-task.ts
+│   ├── async-task.ts
+│   ├── presentation/       # Task-owned essential activity UI
+│   └── runtime/
+├── unified-edit/           # standalone planner + stock-rendered adapter
+├── lsp/                    # standalone LSP extension
+├── crash-logger/           # crash/watchdog implementation
+├── bg-process/             # background-process implementation
+├── continual-memory/       # memory storage implementation
+├── prompt-commands/        # browser/deploy command implementation
+└── top-level adapters      # stock-rendered independent extensions
+```
 
-## Extension seams
+There is no cross-extension `shared/` source dependency.
 
-- Each Pi extension receives its **own** `ExtensionAPI` / tool map.
-- Cross-extension interception is impossible: if extension A wraps `registerTool` on its API, extension B’s registrations are unaffected.
-- **MCP same-API composition**: `mcp-adapter.ts` installs Apex MCP presentation on *its* `pi`, then boots `pi-mcp-adapter` on that same instance so proxy/direct tools get Apex receipts.
-- Prefer lib imports (`apex/lib/*`) over loading `apex-ui.ts`’s default export when only helpers are needed (avoids UI side effects).
+## Standalone rule
 
-## Presentation gate (default UI vs Apex)
+Every extension entry may import only:
 
-- **Gate**: `apex/lib/presentation.ts` — `apexPresentationEnabled()` / `withApexPresentation(renderers)`.
-- Same emergency opt-out as Apex UI: `PI_APEX_UI=0` disables custom tool/task chrome **and** skips `apex-ui` interactive layout.
-- When disabled, tools omit `renderCall` / `renderResult` / `renderShell: "self"` so Pi’s default boxed renderer shows the model-facing `content` text. Domain logic, `details` payloads, and tool registration stay loaded either way.
-- Consumers spread `...withApexPresentation({ renderShell: "self", renderCall, renderResult })` (or return that object from a local `receipt` / `controlRenderers` helper). Settlement message renderers return `undefined` when the gate is off so Pi falls through to default custom-message display.
-- **Apex-only surfaces** (Observatory, working-indicator chrome, builtin read/bash/write receipts, Mission/Worker cards) live under `apex/*` and must not be required for tool correctness in default UI.
+- files owned by that extension,
+- Node built-ins,
+- Pi's public packages, and
+- declared npm dependencies.
 
-## Tool receipt
+It must not import another extension's source tree. Small process, bounding, or safety helpers are intentionally duplicated when two independently removable extensions need the same behavior.
 
-- **Receipt** = one-row tool chrome: call blanking, status glyph, title, primary arg, optional stats, duration, collapsed rail preview, expanded padded body.
-- **Engine**: `agent/extensions/apex/lib/tool-receipt.ts` — `toolRenderers(spec)`, `StableText`, `paddedSection`, `boundedOutput`, `reportRenderFailure`.
-- **Specs** supply identity/arg/preview/body/stats/scrub; the engine owns glyphs, timing, expand chrome, failure wrappers.
-- Consumers:
-  - Web: `lib/web-search-ui.ts` (specs + `scrubSecrets`)
-  - MCP: `lib/mcp-presentation.ts` (`installMcpPresentation`)
-  - Built-ins: `apex-ui.ts` (read/bash/edit/write via the same engine)
-- **Edit diffs**: `lib/edit-diff.ts` (numbered contextual diff, stats, intra-line highlights).
+Directory packages (`apex`, `task`, `lsp`, `unified-edit`) declare their entry points in their own `package.json`. Top-level extension files own same-named support directories where required.
 
-## Agent catalog
+## Presentation ownership
 
-- Canonical discovery: `lib/agent-discovery.ts`.
-- Directories: `getAgentDir()/agents` (global) and `process.cwd()/.pi/agents` (project override; later wins on name).
-- Frontmatter → `AgentDef` (model, fallbacks, thinking, tools, turns, timeout, skills, body).
-- Shared files: `_shared.md` (common preamble), `_shared-sync.md` / `_shared-async.md` (worker-mode semantics), `_handoff.md` (visible final-report requirement); project overrides global independently per file.
-- `modelAttempts(def, override?)` builds the try chain; empty chain returns `[undefined]` so a default-model attempt still runs.
-- Role boundary: `artisan` owns substantial UI implementation and design judgment; `inspector` is the cheap, read-only post-implementation verifier for bounded browser, viewport, interaction, screenshot, and visual-regression checks.
-- Theme agent hues stay in amp-task (presentation of badges), not the catalog.
+- Apex is the only general custom-presentation extension. Its Observatory, built-in tool receipts, layout safety, and width-safe primitives live under `apex/`.
+- Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
+- Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
+- Todo owns a small plain-text above-editor session widget; it does not import Apex or custom receipt infrastructure.
+- `PI_APEX_UI=0` remains the emergency opt-out for every custom presentation surface. It disables Apex UI and Task cards without disabling either extension's tool behavior.
+- Rendering remains passive and event-driven. No extension presentation timer calls `requestRender()`.
 
-## Task: sync vs async
+## Task extension
 
-| | Sync (`amp-task.ts`) | Async (`async-task.ts`) |
-|--|----------------------|-------------------------|
-| Tool | `task` | `task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply` |
-| Child | `pi --mode json -p` subprocess, lifetime = process | Session-backed RPC worker |
-| UI | Rich mission receipt (activities, models, report) | Bounded plain results + light list chrome |
-| Shared | `discoverAgents`, `modelAttempts`, `readSharedFile`, `stderrDiagnostic`, task-card activity/tree helpers, `missionFromPrompt` / args helpers (`lib/task-view.ts`) | same catalog + view helpers, task-card helpers, `WorkerRuntime` control plane |
+| | Sync (`task/amp-task.ts`) | Async (`task/async-task.ts`) |
+|--|---------------------------|------------------------------|
+| Tool interface | `task` | `task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply` |
+| Child | `pi --mode json -p` subprocess | session-backed RPC worker |
+| Runtime | local mission host | `task/runtime/worker-runtime.ts` control plane |
+| Presentation | bounded Task-owned mission card | bounded Task-owned worker activity |
 
-Both respect concurrency caps and exclude nested task tools in children.
+Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
-### Task card and worker runtime
+## Long-session and subagent stability
 
-- **Task Card**: `lib/task-card.ts` owns safe, width-aware shared primitives only: activity glyphs, duration-column text, tree row assembly/continuations, and bounded rail text. `amp-task.ts` retains its mission header/failure/report layout; `async-task.ts` retains its worker header/status/preview layout (behind the presentation gate).
-- **ActivityLedger**: `lib/activity-ledger.ts` owns overlapping tool-activity bookkeeping (identified-by-id vs anonymous LIFO) for both Missions (`amp-task`) and Workers (`async-task`). Async idle phase/budget control is owned by `WorkerRuntime`; the sync mission host arms the same exported budgets locally.
-- **JobRegistry**: `lib/job-registry.ts` owns ordered map + settled-capacity pruning used by async workers and `bg-process`.
-- **ProcessTree**: `lib/process-tree-kill.ts` is the sole reaping module (`killProcessTree` / `killProcessTreeSync`, optional POSIX `processGroup`). Call sites: async-task, amp-task, bg-process (`processGroup: true`), powershell.
-- **WorkerRuntime**: `lib/worker-runtime.ts` is the async worker control plane. It owns registry/capacity, bounded errors, activity closure, subscriber invalidation, hard/idle/abort timers, force-kill/escalation, generation start/settlement, and RPC lifecycle transitions for agent, turn, tool, message, retry, compaction, queue, and UI-request events. `async-task.ts` supplies model-fallback/circuit and Pi-notification policy through hooks, and retains RPC transport spawning, waiter/result formatting, and `task_*` registration adapters. `lib/task-compaction-policy.ts` owns the parent-context reserve boundary used by timed-out waits.
+1. `crash-logger/internal/segmenter-safety.ts` installs process-wide lazy JS grapheme segmentation before the first fullscreen paint.
+2. `apex/internal/presentation/render-safety.ts` contains malformed Apex Text/Markdown values and preserves cache identity.
+3. `crash-logger/internal/terminal-restore-watchdog.mjs` restores the terminal after an unclean parent death and records last-phase evidence.
+4. Task JSONL records, stderr, activities, errors, status text, result previews, and settled metadata are hard-bounded within `task/`.
+5. Stream deltas do not repaint pinned worker cards; Pi owns scheduling.
+6. Child agents run with Apex disabled; Task's own activity surface remains independently controllable.
+7. Worker registries remain process-local. A parent crash still loses live handles; session files remain the durable child record.
 
-## Shark identity surfaces
+Noninteractive tests prove type/runtime contracts, not sustained Windows Terminal stability. Interactive acceptance still requires fullscreen use with a large Bash result, session resume, and real delegated tasks.
 
-The mark is the Observatory splash identity, not a live animation during work.
+## Observatory
 
-- **Pixel art**: `lib/pixel-art.ts` owns the packed half-block cell decoder (`pixelCell`, `pixelRows`, `pixelCells`) and the truecolor gate for the landing mark. `lib/shark-art.ts` is **generated** — regenerate with `tools/shark-art/encode-shark.py`, never hand-edit.
-- **Star field** (`lib/star-field.ts`): shape is the *project* (deterministically seeded from cwd, so a repo's constellation is stable across launches); density is the *context* (stars burn out as the window fills, faintest first, never to an empty sky).
+- Apex-only landing surface: `apex/observatory/observatory.ts`.
+- Preview: `node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs`.
+- Pure passive string rendering; no timers or Pi TUI Text/Markdown/Container.
+- Cell measurement uses Apex-owned `apex/internal/presentation/safe-text-layout.ts`.
+- `shark-art.ts` is generated and must not be hand-edited.
 
-Compaction uses Pi's built-in spinner only. Live async workers are surfaced through the normal task status cards and `task_*` tools, not an ornamental widget. Pi only checks automatic compaction between agent runs, so a `task_wait` timeout at the configured compaction reserve boundary requests termination of its sequential tool-only run without aborting the worker; this creates a safe compaction boundary before another polling turn. Worker registries remain process-local, so an actual parent-process exit still loses handle continuity.
+## Feature ownership
 
-## Apex stability constraints
-
-When changing Apex UI / task / receipt rendering:
-
-1. No custom `setInterval` render loops; no extension-owned `tui.requestRender()` timers.
-2. Editor may only repaint an existing border or replace padding cells — no inserted editor rows, no cursor/width math changes.
-3. High-frequency surfaces: do **not** use pi-tui `Text`, `Markdown`, `Container`, `visibleWidth()`, or `truncateToWidth()` without proving Windows crash independence. Prefer `safe-text-layout` + `tool-receipt`.
-4. Bound large tool/task output by line **and** character count.
-5. Preserve task activity visibility; do not collapse subagents to a one-line summary unless diagnosing.
-6. Emergency opt-out: `PI_APEX_UI=0` (also strips Apex tool/task receipts via the presentation gate).
-7. Renderer failures → `agent/pi-render.log` and degrade to short fallback text.
-
-## Session todo list
-
-- Tool registration and the model-visible payload: `agent/extensions/todo-list.ts`. Pure presentation: `agent/extensions/apex/lib/todo-list.ts`.
-- Statuses: `pending`, `in_progress`, `blocked`, `completed`, `cancelled`. `done` is `completed + cancelled` only — **`blocked` is open work** and must never count toward it.
-- Two distinct indices, deliberately not merged: `activeIndex` is the first `in_progress` item and drives emphasis/expansion styling; `anchorIndex` places the collapsed window and falls back `in_progress` → `blocked` → `pending`. Merging them would style blocked rows as active; reusing `activeIndex` for the window hides the only open item behind completed rows when nothing is in progress.
-- `todo_write` returns the short summary line; `todo_read` returns a bounded per-item serialization (status, exact content, note). The split is intentional: read results re-enter context on every later turn, so only the explicit read pays that cost. Extension `details` feed the TUI and are **not** model-visible — anything the agent must read has to be in `content`.
-- Render and boundedness guard: `agent/extensions/apex/lib/todo-list-preview.mjs`, run with `node --experimental-transform-types` (plain `node` fails on TS parameter properties). It asserts height/width caps, hostile-input tolerance, and blocked-item visibility.
-
-## Continual memory
-
-- Extension adapter: `agent/extensions/continual-memory.ts` (tools, session inject, receipts).
-- **MemoryStore** module: `apex/lib/memory-store.ts` (normalize/load/lock/mutate/overview; local + global adapters).
-- Tools: `memory_list`, `memory_write` (create/update/delete).
-- Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only).
-- Local store: session custom entry `continual-memory-local` (survives resume). Default writes go to global; local is this-session scratch that survives resume only.
-- Global store: `agent/harness/global.json` (gitignored runtime state).
-- Injected each turn via `before_agent_start` as a compact overview; never rewrites `SYSTEM.md`.
-
-## Shared tool helpers
-
-- `apex/lib/tool-result.ts`: `textResult`, `resolveCwd`, `validateCwd` for extensions that need consistent model-facing payloads.
-- `apex/lib/unified-edit.ts`: deep planner exports `buildPlan` / `preflightPlan` / `applyPlan` (+ types); tool registration remains the thin adapter at the file default export (receipts behind presentation gate).
-
-## Intentionally deferred
-
-- `async-task.ts` intentionally retains the transport and adapter seams around `WorkerRuntime`: `RpcClient` spawn/exit wiring, provider-specific fallback session replacement, waiter snapshots, result formatting, and `task_*` registration. These depend directly on Pi/RPC APIs rather than generic worker state transitions.
-- Task **rendering** headers, badges, failures, and mission-report formatting still live in amp-task / async-task; `task-card` shares only safe tree/activity primitives.
-- Theme **agentHue** remains amp-task-local.
-- Deepening **TaskCard** into one view→lines module for Mission + Worker parity (presentation gate already separates Apex chrome from default UI).
+- Background jobs: `bg-process.ts` plus `bg-process/internal/`; stock tool rendering.
+- Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; stock tool rendering.
+- Todo list: standalone `todo-list.ts`; stock tool rendering plus its own plain widget.
+- Web search: standalone `web-search.ts`; stock tool rendering.
+- Unified edit: `unified-edit/`; stock tool rendering.
+- Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
+- User profile: loader owned directly by `user-profile.ts`.
+- MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.
 
 ## Secrets
 
-Never put API keys, tokens, or credentials in receipt details, logs, or this file. Web receipts scrub key-shaped strings via `scrubSecrets`.
+Never put API keys, tokens, credentials, browser profiles, or authentication data in results, logs, or this file.
