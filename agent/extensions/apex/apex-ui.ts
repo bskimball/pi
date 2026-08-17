@@ -13,6 +13,7 @@ import {
 import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
+import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
@@ -196,6 +197,10 @@ export default function (pi: ExtensionAPI) {
   // It keeps malformed model/extension values from terminating the TUI while
   // preserving the full Apex UI.
   installRenderSafety();
+  // Graphify stays a headless extension (execute + status only). Apex skins
+  // its ToolExecutionComponent receipts here because first registration wins
+  // the whole tool and Apex cannot import graphify.ts.
+  installGraphifyReceipts();
 
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
