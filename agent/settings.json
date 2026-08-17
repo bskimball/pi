@@ -1,5 +1,5 @@
 {
-  "defaultModel": "gemini-3.7-flash-high",
+  "defaultModel": "grok-4.6",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.2",
