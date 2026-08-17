@@ -14,6 +14,7 @@ import type {
 import {
   CANONICAL_STATUSES,
   buildTodoList,
+  renderPlainTodoList,
   renderTodoList,
   type TodoItem,
   type TodoListView,
@@ -289,7 +290,6 @@ export function installTodoTools(pi: ExtensionAPI): void {
   }
 
   function renderPanel(): void {
-    if (!presentationEnabled) return;
     const ctx = currentCtx;
     if (!ctx?.hasUI || ctx.mode !== "tui" || !current) return;
     try {
@@ -298,10 +298,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
         (_tui, theme) =>
           new WidthText(
             (width) =>
-              renderTodoList(theme, width, current!, {
-                collapsed: panelCollapsed,
-                toggleHint: TOGGLE_HINT,
-              }),
+              presentationEnabled
+                ? renderTodoList(theme, width, current!, {
+                    collapsed: panelCollapsed,
+                    toggleHint: TOGGLE_HINT,
+                  })
+                : renderPlainTodoList(current!, width),
             "[todo panel unavailable]",
           ),
         { placement: "aboveEditor" },
@@ -337,18 +339,14 @@ export function installTodoTools(pi: ExtensionAPI): void {
     panelCollapsed = false;
     currentCtx = ctx;
     current = event?.reason === "new" ? undefined : reconstructTodoState(ctx);
-    if (current && presentationEnabled) {
-      renderPanel();
-    }
+    if (current) renderPanel();
   });
 
   pi.on("session_tree", (_event: any, ctx: ExtensionContext) => {
     clearPanel();
     currentCtx = ctx;
     current = reconstructTodoState(ctx);
-    if (current && presentationEnabled) {
-      renderPanel();
-    }
+    if (current) renderPanel();
   });
 
   pi.on("session_shutdown", () => {

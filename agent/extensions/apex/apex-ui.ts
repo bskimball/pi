@@ -183,11 +183,13 @@ function applyRandomWorkingIndicator(
 export default function (pi: ExtensionAPI) {
   // Tools Apex owns outright (`edit`, `todo_write`/`todo_read` and the todo
   // panel) register before the presentation opt-out: PI_APEX_UI=0 removes the
-  // custom receipts and widget chrome, never the tools themselves.
+  // custom receipts and styled chrome, never the tools themselves. The todo
+  // panel stays mounted there as an unstyled plain widget.
   installApexOwnedTools(pi);
 
-  // PI_APEX_UI=0 is a complete presentation-layer opt-out. Do not install any
-  // Apex process-wide rendering hooks in diagnostic fallback mode.
+  // PI_APEX_UI=0 disables Apex styling, chrome, and custom render hooks. Do not
+  // install any Apex process-wide rendering hooks in diagnostic fallback mode;
+  // the persistent plain todo widget installed above is the sole exception.
   if (process.env.PI_APEX_UI === "0") return;
 
   // Install the process-wide boundary only when Apex presentation is active.

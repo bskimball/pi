@@ -401,3 +401,33 @@ export function renderTodoList(
 
   return emit(buildTreeLines(theme, inner, header, rows));
 }
+
+export const PLAIN_STATUS_GLYPHS: Record<TodoStatus, string> = {
+  pending: "[ ]",
+  in_progress: "[>]",
+  blocked: "[!]",
+  completed: "[x]",
+  cancelled: "[-]",
+};
+
+export function renderPlainTodoList(view: TodoListView, width: number): string[] {
+  if (width <= 0) return [];
+  if (view.total === 0) {
+    const emptyHeader = view.title ? `Todos: ${view.title} (empty)` : "Todos (empty)";
+    return [safeTruncateToWidth(emptyHeader, width)];
+  }
+  const titlePart = view.title ? `: ${view.title}` : "";
+  const lines = [`Todos${titlePart} (${view.done}/${view.total} done)`];
+  const { start, end } = windowFor(view.total, 9, view.anchorIndex);
+  if (start > 0) lines.push(`... ${start} earlier`);
+  for (let index = start; index < end; index++) {
+    const item = view.items[index];
+    const note = item.note ? ` · ${item.note}` : "";
+    lines.push(`${PLAIN_STATUS_GLYPHS[item.status]} ${item.title}${note}`);
+  }
+  const after = view.total - end;
+  if (after > 0) lines.push(`... ${after} more`);
+  return lines
+    .slice(0, TODO_LIST_MAX_LINES)
+    .map((line) => safeTruncateToWidth(line, width));
+}

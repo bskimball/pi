@@ -1,6 +1,6 @@
 {
-  "defaultModel": "@cf/moonshotai/kimi-k2.6",
-  "defaultProvider": "cloudflare-workers-ai",
+  "defaultModel": "gemini-3.7-flash-high",
+  "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.2",
   "packages": [],
@@ -28,5 +28,6 @@
     "google/*",
     "ollama/*",
     "cloudflare-workers-ai/**"
-  ]
+  ],
+  "hideThinkingBlock": false
 }
