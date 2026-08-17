@@ -2,16 +2,16 @@
 
 Personal configuration for [Pi](https://github.com/earendil-works/pi-mono) — a customized coding-agent setup with a fleet of specialist sub-agents, TUI extensions, and slash commands for browser automation and deployment.
 
-Credential-bearing local configuration files (`agent/auth.json`, `agent/models.json`, `agent/mcp.json`, `web-search.json`, plus any `.env`/`.env.*`) are excluded by `.gitignore`. Three of them — `agent/models.json`, `agent/mcp.json`, and `web-search.json` — have a tracked `*.example.json` minimal template with environment-variable references instead of real secrets; `agent/auth.json` and any `.env` files have no example and are populated by `/login` or your own shell environment. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation, and [CONTEXT.md](CONTEXT.md) for the local extension architecture (seams, tool receipts, agent catalog, sync-vs-async task internals).
+Credential-bearing local configuration files (`agent/auth.json`, `agent/models.json`, `agent/mcp.json`, `web-search.json`, plus any `.env`/`.env.*`) are excluded by `.gitignore`. Three of them — `agent/models.json`, `agent/mcp.json`, and `web-search.json` — have a tracked `*.example.json` minimal template with environment-variable references instead of real secrets; `agent/auth.json` and any `.env` files have no example and are populated by `/login` or your own shell environment. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation, and [CONTEXT.md](CONTEXT.md) for the local extension architecture (seams, standalone rule, presentation ownership, agent catalog, sync-vs-async task internals). [AGENTS.md](AGENTS.md) is the canonical description of this architecture for the agent itself; this file exists for a human reading the repo.
 
 ## Overview
 
 This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
-- **Extensions** (`agent/extensions/`) that provide the task/orchestration tooling, web search, MCP presentation, background-process management, a custom "Apex" TUI presentation layer, and crash logging.
-- **Slash commands and prompt templates** — native [`/orchestrate`](#orchestrate) switches the lead into sticky, delegation-only mode, while `/browser` and `/deploy` handle browser automation and full-worktree shipping; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
-- **Skills** (`agent/skills/`) for image generation and background processes.
+- **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
+- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky, delegation-only mode; `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
+- **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, and MCP scripting.
 - **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
 
@@ -26,7 +26,7 @@ Each task spawns a separate `pi` process with the specialist's own system prompt
 
 **`task_start` is the preferred delegation path** (see `agent/SYSTEM.md`): it returns a worker handle immediately so the lead agent can keep working, monitor, or dispatch other tasks in parallel. `task` (synchronous, blocking) is reserved for cases needing a single bounded result in-line before continuing. The async lifecycle is: `task_start` to launch a worker (counts against a cap of 3 concurrent live workers) → do other work or poll with `task_status` / `task_list` → `task_send` to steer or follow up → `task_wait` to block until the current generation settles → **`task_close` to reap the worker**. A worker normally holds its concurrency slot until closed, so `task_close` is required lifecycle hygiene once a worker's result has been collected. `task_wait` timeouts and Esc interruptions detach only the waiter. If a timeout occurs at Pi's configured compaction reserve boundary, the sequential tool requests an end to its tool-only turn so Pi can auto-compact while the worker keeps running. Worker handles are runtime-local; after a process restart, verify them with `task_list` rather than assuming a historical `task_N` is still live. `task_reply` answers a worker's interactive UI dialog request (select/confirm/input/editor) by request id.
 
-**Model fallback differs between the two tools.** Each agent file declares a primary model plus an ordered fallback chain (`modelAttempts()`). The synchronous `task` tool retries through that full chain on failure. `task_start` currently spawns using only the first resolved model in the chain — declared fallbacks are not retried at spawn time (source comment: "v1: use first model only for spawn; fallbacks can be retried on hard fail later").
+**Model fallback differs between the two tools.** Each agent file declares a primary model plus an ordered fallback chain (`modelAttempts()`). The synchronous `task` tool retries through that full chain on failure. `task_start` currently spawns using only the first resolved model in the chain — declared fallbacks are not retried at spawn time.
 
 `task_send` has two delivery modes with different queueing semantics:
 
@@ -54,25 +54,87 @@ Shared norms that apply to every specialist (smallest-correct-change discipline,
 
 ## Extensions
 
-Custom TUI and orchestration extensions live in `agent/extensions/`:
+Custom TUI and orchestration extensions live in `agent/extensions/`. Pi discovers an extension two ways: a bare `*.ts` file directly in `agent/extensions/`, or a directory whose `package.json` declares `pi.extensions`. Everything else under a directory — `internal/`, `runtime/`, `presentation/`, `observatory/`, `test/` — is private support code, never loaded as a second extension.
 
-- **`task/amp-task.ts` & `task/async-task.ts`** — implements `task` and persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`). Supports isolated sessions, background execution, steering/follow-up messaging, interactive UI dialog handling, hard/idle/turn guards, model fallback chains, and rich task presentation (specialist badges, mission, model, thinking level, turn count, live tool activities, durations, and bounded final reports). The deep async control plane lives in `task/runtime/worker-runtime.ts`; `async-task.ts` retains RPC transport and Pi tool adapters.
-- **`apex/apex-ui.ts`** — the "Apex" presentation layer: styled built-in `read`/`bash`/`edit`/`write` rows, bounded output previews, diffs, a context footer, and a working animation. Supports emergency opt-out via `PI_APEX_UI=0` and logs rendering failures to `agent/pi-render.log`.
-- **`apex/lib/` shark surfaces** — the mark carries state rather than just opening the session; see [The shark](#the-shark).
-- **`web-search.ts`** — provides native Exa web search and page fetching tools (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
-- **`prompt-commands.ts`** — registers the native `/browser` and `/deploy` slash commands directly via `pi.registerCommand()`, without external plugins. It does not register or discover Markdown prompt templates; those are handled by upstream Pi's own prompt-template loading (see [Slash commands](#slash-commands)).
-- **`mcp-adapter.ts`** — composes Apex's MCP presentation with the root `pi-mcp-adapter` dependency on one `ExtensionAPI`. Do not also add `pi-mcp-adapter` to `agent/settings.json` packages; independent package loading would initialize a second MCP extension and bypass this shared presentation wrapper.
-- **`bg-process.ts`** — background-process management (`bg_start`, `bg_status`, `bg_list`, `bg_kill`) for dev servers and watchers.
-- **`agent/extensions/apex/internal/todo/`** — the session plan (`todo_write`, `todo_read`). `todo_write` replaces the whole list on each call and enforces at most one `in_progress` item; statuses are `pending`, `in_progress`, `blocked`, `completed`, `cancelled`. `blocked` marks work waiting on a user decision, another agent, or an external service: it stays open and never counts toward done, and the collapsed view anchors on it when nothing is in progress so the only open item can't hide behind completed rows. `todo_read` returns a bounded serialization for recovery (status, exact content text, and note, with item/line caps) so the plan and its wording survive compaction; items are addressed by content text, not by id. Scoped to the lead agent: specialists run non-interactively and report once, and no agent definition grants them these tools. The threshold for writing a plan lives in `agent/SYSTEM.md`. Render behavior is guarded by `agent/extensions/apex/internal/todo/todo-preview.mjs` (run it with `node --experimental-transform-types`).
-- **`continual-memory.ts`** — small evidence-backed durable notes outside the chat (`memory_list`, `memory_write`). Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default writes go to global; local is this-session scratch that survives resume only. Session-local entries resume via custom session entries; global entries live under `agent/harness/global.json` (gitignored). Injected as a compact overview each turn via `before_agent_start`. Manual only — never rewrites `SYSTEM.md`.
-- **`crash-logger.ts`** — records fatal JavaScript/stream errors and nonzero exits to `agent/pi-crash.log`, distinguishing main and sub-agent processes, and records session/compaction lifecycle boundaries separately in `agent/pi-lifecycle.log`. Routine process exit code zero is omitted from the crash log. Each log rotates independently at 1 MiB by atomically renaming the complete active file and retaining one rotated generation.
-- **`lsp/`** — a single on-demand `lsp` tool for semantic navigation (`definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `diagnostics`, `read_symbol`) backed by language servers already on `PATH` (TypeScript/JavaScript, Python, Go, PHP). It never installs servers and runs no always-on analysis; servers spawn per session and are disposed on `session_shutdown`. Bare commands resolve on `PATH` only — never from the project directory — so an untrusted repo can't inject a binary. Optional config at `agent/lsp.json` or a trusted `.pi/lsp.json`.
+```text
+agent/extensions/
+├── apex/            → apex-ui.ts          UI layer (Observatory, tool receipts, edit, todo)
+├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
+├── lsp/             → index.ts            language-server navigation
+├── bg-process.ts    + bg-process/         bg_start/status/list/kill
+├── powershell.ts    + powershell/         direct PowerShell child process
+├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
+├── continual-memory.ts + continual-memory/  memory_list / memory_write
+├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate
+├── graphify.ts                            local knowledge-graph query + /graphify handoff
+├── mcp-adapter.ts                         pi-mcp-adapter bridge (stock MCP rendering)
+├── read-guard.ts                          duplicate-image + downscale guard
+├── user-profile.ts                        private user context injection
+├── web-search.ts                          Exa search + fetch_content
+└── test/                                  cross-extension tests
+```
 
-No extensions are currently loaded as npm packages; `agent/settings.json` `packages` is empty. The third-party MCP dependency used here — `pi-mcp-adapter` — is composed locally via `mcp-adapter.ts` instead, so it is not absent, just not package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
+`apex/package.json`, `task/package.json`, and `lsp/package.json` each declare their entry points (`apex-ui.ts`; `amp-task.ts` + `async-task.ts`; `index.ts`).
+
+This is enforced structurally, not just by convention: every extension's import closure must stay inside its own directory (Node built-ins, Pi's public packages, and declared dependencies are the only exceptions). There is **no `extensions/shared/`** — small helpers that look shareable (width-safe text layout, terminal-restore, process-tree-kill, agent discovery, segmenter safety, and similar) are duplicated per owner on purpose, because deleting an extension directory plus its entry file must remove the feature cleanly with no dangling imports elsewhere.
+
+### Apex is the UI
+
+`apex/` is the only general custom-presentation extension. Every other extension is headless (Pi's stock tool renderer) or renders a small amount of its own chrome.
+
+```text
+apex/apex-ui.ts
+├── builtin-tools.ts
+├── internal/edit/               unified edit tool + row edit planner
+├── internal/todo/               todo_write / todo_read + docked todo panel
+├── internal/presentation/       receipts, diffs, graphify-receipt.ts, the PI_APEX_UI=0 gate
+├── internal/runtime/            segmenter shield, last-phase, terminal-restore, agent discovery
+└── observatory/                 blank-chat landing screen (see below)
+```
+
+Apex owns the Observatory startup header, styled receipts for the builtin `read`/`bash`/`edit`/`write` tools, the session todo panel (`todo_write`/`todo_read`), the unified edit tool, and receipt chrome for the otherwise-headless `graphify` tool (`internal/presentation/graphify-receipt.ts`). `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo panel, which stays mounted but switches to a plain, uncolored list.
+
+`task/` renders its own delegated-worker activity cards through a separate gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0` so they never paint their own chrome.
+
+Headless, stock-rendered extensions: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`. `graphify` stays headless for its own execute/status output; Apex attaches receipt chrome on top unless `PI_APEX_UI=0`.
+
+There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publish status text into it via `ctx.ui.setStatus(...)`.
+
+### Extension notes
+
+- **`task/amp-task.ts` & `task/async-task.ts`** — implements `task` and the persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`); see [Sub-agents and Orchestration Tools](#sub-agents-and-orchestration-tools) above. The deep async control plane lives in `task/runtime/worker-runtime.ts`; `async-task.ts` retains RPC transport and Pi tool adapters.
+- **`apex/apex-ui.ts`** — see [Apex is the UI](#apex-is-the-ui) and [The shark / Observatory](#the-shark--observatory).
+- **`bg-process.ts`** — `bg_start`/`bg_status`/`bg_list`/`bg_kill` for dev servers and watchers; support code in `bg-process/internal/`.
+- **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
+- **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
+- **`continual-memory.ts`** — `memory_list`/`memory_write`; small evidence-backed durable notes outside the chat transcript. Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default write scope is global; local is this-session scratch. Global entries live under `agent/harness/global.json` (gitignored).
+- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, and `/orchestrate` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands).
+- **`graphify.ts`** — see [Graphify](#graphify) below.
+- **`mcp-adapter.ts`** — standalone bridge that boots the root `pi-mcp-adapter` dependency on this `ExtensionAPI`. MCP tools use Pi's stock renderer. Do not also add `pi-mcp-adapter` to `agent/settings.json` `packages`; a second package-loaded copy would initialize a duplicate MCP extension.
+- **`read-guard.ts`** — blocks a repeated `read` of the same image path when mtime/size are unchanged; downscales image blocks in any tool result to a 1568px long edge; gives an advisory nudge on very large bash output. No text re-read guard.
+- **`user-profile.ts`** — injects `agent/USER_PROFILE.local.md` (gitignored, capped at 8,000 characters) into the system prompt via `before_agent_start`, if the file exists.
+- **`web-search.ts`** — native Exa web search and page fetching (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
+- **`lsp/`** — see [LSP](#lsp) below.
+
+No extensions are currently loaded as npm packages; `agent/settings.json` `packages` is empty. The `pi-mcp-adapter` dependency is composed locally via `mcp-adapter.ts` instead of package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
+
+### Graphify
+
+`graphify.ts` registers a headless LLM tool, `graphify`, that only queries an existing local knowledge graph (`query`/`path`/`explain` — it never builds or mutates one) and requires artifacts to already exist under `graphify-out` (or a configured `outputDir`). The `/graphify` slash command (including `/graphify build`) is a handoff: it tells the agent to load and follow `agent/skills/graphify/SKILL.md`, whose full build/update pipeline runs the upstream CLI as `graphify .` — never as `graphify build`.
+
+### LSP
+
+A single on-demand `lsp` tool for semantic navigation (`definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `diagnostics`, `read_symbol`), backed by language servers already on `PATH` (TypeScript/JavaScript, Python, Go, PHP). It never installs servers and runs no always-on analysis; servers spawn per session and are disposed on `session_shutdown`. Bare commands resolve on `PATH` only, never from the project directory, so an untrusted repo can't inject a binary. Optional config at `agent/lsp.json` or a trusted `.pi/lsp.json`.
+
+### Crash and stability
+
+`crash-logger.ts` installs the segmenter shield (defends against a native ICU grapheme-segmentation crash on Windows), last-phase breadcrumbs per pid, and a terminal-restore watchdog for unclean session deaths, independent of `PI_APEX_UI`. Logs: `agent/pi-crash.log`, `agent/pi-lifecycle.log`, `agent/pi-render.log`. See [CONTEXT.md](CONTEXT.md#long-session-and-subagent-stability) and [AGENTS.md](AGENTS.md#crash-and-stability-diagnostics) for the full mechanism; this README does not reproduce it.
 
 ## Slash commands
 
-`/browser` and `/deploy` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because both need executable pre-steps — a deterministic browser-connect step and a git worktree snapshot, respectively — that plain prompt-template expansion can't do. Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
+`/browser`, `/deploy`, and `/orchestrate` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, and sticky session-mode switching, respectively — that plain prompt-template expansion can't do. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI.
+
+Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
 `agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
 
@@ -119,29 +181,47 @@ Delegates lint, format, verify, and deploy to the `stevedore` sub-agent instead 
 
 ## Skills
 
-Skills live in `agent/skills/` and are freeform directories beyond the required `SKILL.md`:
+Skills live in `agent/skills/` and are freeform directories beyond the required `SKILL.md`. `agent/settings.json` also adds `../node_modules/pi-mcp-adapter/skills` to `skills`, which brings in the upstream `mcp-scripting` skill.
 
-- [`background-process/SKILL.md`](agent/skills/background-process/SKILL.md) — documents the `bg_*` tools (from `bg-process.ts`) for long-running commands like dev servers and watchers.
+- [`agent-browser/SKILL.md`](agent/skills/agent-browser/SKILL.md) — browser automation through the dedicated debug Chrome on CDP port 29300; the same pathway `/browser` uses.
+- [`background-process/SKILL.md`](agent/skills/background-process/SKILL.md) — the `bg_*` tools (from `bg-process.ts`) for long-running commands like dev servers and watchers.
 - [`generate-image/SKILL.md`](agent/skills/generate-image/SKILL.md) — image generation via a bundled helper script, [`generate_image.py`](agent/skills/generate-image/generate_image.py), with an automatic model fallback chain.
+- [`graphify/SKILL.md`](agent/skills/graphify/SKILL.md) — the full graphify build/update CLI pipeline (`graphify .` and friends); see [Graphify](#graphify) above for the query-only tool and `/graphify` handoff.
+- [`improve-codebase-architecture/SKILL.md`](agent/skills/improve-codebase-architecture/SKILL.md) — scans for deepening opportunities and works through them interactively; `disable-model-invocation: true`, so it's invoked explicitly rather than picked automatically.
+- [`mcp-scripting-recipes/SKILL.md`](agent/skills/mcp-scripting-recipes/SKILL.md) — local composition recipes (discovery-first resolution, bounded fan-out, partial failures, timeout budgeting) layered on top of the upstream `mcp-scripting` skill's API contract.
 
 ## Theme
 
 `agent/themes/apex-dark.json` is a custom dark theme selected via `agent/settings.json` (`"theme": "apex-dark"`) and hot-reloads when edited while active. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
 
-## The shark
+## The shark / Observatory
 
-The configuration has one visual identity — a shark in deep space — used as the Observatory landing mark, not as a live animation during work.
+The configuration has one visual identity — a shark in deep space — used as the Observatory landing mark on a fresh chat, not as a live animation during work. Observatory is a blank-chat landing screen mounted by `apex/apex-ui.ts` as Pi's startup header (`ctx.ui.setHeader(...)`), not an above-editor widget, so with `quietStartup` it's the opening screen.
 
-The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. It emits generated TypeScript (`lib/shark-art.ts`) — regenerate it, never hand-edit. `lib/pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
+```text
+agent/extensions/apex/observatory/
+├── observatory.ts        composition, inventory, glyph shark tiers, selectors
+├── observatory-orb.ts    focus/selection state
+├── shark-art.ts          generated truecolor pixel bitmaps (ULTRA / WIDE / MID)
+├── pixel-art.ts          half-block pixel renderer + truecolor detection
+├── star-field.ts         background star rows
+├── preview.mjs           full-screen harness
+└── sky-preview.mjs       star-field-only harness
+```
 
-Surfaces that still use the identity:
+The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `agent/extensions/apex/observatory/shark-art.ts` — regenerate it via `tools/shark-art/`, never hand-edit that file. (`tools/shark-art/emit-ts.py` still writes the old `apex/lib/` path; that generator is stale.) `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
 
-| Surface | What it shows |
-| --- | --- |
-| **Observatory splash** (`lib/observatory.ts`) | The full mark, on a fresh chat only. |
-| **Star field** (`lib/star-field.ts`) | Two facts in one row: the *shape* is seeded from the workspace path, so every project has its own constellation that is stable across launches; the *density* is context usage, with stars burning out faintest-first as the window fills. |
+Two facts ride on the mark: the Observatory splash (`observatory.ts`) shows the full mark on a fresh chat only; the star field (`star-field.ts`) encodes the *shape* from the workspace path (so every project has its own constellation, stable across launches) and the *density* from context usage (stars burn out faintest-first as the window fills).
 
-Compaction uses Pi's built-in spinner only. Live async workers show through the normal task status cards and `task_*` tools. Apex keeps no extension-owned animation clocks for either surface (see [CONTEXT.md](CONTEXT.md#apex-stability-constraints)).
+Preview harness — do not iterate on this surface through screenshots:
+
+```
+node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs
+node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs 80
+node --experimental-transform-types agent/extensions/apex/observatory/sky-preview.mjs
+```
+
+Compaction uses Pi's built-in spinner only. Live async workers show through the normal task status cards and `task_*` tools. Apex keeps no extension-owned animation clocks for either surface.
 
 ## Example and template files
 
