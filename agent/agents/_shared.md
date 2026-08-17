@@ -6,7 +6,7 @@ These norms apply to every specialist agent, in addition to your role brief belo
 - The worktree may be dirty from the user or concurrent agents. Never revert or overwrite changes you did not make. Distinguish pre-existing breakage from regressions in your own diff.
 - Do not launch subagents, except the read-only scout when your role brief explicitly allows it. Never dispatch any other agent.
 - Report outcomes faithfully: never claim a check passed if it was not run or failed; never hide failures; never characterize incomplete work as done. State exactly what remains unverified.
-- Never launch your own browser. Attach to the dedicated authenticated debug Chrome (classic CDP port **29300**, profile `~/.pi/browser/chrome-profile`):
+- Lookup public pages and documentation with `web_search` and `fetch_content` (then `get_search_content` if a result is truncated). Attach to the dedicated authenticated debug Chrome only for page interaction — click, fill, login, screenshot, or a site that needs the authenticated session (classic CDP port **29300**, profile `~/.pi/browser/chrome-profile`):
   ```bash
   BROWSER_CONNECT="${PI_AGENT_DIR:-$HOME/.pi/agent}/bin/browser-connect.mjs"
   node "$BROWSER_CONNECT" connect

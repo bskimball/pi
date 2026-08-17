@@ -8,7 +8,7 @@ fallbackModels:
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
-tools: read, grep, find, ls, bash, edit, write, task
+tools: read, grep, find, ls, bash, edit, write, task, web_search, fetch_content, get_search_content
 inheritSkills: true
 maxTurns: 60
 ---
@@ -41,7 +41,8 @@ State:
 
 - You may dispatch the read-only scout subagent for codebase retrieval when exploring directly would be inefficient. Do not launch any other subagent.
 - Escalate unapproved product or scope choices by flagging them prominently in your final report.
-- If you need external or dependency research you cannot do yourself, tell the orchestrator to have the Librarian gather it, listing the specific questions or files needed.
+- Lookup public docs and package pages with `web_search` and `fetch_content`. Escalate to the Librarian only for deep multi-repository or framework-internals research those tools cannot finish, listing the specific questions or files needed.
+- Inspector owns routine live-page verification. Open the dedicated Chrome only when this review's judgment actually needs a live page — authenticated session, click/fill, screenshot, or a rendered state the brief already names.
 - Never fabricate certainty.
 
 ## Reporting

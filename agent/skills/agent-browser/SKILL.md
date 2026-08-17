@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Browser automation for this Pi installation. Use for website interaction only through the dedicated authenticated debug Chrome on classic CDP port 29300. This is the same browser pathway configured by /browser; never launch or select another browser/profile.
+description: Browser automation for click, fill, login, and screenshot on a live page through the dedicated authenticated debug Chrome on classic CDP port 29300. This is the same pathway as /browser. Public-page lookup uses web_search and fetch_content instead. Never launch or select another browser/profile.
 ---
 
 # Dedicated Browser Automation
