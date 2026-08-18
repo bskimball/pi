@@ -17,8 +17,8 @@ agent/
 ├── prompts/               # slash-command prompts (inactive/ = extension-owned)
 ├── skills/                # local skills
 ├── themes/                # apex-dark.json
-├── harness/               # runtime state: global memory, model circuits
-├── extensions/            # see below
+├── harness/                # runtime state: global memory, model circuits
+├── extensions/             # see below
 └── pi-*.log               # render / crash / lifecycle traces
 reference/                 # source material, not runtime data
 ```
@@ -57,36 +57,12 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 
 ### Apex Is The UI
 
-`apex/` owns the interactive presentation layer; every other extension is either headless or renders its own chrome locally.
+`apex/` owns the interactive presentation layer; every other extension is either headless or renders its own chrome locally. Receipt modules for headless tools live under `apex/internal/presentation/`; see `CONTEXT.md` for presentation ownership detail.
 
-```text
-apex/apex-ui.ts                      interactive layout, working indicator, header mount
-├── builtin-tools.ts                 read/bash/write/edit/todo adapters (delegates to Pi or Apex-internal)
-├── internal/edit/                   edit tool and row edit planner
-├── internal/todo/                   todo_write / todo_read and session todo panel
-├── internal/presentation/
-│   ├── presentation.ts              withApexPresentation() — the PI_APEX_UI=0 gate
-│   ├── tool-receipt.ts              bounded tool receipts
-│   ├── graphify-receipt.ts          Apex receipts for the headless graphify tool
-│   ├── lsp-receipt.ts               Apex receipts for the headless lsp tool
-│   ├── web-search-receipt.ts        Apex receipts for web_search / fetch_content
-│   ├── bg-process-receipt.ts        Apex receipts for bg_start/status/list/kill, plus notice chrome for bg-process-settled
-│   ├── notice-view.ts               bounded background-notice receipt
-│   ├── headless-receipts.ts         ToolExecutionComponent wrap for headless tools
-│   ├── edit-diff.ts                 diff rendering for edit/write
-│   ├── receipt-tree.ts              receipt tree structures
-│   ├── render-safety.ts             guards Pi TUI text/markdown renderers
-│   ├── safe-text-layout.ts          measure/truncate; never use .length
-│   └── ui-common.ts                 shared width/ANSI primitives
-├── internal/runtime/                segmenter-safety, last-phase, terminal-restore,
-│                                    agent-discovery, featured-commands
-└── observatory/                     blank-chat landing screen (see below)
-```
-
-- `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables Apex styling, chrome, and custom render hooks. Apex-owned tools remain registered and executable; `apex-ui.ts` does not install custom presentation hooks, header/chrome, or styled widgets, and `withApexPresentation()` strips `renderCall`/`renderResult`/`renderShell` so tools fall back to Pi's stock boxed renderer over model-facing text. Execution and tool registration are unaffected. The one deliberate exception is the todo panel: `internal/todo/` keeps its `aboveEditor` widget mounted and switches it to `renderPlainTodoList()` — no color, no tree rail, no `alt+t` / `/todos` toggle — so the plan stays visible in fallback mode. It follows the styled panel's lifecycle: mount on write, rebuild on `session_start`/`session_tree`, clear on `session_shutdown` and fresh sessions.
-- `task/` renders its own cards through its own gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task child processes are spawned with `PI_APEX_UI=0` so workers never paint chrome.
-- Headless by design — these own execute, not chrome: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt chrome for `graphify`, `lsp`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill`, plus notice chrome for `bg-process-settled` (all skipped when `PI_APEX_UI=0`).
-- There is no custom footer. Pi owns the footer; `prompt-commands` and `graphify` publish status through `ctx.ui.setStatus(key, …)` only.
+- `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables Apex styling, chrome, and custom render hooks. Apex-owned tools remain registered and executable — execution and tool registration are unaffected. The one deliberate exception is the todo panel: it stays mounted and falls back to a plain, uncolored list instead of disappearing.
+- `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task children are spawned with `PI_APEX_UI=0` so workers never paint chrome.
+- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt chrome to several of these, skipped entirely when `PI_APEX_UI=0`.
+- There is no custom footer. Pi owns the footer.
 
 ### Rendering Constraints
 
@@ -99,72 +75,15 @@ These come from real Windows Terminal failures and still apply to any custom ren
 - Use narrow BMP glyphs. No wide, ambiguous-width, or combining characters.
 - Do not scan the full session during a render. Cache derived data outside the render path.
 
+### Observatory Landing Screen
+
+The blank-chat landing screen (shark wordmark + star field) lives in `agent/extensions/apex/observatory/`, mounted via `ctx.ui.setHeader(...)`. Full art tiers, wordmark rules, preview-harness commands, and rendering constraints are documented in [`agent/extensions/apex/observatory/README.md`](agent/extensions/apex/observatory/README.md) — read it before touching anything under `observatory/`.
+
 ### Crash And Stability Diagnostics
 
-`crash-logger.ts` loads at module scope (before the first paint) and installs, independent of `PI_APEX_UI`:
+`crash-logger.ts` installs the segmenter shield, last-phase breadcrumbs, and terminal-restore watchdog independent of `PI_APEX_UI`. See `CONTEXT.md` § "Long-session and subagent stability" for the full mechanism.
 
-- **Segmenter shield** (`crash-logger/internal/segmenter-safety.ts`, mirrored in `apex/internal/runtime/`): replaces grapheme `Intl.Segmenter.prototype.segment` with a lazy JS extended-grapheme scan, because native ICU grapheme segmentation can abort the Node process on Windows with no JS stack. Word/sentence granularity stays native so editor word navigation keeps `isWordLike`. `PI_SEGMENTER_NATIVE=1` restores native graphemes for diagnostics only.
-- **Last-phase breadcrumbs**: each pid writes its current phase to `agent/.tmp/last-phase-<pid>`; the watchdog copies it into `pi-lifecycle.log` / `pi-crash.log` as `last-phase: …` when the parent disappears uncleanly.
-- **Terminal restore watchdog**: restores raw/mouse mode when a session dies without `session_shutdown`.
-
-Logs: `agent/pi-crash.log` (fatal JS), `agent/pi-render.log` (render failures, large-input segmenter warnings), `agent/pi-lifecycle.log` (compaction, exits).
-
-When a session dies uncleanly, read those logs before blaming a provider or subagent, and run once with `PI_APEX_UI=0` to isolate the presentation layer. A clean noninteractive import or smoke test proves syntax only — acceptance for UI changes requires sustained interactive use in Windows Terminal (fullscreen mode) with a large `bash` result, a session resume, and a real delegated `task`.
-
-## Observatory Landing Screen
-
-The blank-chat landing screen lives in `apex/observatory/` and is mounted by `apex-ui.ts` via `ctx.ui.setHeader(...)` as Pi's startup header — not an above-editor widget — so with `quietStartup` it is the opening screen and has the full `OBSERVATORY_MAX_LINES` (25) budget rather than the 10-line above-editor cap.
-
-```text
-observatory/
-├── observatory.ts        composition, inventory, glyph shark tiers, selectors
-├── observatory-orb.ts    focus/selection state
-├── shark-art.ts          truecolor pixel bitmaps (ULTRA / WIDE / MID)
-├── pixel-art.ts          half-block pixel renderer + truecolor detection
-├── star-field.ts         background star rows
-├── preview.mjs           full-screen harness
-└── sky-preview.mjs       star-field-only harness
-```
-
-### Shark Wordmark
-
-A hand-authored side-profile great white swimming left over a quiet star field (`logoBlock` in `observatory.ts`). Tiers, widest first:
-
-| Tier | Source | Requires |
-| --- | --- | --- |
-| `SHARK_PIXELS_ULTRA` (112 cols) | `shark-art.ts` | truecolor |
-| `SHARK_PIXELS_WIDE` (72) | `shark-art.ts` | truecolor |
-| `SHARK_PIXELS_MID` (48) | `shark-art.ts` | truecolor |
-| `SHARK_LOGO` (56) | `observatory.ts` | width ≥ `FULL_MIN` (62) |
-| `SHARK_COMPACT` (18) | `observatory.ts` | width ≥ `MINIMAL_MIN` (20) |
-| `SHARK_MINIMAL` (`▴`) | `observatory.ts` | any |
-
-Pixel tiers are skipped entirely without 24-bit color, so the glyph tiers are what most terminals show.
-
-- Tier widths and row heights are load-bearing. Changing art must update the matching `*_WIDTH` and `*_KEYS` arrays together or `indent()`/`center()` breaks. Logo height also feeds `constellationBlock`'s row budget.
-- Countershading comes from color, not glyph noise: per-row theme keys in `SHARK_LOGO_KEYS`/`SHARK_COMPACT_KEYS`, plus one `null`-keyed lateral-line row rendered by `lateralLine()`.
-- Geometry is static on focus. When the orb is active only the lateral line's color changes; art arrays never vary by selection or focus.
-- Use narrow block glyphs (`█ ▓ ▒ ░ ▀ ▄`) only.
-- Any silhouette change must stay recognizably a shark in profile at the full tier and keep the compact-tier cues: dorsal fin, snout, belly, forked tail.
-
-### Preview Harness
-
-Do not iterate on this surface through screenshots.
-
-```
-node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs
-node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs 80
-node --experimental-transform-types agent/extensions/apex/observatory/sky-preview.mjs
-```
-
-Renders four inventory scenarios (populated user, balanced project, extension pathways, empty) at 40/60/80/100/120/160 columns — or the widths passed as arguments — approximates apex-dark on a dark background, flags `TOO TALL` / `OVERFLOW`, and exits nonzero on any bound failure. Check all three responsive glyph tiers (≥62, 20–61, <20 columns) when touching the art, and keep the harness in sync when `buildObservatory`/`renderObservatory` signatures change.
-
-### Constraints
-
-- Pure passive string rendering: no timers, no `requestRender()`, no Pi TUI `Text`, `Markdown`, or `Container`.
-- Keep within `OBSERVATORY_MAX_LINES` (25) and stay dense rather than padded with blank lines.
-- Color only through `theme.fg(key, text)`.
-- The workspace signal must stay truthful — fall back to `AWAITING A SIGNAL` when no project-scoped resources exist.
+Logs: `agent/pi-crash.log` (fatal JS), `agent/pi-render.log` (render failures), `agent/pi-lifecycle.log` (compaction, exits). Read these before blaming a provider or subagent on an unclean session death.
 
 ## Validation
 

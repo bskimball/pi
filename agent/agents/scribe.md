@@ -1,10 +1,10 @@
 ---
 name: scribe
 description: Editorial writing specialist for blog posts, articles, documentation narratives, READMEs, changelogs, guides, launch copy, essays, and polished long-form prose, including Markdown docs inside code repositories.
-model: local-proxy/claude-sonnet-5
+model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
-  - local-proxy/gemini-3.7-flash-high
+  - local-proxy/claude-sonnet-5
 thinking: low
 tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: true

@@ -567,6 +567,9 @@ describe("/graphify handoff", () => {
 
 describe("system prompt and stale", () => {
   it("injects wiki-first system block and stale warning", async () => {
+    const prev = process.env.PI_SUBAGENT;
+    delete process.env.PI_SUBAGENT;
+    try {
     const root = tempDir();
     writeArtifacts(root, { wiki: true, report: true, graph: true, needsUpdate: true });
     const ext = loadExtension();
@@ -583,6 +586,27 @@ describe("system prompt and stale", () => {
     const block = buildSystemBlock(detectArtifacts(root, "graphify-out")!, false, root);
     assert.ok(block.split("\n").length <= 10);
     assert.equal(toProjectRelPath(root, join(root, "graphify-out", "wiki", "index.md")), "graphify-out/wiki/index.md");
+    } finally {
+      if (prev === undefined) delete process.env.PI_SUBAGENT;
+      else process.env.PI_SUBAGENT = prev;
+    }
+  });
+
+  it("does not inject the wiki-first system block for subagents", async () => {
+    const prev = process.env.PI_SUBAGENT;
+    process.env.PI_SUBAGENT = "1";
+    try {
+      const root = tempDir();
+      writeArtifacts(root, { wiki: true, report: true, graph: true, needsUpdate: true });
+      const ext = loadExtension();
+      const event = { systemPrompt: "base" };
+      await ext.emit("before_agent_start", event, { cwd: root, ui: { setStatus() {} } });
+      assert.equal(event.systemPrompt, "base");
+      assert.doesNotMatch(event.systemPrompt, /## Graphify/);
+    } finally {
+      if (prev === undefined) delete process.env.PI_SUBAGENT;
+      else process.env.PI_SUBAGENT = prev;
+    }
   });
 
   it("edit marks stale once; graphify update clears in-session stale; needs_update stays", async () => {

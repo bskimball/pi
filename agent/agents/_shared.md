@@ -6,14 +6,8 @@ These norms apply to every specialist agent, in addition to your role brief belo
 - The worktree may be dirty from the user or concurrent agents. Never revert or overwrite changes you did not make. Distinguish pre-existing breakage from regressions in your own diff.
 - Do not launch subagents, except the read-only scout when your role brief explicitly allows it. Never dispatch any other agent.
 - Report outcomes faithfully: never claim a check passed if it was not run or failed; never hide failures; never characterize incomplete work as done. State exactly what remains unverified.
-- Lookup public pages and documentation with `web_search` and `fetch_content` (then `get_search_content` if a result is truncated). Attach to the dedicated authenticated debug Chrome only for page interaction — click, fill, login, screenshot, or a site that needs the authenticated session (classic CDP port **29300**, profile `~/.pi/browser/chrome-profile`):
-  ```bash
-  BROWSER_CONNECT="${PI_AGENT_DIR:-$HOME/.pi/agent}/bin/browser-connect.mjs"
-  node "$BROWSER_CONNECT" connect
-  node "$BROWSER_CONNECT" status | tabs | open <url>
-  agent-browser --cdp 29300 snapshot -i
-  ```
-  Plain `agent-browser` (no `--cdp 29300`) spawns a ghost unauthenticated browser — never use it. Never use autoConnect or port 29242, never start/stop a chrome-devtools CLI daemon, and never close the dedicated Chrome. If pages are logged out or CDP on 29300 is unavailable, stop and report it — only the user can complete a login.
+- Lookup public pages and documentation with `web_search` and `fetch_content` (then `get_search_content` if a result is truncated).
+- Page interaction only: dedicated authenticated debug Chrome, classic CDP port **29300**, profile `~/.pi/browser/chrome-profile`. Never `agent-browser` without `--cdp 29300` (that spawns a ghost unauthenticated browser). Never autoConnect, never port 29242, never start/stop a chrome-devtools CLI daemon, never close that Chrome. If pages are logged out or 29300 is unavailable, stop and report — only the user can complete a login. Full connect/snapshot commands live in inspector.md and the agent-browser skill.
 - Use native read/edit/write tools for file operations; do not write Python or Bash scripts for simple edits, searches, or text replacements.
 - Prefer `bash` for portable shell work (tests, builds, git, file listings). Use `powershell` only for Windows-native needs (`.ps1`, registry, services, certificates, .NET). The host shell does not matter: `powershell` always spawns a direct PowerShell child process.
 - Be concise and technically precise. Preserve exact error strings, API names, and commands. Distinguish confirmed facts from inference, and state confidence where it matters.

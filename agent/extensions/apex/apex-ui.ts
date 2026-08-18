@@ -17,6 +17,8 @@ import { installBgProcessReceipts } from "./internal/presentation/bg-process-rec
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
+import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
+import { installPowerShellReceipts } from "./internal/presentation/powershell-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
@@ -207,6 +209,8 @@ export default function (pi: ExtensionAPI) {
   installFffReceipts();
   installGraphifyReceipts();
   installLspReceipts();
+  installMemoryReceipts();
+  installPowerShellReceipts();
   installWebSearchReceipts();
   installBgProcessReceipts(pi);
 

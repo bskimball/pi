@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  applyUserProfileToSystemPrompt,
   loadUserProfile,
   MAX_USER_PROFILE_CHARS,
   USER_PROFILE_FILE,
@@ -41,4 +42,17 @@ test("bounds injected private context", () => {
     );
     assert.equal(loadUserProfile(directory)?.length, MAX_USER_PROFILE_CHARS);
   });
+});
+
+test("applyUserProfileToSystemPrompt injects when profile present and not subagent", () => {
+  const next = applyUserProfileToSystemPrompt("base", "Hello", false);
+  assert.equal(next, "base\n\n# Private user context\n\nHello");
+});
+
+test("applyUserProfileToSystemPrompt skips subagents even when profile present", () => {
+  assert.equal(applyUserProfileToSystemPrompt("base", "Hello", true), undefined);
+});
+
+test("applyUserProfileToSystemPrompt skips missing profile", () => {
+  assert.equal(applyUserProfileToSystemPrompt("base", undefined, false), undefined);
 });

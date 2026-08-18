@@ -620,6 +620,7 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    if (process.env.PI_SUBAGENT === "1") return;
     const cwd = ctx.cwd;
     if (!cwd) return;
     const { config, artifacts } = refresh(cwd);
