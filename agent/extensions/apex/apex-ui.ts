@@ -14,6 +14,7 @@ import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
 import { installBgProcessReceipts } from "./internal/presentation/bg-process-receipt.ts";
+import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
@@ -203,6 +204,7 @@ export default function (pi: ExtensionAPI) {
   // Headless extensions own execute. Apex skins their ToolExecutionComponent
   // receipts here because first registration wins the whole tool and Apex
   // cannot import those extensions. Settlement notices use a message renderer.
+  installFffReceipts();
   installGraphifyReceipts();
   installLspReceipts();
   installWebSearchReceipts();
