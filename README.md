@@ -87,16 +87,16 @@ apex/apex-ui.ts
 ├── builtin-tools.ts
 ├── internal/edit/               unified edit tool + row edit planner
 ├── internal/todo/               todo_write / todo_read + docked todo panel
-├── internal/presentation/       receipts, diffs, graphify-receipt.ts, the PI_APEX_UI=0 gate
+├── internal/presentation/       receipts, diffs, headless-tool wraps, the PI_APEX_UI=0 gate
 ├── internal/runtime/            segmenter shield, last-phase, terminal-restore, agent discovery
 └── observatory/                 blank-chat landing screen (see below)
 ```
 
-Apex owns the Observatory startup header, styled receipts for the builtin `read`/`bash`/`edit`/`write` tools, the session todo panel (`todo_write`/`todo_read`), the unified edit tool, and receipt chrome for the otherwise-headless `graphify` tool (`internal/presentation/graphify-receipt.ts`). `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo panel, which stays mounted but switches to a plain, uncolored list.
+Apex owns the Observatory startup header, styled receipts for the builtin `read`/`bash`/`edit`/`write` tools, the session todo panel (`todo_write`/`todo_read`), the unified edit tool, and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo panel, which stays mounted but switches to a plain, uncolored list.
 
 `task/` renders its own delegated-worker activity cards through a separate gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0` so they never paint their own chrome.
 
-Headless, stock-rendered extensions: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`. `graphify` stays headless for its own execute/status output; Apex attaches receipt chrome on top unless `PI_APEX_UI=0`.
+Headless extensions own execute only: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt/notice chrome on top unless `PI_APEX_UI=0`.
 
 There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publish status text into it via `ctx.ui.setStatus(...)`.
 

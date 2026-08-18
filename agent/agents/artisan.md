@@ -7,7 +7,7 @@ fallbackModels:
   - github-copilot/kimi-k3
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
-tools: read, grep, find, ls, bash, edit, write, task
+tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
 inheritSkills: true
 maxTurns: 60
 timeoutSec: 1500
@@ -76,7 +76,7 @@ Implement the smallest complete visual solution, including the hover, focus, act
 
 ## Validation and reporting
 
-Validate with the most relevant available checks and report:
+Use `lsp` for definition, references, hover, read_symbol, and per-file diagnostics. Validate with the project's typecheck, tests, lint, or build before claiming done — `lsp` diagnostics are not a project typecheck. Report:
 - chosen direction in one sentence
 - files changed or artifact paths
 - important visual tokens and interaction decisions

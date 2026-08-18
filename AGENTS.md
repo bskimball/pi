@@ -68,6 +68,11 @@ apex/apex-ui.ts                      interactive layout, working indicator, head
 │   ├── presentation.ts              withApexPresentation() — the PI_APEX_UI=0 gate
 │   ├── tool-receipt.ts              bounded tool receipts
 │   ├── graphify-receipt.ts          Apex receipts for the headless graphify tool
+│   ├── lsp-receipt.ts               Apex receipts for the headless lsp tool
+│   ├── web-search-receipt.ts        Apex receipts for web_search / fetch_content
+│   ├── bg-process-receipt.ts        Apex receipts for bg_start/status/list/kill, plus notice chrome for bg-process-settled
+│   ├── notice-view.ts               bounded background-notice receipt
+│   ├── headless-receipts.ts         ToolExecutionComponent wrap for headless tools
 │   ├── edit-diff.ts                 diff rendering for edit/write
 │   ├── receipt-tree.ts              receipt tree structures
 │   ├── render-safety.ts             guards Pi TUI text/markdown renderers
@@ -80,7 +85,7 @@ apex/apex-ui.ts                      interactive layout, working indicator, head
 
 - `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables Apex styling, chrome, and custom render hooks. Apex-owned tools remain registered and executable; `apex-ui.ts` does not install custom presentation hooks, header/chrome, or styled widgets, and `withApexPresentation()` strips `renderCall`/`renderResult`/`renderShell` so tools fall back to Pi's stock boxed renderer over model-facing text. Execution and tool registration are unaffected. The one deliberate exception is the todo panel: `internal/todo/` keeps its `aboveEditor` widget mounted and switches it to `renderPlainTodoList()` — no color, no tree rail, no `alt+t` / `/todos` toggle — so the plan stays visible in fallback mode. It follows the styled panel's lifecycle: mount on write, rebuild on `session_start`/`session_tree`, clear on `session_shutdown` and fresh sessions.
 - `task/` renders its own cards through its own gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task child processes are spawned with `PI_APEX_UI=0` so workers never paint chrome.
-- Headless by design — these use Pi's stock rendering: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`. `graphify` stays headless for execute and status; Apex attaches its receipt chrome via `graphify-receipt.ts` (skipped when `PI_APEX_UI=0`).
+- Headless by design — these own execute, not chrome: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt chrome for `graphify`, `lsp`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill`, plus notice chrome for `bg-process-settled` (all skipped when `PI_APEX_UI=0`).
 - There is no custom footer. Pi owns the footer; `prompt-commands` and `graphify` publish status through `ctx.ui.setStatus(key, …)` only.
 
 ### Rendering Constraints
@@ -165,6 +170,7 @@ Renders four inventory scenarios (populated user, balanced project, extension pa
 
 ```
 npm run typecheck                                        # tsc --noEmit, whole config
+npm run lint                                             # oxlint, .oxlintrc.json defaults
 node --experimental-transform-types --test agent/extensions/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/lsp/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/apex/test/*.test.ts

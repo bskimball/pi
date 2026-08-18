@@ -1,10 +1,12 @@
 {
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "oxlint": "^1.78.0",
     "typescript": "^7.0.2"
   },
   "dependencies": {

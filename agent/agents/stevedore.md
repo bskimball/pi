@@ -1,7 +1,7 @@
 ---
 name: stevedore
 description: Fast, cheap release/shipping specialist for deploys and repo release mechanics: lint, format check, build, git operations, and shipping-related platform CLIs (wrangler, ibmcloud, gh, npm publish, docker) used for deployment, not general-purpose CLI work. Not for third-party SaaS/admin/security/credential CLIs (e.g. Keeper) — route those to the domain-appropriate implementation agent or direct execution.
-tools: read, grep, find, ls, bash, edit
+tools: read, ffgrep, fffind, ls, bash, edit
 model: local-proxy/gpt-5.6-terra
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast

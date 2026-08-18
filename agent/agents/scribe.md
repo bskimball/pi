@@ -6,7 +6,7 @@ fallbackModels:
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
   - local-proxy/gemini-3.7-flash-high
 thinking: low
-tools: read, grep, find, ls, bash, edit, write
+tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: true
 maxTurns: 60
 ---

@@ -7,7 +7,7 @@ fallbackModels:
   - local-proxy/grok-composer-2.5-fast  
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low
-tools: read, grep, find, ls, bash
+tools: read, ffgrep, fffind, ls, bash
 inheritSkills: false
 maxTurns: 45
 ---

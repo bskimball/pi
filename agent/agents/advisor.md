@@ -8,7 +8,7 @@ fallbackModels:
   - local-proxy/claude-fable-5
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
-tools: read, grep, find, ls, edit, write, task
+tools: read, ffgrep, fffind, ls, edit, write, task
 inheritSkills: true
 maxTurns: 40
 timeoutSec: 900

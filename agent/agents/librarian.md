@@ -6,7 +6,7 @@ fallbackModels:
   - local-proxy/gemini-3.7-flash-high
   - local-proxy/claude-sonnet-5
 thinking: medium
-tools: read, grep, find, ls, bash, web_search, fetch_content, get_search_content
+tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content
 inheritSkills: true
 maxTurns: 50
 ---

@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "node"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "node": true
+  },
+  "ignorePatterns": [
+    ".tmp/**",
+    "graphify-out/**",
+    "reference/**",
+    "**/node_modules/**"
+  ],
+  "rules": {
+    "no-control-regex": "off",
+    "no-misleading-character-class": "off",
+    "no-unused-vars": "warn",
+    "no-useless-escape": "warn",
+    "unicorn/prefer-string-starts-ends-with": "warn",
+    "unicorn/no-useless-spread": "warn",
+    "unicorn/no-new-array": "warn",
+    "unicorn/no-useless-fallback-in-spread": "warn"
+  }
+}

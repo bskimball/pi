@@ -7,12 +7,13 @@ import {
 import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
 const {
-  GRAPHIFY_RECEIPT_TOOL,
-  graphifyOwnsPresentation,
-  graphifyReceiptArg,
-  graphifyReceiptRenderers,
-  installGraphifyReceipts,
-} = await import("../internal/presentation/graphify-receipt.ts");
+  LSP_RECEIPT_TOOL,
+  installLspReceipts,
+  lspOwnsPresentation,
+  lspReceiptArg,
+  lspReceiptRenderers,
+  shortLspPath,
+} = await import("../internal/presentation/lsp-receipt.ts");
 
 const theme = {
   fg: (_key: string, text: string) => text,
@@ -51,49 +52,114 @@ function stubUi() {
   return { requestRender() {} };
 }
 
-describe("apex graphify receipts", () => {
+describe("apex lsp receipts", () => {
+  it("shortens long paths to the last two segments", () => {
+    assert.equal(shortLspPath("agent/extensions/lsp/index.ts"), "lsp/index.ts");
+    assert.equal(
+      shortLspPath("C:\\Users\\bskim\\.pi\\agent\\extensions\\lsp\\index.ts"),
+      "lsp/index.ts",
+    );
+    assert.equal(shortLspPath("index.ts"), "index.ts");
+  });
+
   it("formats a compact header argument per operation", () => {
     assert.equal(
-      graphifyReceiptArg(
+      lspReceiptArg(
         {
-          operation: "query",
-          question: "How does auth work?",
-          mode: "dfs",
-          scope: "runtime",
-          budget: 1500,
+          operation: "hover",
+          path: "agent/extensions/lsp/index.ts",
+          line: 12,
+          column: 3,
         },
         80,
       ),
-      "query How does auth work? dfs runtime 1500",
+      "hover lsp/index.ts:12:3",
     );
     assert.equal(
-      graphifyReceiptArg(
+      lspReceiptArg(
         {
-          operation: "path",
-          from: "AuthModule",
-          to: "Database",
-          scope: "runtime",
-          budget: 1500,
+          operation: "references",
+          path: "src/client.ts",
+          line: 40,
+          column: 1,
+          includeDeclaration: false,
+          limit: 20,
         },
         80,
       ),
-      "path AuthModule -> Database",
+      "references src/client.ts:40:1 no-decl limit 20",
     );
     assert.equal(
-      graphifyReceiptArg({ operation: "explain", concept: "SwinTransformer" }, 80),
-      "explain SwinTransformer",
+      lspReceiptArg(
+        { operation: "workspace_symbols", query: "LspManager", path: "src/index.ts" },
+        80,
+      ),
+      "workspace_symbols LspManager src/index.ts",
+    );
+    assert.equal(
+      lspReceiptArg(
+        {
+          operation: "read_symbol",
+          query: "formatHover",
+          path: "agent/extensions/lsp/format.ts",
+          context: 3,
+        },
+        80,
+      ),
+      "read_symbol formatHover lsp/format.ts ctx 3",
+    );
+    assert.equal(
+      lspReceiptArg(
+        {
+          operation: "definition",
+          path: "src/client.ts",
+          line: 8,
+          column: 2,
+        },
+        80,
+      ),
+      "definition src/client.ts:8:2",
+    );
+    assert.equal(
+      lspReceiptArg(
+        { operation: "document_symbols", path: "src/main.ts", limit: 40 },
+        80,
+      ),
+      "document_symbols src/main.ts limit 40",
+    );
+    assert.equal(
+      lspReceiptArg({ operation: "diagnostics", path: "src/main.ts" }, 80),
+      "diagnostics src/main.ts",
+    );
+    assert.equal(
+      lspReceiptArg(
+        {
+          operation: "hover",
+          path: "src/a.ts",
+          line: 4,
+          column: 2,
+          limit: 5,
+        },
+        80,
+      ),
+      "hover src/a.ts:4:2",
     );
   });
 
   it("renders an Apex receipt instead of boxed JSON args", () => {
-    const args = { operation: "query", question: "How does auth work?" };
+    const args = {
+      operation: "definition",
+      path: "agent/extensions/lsp/index.ts",
+      line: 20,
+      column: 1,
+    };
     const ctx = context(args);
-    const call = graphifyReceiptRenderers
+    const call = lspReceiptRenderers
       .renderCall(args, theme, ctx)
       .render(80)
       .join("\n");
-    assert.match(call, /graphify/);
-    assert.match(call, /query How does auth work\?/);
+    assert.match(call, /lsp/);
+    assert.match(call, /definition lsp\/index\.ts:20:1/);
     assert.doesNotMatch(call, /┌|┐|└|┘/);
     assert.doesNotMatch(call, /"operation"/);
 
@@ -101,28 +167,28 @@ describe("apex graphify receipts", () => {
       content: [
         {
           type: "text",
-          text: "AuthModule talks to Database via SessionStore.\nSecond line of answer.",
+          text: "1. C:\\Users\\bskim\\.pi\\agent\\extensions\\lsp\\index.ts:20:1\n2. C:\\Users\\bskim\\.pi\\agent\\extensions\\lsp\\manager.ts:10:3",
         },
       ],
     };
-    const rendered = graphifyReceiptRenderers
+    const rendered = lspReceiptRenderers
       .renderResult(result, { expanded: false, isPartial: false }, theme, ctx)
       .render(80);
     const text = rendered.join("\n");
-    assert.match(text, /graphify/);
-    assert.match(text, /AuthModule talks to Database/);
+    assert.match(text, /lsp/);
+    assert.match(text, /index\.ts:20:1/);
     assert.doesNotMatch(text, /┌|┐|└|┘/);
     assert.ok(rendered.every((line: string) => safeVisibleWidth(line) <= 80));
   });
 
   it("blanks the call row once the result receipt exists", () => {
-    const args = { operation: "explain", concept: "AuthModule" };
+    const args = { operation: "hover", path: "src/a.ts", line: 4, column: 2 };
     const ctx = context(args);
-    const callComponent = graphifyReceiptRenderers.renderCall(args, theme, ctx);
-    assert.match(callComponent.render(80).join("\n"), /explain AuthModule/);
+    const callComponent = lspReceiptRenderers.renderCall(args, theme, ctx);
+    assert.match(callComponent.render(80).join("\n"), /hover src\/a\.ts:4:2/);
 
-    graphifyReceiptRenderers.renderResult(
-      { content: [{ type: "text", text: "AuthModule owns session cookies." }] },
+    lspReceiptRenderers.renderResult(
+      { content: [{ type: "text", text: "function foo(): void" }] },
       { expanded: false, isPartial: false },
       theme,
       ctx,
@@ -130,29 +196,29 @@ describe("apex graphify receipts", () => {
     assert.deepEqual(callComponent.render(80), []);
   });
 
-  it("wraps graphify ToolExecutionComponent getters and leaves others alone", () => {
-    withApexUi("1", () => installGraphifyReceipts());
+  it("wraps lsp ToolExecutionComponent getters and leaves others alone", () => {
+    withApexUi("1", () => installLspReceipts());
     const proto = ToolExecutionComponent.prototype as any;
 
-    const graphify = {
-      toolName: GRAPHIFY_RECEIPT_TOOL,
-      toolDefinition: { name: "graphify" },
+    const lsp = {
+      toolName: LSP_RECEIPT_TOOL,
+      toolDefinition: { name: "lsp" },
     };
-    assert.equal(graphifyOwnsPresentation(graphify), false);
-    assert.equal(proto.getCallRenderer.call(graphify), graphifyReceiptRenderers.renderCall);
+    assert.equal(lspOwnsPresentation(lsp), false);
+    assert.equal(proto.getCallRenderer.call(lsp), lspReceiptRenderers.renderCall);
     assert.equal(
-      proto.getResultRenderer.call(graphify),
-      graphifyReceiptRenderers.renderResult,
+      proto.getResultRenderer.call(lsp),
+      lspReceiptRenderers.renderResult,
     );
-    assert.equal(proto.getRenderShell.call(graphify), "self");
-    assert.equal(proto.hasRendererDefinition.call(graphify), true);
+    assert.equal(proto.getRenderShell.call(lsp), "self");
+    assert.equal(proto.hasRendererDefinition.call(lsp), true);
 
     const ownCall = () => ({ render: () => ["OWN-CALL"], invalidate() {} });
     const ownResult = () => ({ render: () => ["OWN-RESULT"], invalidate() {} });
     const ownedBoth = {
-      toolName: GRAPHIFY_RECEIPT_TOOL,
+      toolName: LSP_RECEIPT_TOOL,
       toolDefinition: {
-        name: "graphify",
+        name: "lsp",
         renderCall: ownCall,
         renderResult: ownResult,
       },
@@ -162,24 +228,24 @@ describe("apex graphify receipts", () => {
     assert.equal(proto.getRenderShell.call(ownedBoth), "default");
 
     const ownedCallOnly = {
-      toolName: GRAPHIFY_RECEIPT_TOOL,
-      toolDefinition: { name: "graphify", renderCall: ownCall },
+      toolName: LSP_RECEIPT_TOOL,
+      toolDefinition: { name: "lsp", renderCall: ownCall },
     };
     assert.equal(proto.getCallRenderer.call(ownedCallOnly), ownCall);
     assert.equal(proto.getResultRenderer.call(ownedCallOnly), undefined);
     assert.equal(proto.getRenderShell.call(ownedCallOnly), "default");
 
     const ownedShell = {
-      toolName: GRAPHIFY_RECEIPT_TOOL,
-      toolDefinition: { name: "graphify", renderShell: "default" },
+      toolName: LSP_RECEIPT_TOOL,
+      toolDefinition: { name: "lsp", renderShell: "default" },
     };
-    assert.equal(graphifyOwnsPresentation(ownedShell), false);
+    assert.equal(lspOwnsPresentation(ownedShell), false);
     assert.equal(proto.getRenderShell.call(ownedShell), "self");
 
     const explicitDefaultShell = {
-      toolName: GRAPHIFY_RECEIPT_TOOL,
+      toolName: LSP_RECEIPT_TOOL,
       toolDefinition: {
-        name: "graphify",
+        name: "lsp",
         renderCall: ownCall,
         renderShell: "default",
       },
@@ -187,8 +253,8 @@ describe("apex graphify receipts", () => {
     assert.equal(proto.getRenderShell.call(explicitDefaultShell), "default");
 
     const other = {
-      toolName: "bg_start",
-      toolDefinition: { name: "bg_start" },
+      toolName: "bash",
+      toolDefinition: { name: "bash" },
     };
     assert.equal(proto.getCallRenderer.call(other), undefined);
     assert.equal(proto.getResultRenderer.call(other), undefined);
@@ -197,15 +263,20 @@ describe("apex graphify receipts", () => {
 
   it("renders a real ToolExecutionComponent as an Apex receipt", () => {
     initTheme("dark");
-    withApexUi("1", () => installGraphifyReceipts());
+    withApexUi("1", () => installLspReceipts());
 
-    const args = { operation: "query", question: "How does auth work?" };
+    const args = {
+      operation: "hover",
+      path: "src/index.ts",
+      line: 20,
+      column: 1,
+    };
     const component = new ToolExecutionComponent(
-      "graphify",
+      "lsp",
       "call-1",
       args,
       { showImages: false },
-      { name: "graphify" } as any,
+      { name: "lsp" } as any,
       stubUi() as any,
       process.cwd(),
     );
@@ -214,7 +285,7 @@ describe("apex graphify receipts", () => {
       content: [
         {
           type: "text",
-          text: "AuthModule talks to Database via SessionStore.",
+          text: "function LspManager(): void",
         },
       ],
       isError: false,
@@ -222,11 +293,11 @@ describe("apex graphify receipts", () => {
 
     const lines = component.render(80);
     const text = lines.join("\n");
-    assert.match(text, /graphify/);
-    assert.match(text, /query How does auth work\?/);
-    assert.match(text, /AuthModule talks to Database/);
+    assert.match(text, /lsp/);
+    assert.match(text, /hover src\/index\.ts:20:1/);
+    assert.match(text, /function LspManager/);
     assert.doesNotMatch(text, /┌|┐|└|┘/);
-    assert.equal((text.match(/graphify/g) ?? []).length, 1);
+    assert.equal((text.match(/lsp/g) ?? []).length, 1);
     assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
   });
 
@@ -236,7 +307,7 @@ describe("apex graphify receipts", () => {
     const before = proto.getCallRenderer;
     process.env.PI_APEX_UI = "0";
     try {
-      installGraphifyReceipts();
+      installLspReceipts();
       assert.equal(proto.getCallRenderer, before);
     } finally {
       if (previous === undefined) delete process.env.PI_APEX_UI;

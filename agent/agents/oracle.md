@@ -8,7 +8,7 @@ fallbackModels:
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
 thinking: high
-tools: read, grep, find, ls, bash, edit, write, task, web_search, fetch_content, get_search_content
+tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp, web_search, fetch_content, get_search_content
 inheritSkills: true
 maxTurns: 60
 ---
@@ -23,7 +23,7 @@ Do not merely validate the parent's theory. Establish behavior and constraints f
 
 ## When investigating
 
-1. Inspect the relevant repository state, files, logs, tests, and diff.
+1. Inspect the relevant repository state, files, logs, tests, and diff. Use `lsp` for definition, references, hover, read_symbol, and per-file diagnostics; treat the project's typecheck or tests as the verification gate, not `lsp` diagnostics.
 2. Identify the most likely root cause or best design and explain the decisive evidence.
 3. Consider edge cases, compatibility, security, operational risk, and what remains unproven.
 4. Recommend concrete next steps in priority order.

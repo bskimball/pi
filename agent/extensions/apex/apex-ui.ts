@@ -13,8 +13,11 @@ import {
 import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
+import { installBgProcessReceipts } from "./internal/presentation/bg-process-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
+import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
+import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
@@ -197,10 +200,13 @@ export default function (pi: ExtensionAPI) {
   // It keeps malformed model/extension values from terminating the TUI while
   // preserving the full Apex UI.
   installRenderSafety();
-  // Graphify stays a headless extension (execute + status only). Apex skins
-  // its ToolExecutionComponent receipts here because first registration wins
-  // the whole tool and Apex cannot import graphify.ts.
+  // Headless extensions own execute. Apex skins their ToolExecutionComponent
+  // receipts here because first registration wins the whole tool and Apex
+  // cannot import those extensions. Settlement notices use a message renderer.
   installGraphifyReceipts();
+  installLspReceipts();
+  installWebSearchReceipts();
+  installBgProcessReceipts(pi);
 
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
