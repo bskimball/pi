@@ -121,13 +121,17 @@ describe("strict orchestrator prompt", () => {
     assert.match(active.systemPrompt, /reaches acceptance stops/);
     assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
     assert.match(active.systemPrompt, /After all writers have settled/);
+    assert.match(
+      active.systemPrompt,
+      /Every delegated implementation diff gets a fresh-eyes Oracle review/,
+    );
     assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
     assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
     assert.match(
       active.systemPrompt,
       /Never run integrated gates inside Artisan\/Machinist/,
     );
-    assert.match(active.systemPrompt, /Route browser and screenshot checks to Inspector/);
+    assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
     assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
 
     await state.orchestrate("off");

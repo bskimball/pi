@@ -41,10 +41,10 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | --- | --- |
 | `advisor` | Strategic planner consulted before consequential approaches, when stuck, or when changing direction. Advisory only. |
 | `artisan` | Bold visual-design and frontend specialist for substantial UI implementation, design judgment, exploratory refinement, diagrams, slides, and data visualization. |
-| `inspector` | Fast, cheap read-only UI verifier for bounded browser interaction, responsive checks, screenshots, and focused visual regression analysis after implementation. |
+| `inspector` | Fast, cheap read-only verifier for bounded live-browser interaction, responsive checks, console/network evidence, screenshots, and focused visual regression analysis after implementation. |
 | `librarian` | Remote source-code researcher for external libraries, framework internals, and cross-repository investigation. |
 | `machinist` | Workhorse coding specialist for large implementation chunks, backend logic, refactors, migrations, bug fixes, and tests. |
-| `oracle` | Deep independent code reviewer and debugger for difficult bugs, conflicting evidence, and high-stakes decisions. |
+| `oracle` | Deep independent reviewer of actual code and diffs, plus debugger for difficult bugs, conflicting evidence, and high-stakes decisions. |
 | `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, and diagrams. |
 | `scout` | Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
