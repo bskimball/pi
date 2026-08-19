@@ -1,7 +1,7 @@
 {
   "defaultModel": "gemini-3.7-flash-high",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:@ff-labs/pi-fff"
