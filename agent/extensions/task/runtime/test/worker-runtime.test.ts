@@ -194,6 +194,34 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
+  it("publishes one pinned repaint per non-streaming lifecycle event", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    let repaintRequests = 0;
+    const item = worker({ pinnedInvalidate: () => repaintRequests++ });
+    const eventHooks = hooks();
+
+    for (let index = 0; index < 250; index++) {
+      runtime.handleEvent(
+        item,
+        {
+          type: "tool_execution_start",
+          toolCallId: `call-${index}`,
+          toolName: "read",
+        },
+        eventHooks,
+      );
+      runtime.handleEvent(
+        item,
+        { type: "tool_execution_end", toolCallId: `call-${index}` },
+        eventHooks,
+      );
+    }
+
+    assert.equal(repaintRequests, 500);
+    assert.equal(item.renderVersion, 500);
+    runtime.clearTimers(item);
+  });
+
   it("stores only a bounded tail of assistant result text", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker();

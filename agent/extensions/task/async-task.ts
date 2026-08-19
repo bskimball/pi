@@ -27,8 +27,17 @@ import {
   argsSummary,
   missionFromPrompt,
 } from "./presentation/task-view.ts";
+import {
+  installTaskRenderSafety,
+  paintTaskPinnedSurface,
+} from "./presentation/render-safety.ts";
 import { writeLastPhase } from "./runtime/last-phase.ts";
 import { RpcClient } from "./runtime/rpc-client.ts";
+import {
+  createWorkerIdentity,
+  findWorkerByHandle,
+  findWorkerByInstance,
+} from "./runtime/worker-identity.ts";
 import {
   killProcessTree,
   killProcessTreeSync,
@@ -164,6 +173,8 @@ interface GenerationSnapshot {
 }
 
 interface WorkerView {
+  /** Absent only on historical receipts written before durable identities. */
+  instanceId?: string;
   id: string;
   agent: string;
   mission: string;
@@ -194,6 +205,7 @@ interface AsyncRenderState {
 }
 
 interface Worker extends RuntimeEventWorker {
+  instanceId: string;
   id: string;
   agent: string;
   mission: string;
@@ -235,8 +247,8 @@ function rpcSessionRoot(): string {
   return path.join(os.homedir(), ".pi", "agent", "sessions", "rpc-workers");
 }
 
-function ensureSessionDir(workerId: string): string {
-  const dir = path.join(rpcSessionRoot(), workerId);
+function ensureSessionDir(instanceId: string): string {
+  const dir = path.join(rpcSessionRoot(), instanceId);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -557,6 +569,7 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
+  if (taskPresentationEnabled()) installTaskRenderSafety();
   const agents = discoverAgents();
   const agentList = [...agents.values()]
     .map((agent) => `- ${agent.name}: ${agent.description}`)
@@ -569,6 +582,10 @@ export default function (pi: ExtensionAPI) {
     abortGraceMs: ABORT_GRACE_MS,
   });
   const workers = runtime.workers;
+  const workerByHandle = (id: string): Worker | undefined =>
+    findWorkerByHandle(workers.values(), id);
+  const workerByInstance = (instanceId: string | undefined): Worker | undefined =>
+    findWorkerByInstance(workers, instanceId);
   const compactionReserveTokensByCwd = new Map<string, number>();
   const compactionReserveTokens = (cwd: string): number => {
     const cached = compactionReserveTokensByCwd.get(cwd);
@@ -631,6 +648,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   const workerView = (worker: Worker): WorkerView => ({
+    instanceId: worker.instanceId,
     id: worker.id,
     agent: worker.agent,
     mission: worker.mission,
@@ -1066,9 +1084,9 @@ export default function (pi: ExtensionAPI) {
       model?: string;
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
-    const id = `task_${nextId++}`;
+    const { id, instanceId } = createWorkerIdentity(nextId++);
     writeLastPhase(`task_start:pre-spawn agent=${def.name} id=${id}`);
-    const sessionDir = ensureSessionDir(id);
+    const sessionDir = ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
     const attempts = modelAttempts(def, params.model);
@@ -1080,6 +1098,7 @@ export default function (pi: ExtensionAPI) {
     const modelLabel = model ?? "default model";
 
     const worker: Worker = {
+      instanceId,
       id,
       agent: def.name,
       mission: missionFromPrompt(params.prompt),
@@ -1120,7 +1139,7 @@ export default function (pi: ExtensionAPI) {
       generationStartedAt: Date.now(),
     };
 
-    workers.set(id, worker);
+    workers.set(instanceId, worker);
     if (initial.skipped.length) {
       pushError(
         worker,
@@ -1199,7 +1218,7 @@ export default function (pi: ExtensionAPI) {
         },
       });
     } catch (error) {
-      workers.delete(id);
+      workers.delete(instanceId);
       const message = error instanceof Error ? error.message : String(error);
       return { error: `Failed to spawn ${id}: ${message}` };
     }
@@ -1489,13 +1508,13 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         if (!initial) {
           return new WidthText(() => [textContent(result) || "(no output)"]);
         }
-        const workerId = initial.id;
-        const pinned = workers.get(workerId);
+        const workerInstanceId = initial.instanceId;
+        const pinned = workerByInstance(workerInstanceId);
         if (pinned) {
           pinned.hasPinnedSurface = true;
-          // Task owns only this receipt row. Ask Pi to invalidate it directly;
-          // never patch host/TUI rendering process-wide from the Task extension.
-          pinned.pinnedInvalidate = () => context.invalidate();
+          pinned.pinnedInvalidate = () => {
+            paintTaskPinnedSurface(() => context.invalidate());
+          };
         }
         // Last observed live state, so the card keeps its final appearance if the
         // worker is later reaped out of the registry by pruneSettled.
@@ -1513,7 +1532,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         return new WidthText((width) => {
           // Read the registry on every render so the card never shows a stale
           // snapshot captured at result time.
-          const live = workers.get(workerId);
+          const live = workerByInstance(workerInstanceId);
           if (live) {
             lastView = workerView(live);
             if (live.closed && live.pinnedLifecycle) {
@@ -1566,7 +1585,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(
           `Unknown worker "${id}". Use task_list to see workers.`,
@@ -1594,7 +1613,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       }
       // An observed worker that already owns a pinned task_start card must not
       // get a second full card here; report the observation compactly instead.
-      if (workers.get(view.id)?.hasPinnedSurface) {
+      if (workerByInstance(view.instanceId)?.hasPinnedSurface) {
         const running = view.activities.filter(
           (activity) => activity.status === "running",
         ).length;
@@ -1804,9 +1823,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           outcome,
           note,
           message,
-          lifecycle: workers.get(id ?? "")?.lifecycle,
-          pendingSteer: workers.get(id ?? "")?.pendingSteer,
-          pendingFollowUp: workers.get(id ?? "")?.pendingFollowUp,
+          lifecycle: workerByHandle(id ?? "")?.lifecycle,
+          pendingSteer: workerByHandle(id ?? "")?.pendingSteer,
+          pendingFollowUp: workerByHandle(id ?? "")?.pendingFollowUp,
         },
       });
       if (!id) return textResult("id is required.", true, sendDetails("rejected", "id is required"));
@@ -1814,7 +1833,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         return textResult("message is required.", true, sendDetails("rejected", "message is required"));
       if (!mode)
         return textResult("mode is required.", true, sendDetails("rejected", "mode is required"));
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true, sendDetails("rejected", "unknown worker"));
       }
@@ -2044,7 +2063,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true);
       }
@@ -2223,7 +2242,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         context: ToolRenderContext<AsyncRenderState, any>,
       ) {
         context.state.startedAt ??= Date.now();
-        const worker = args.id ? workers.get(String(args.id)) : undefined;
+        const worker = args.id ? workerByHandle(String(args.id)) : undefined;
         // The worker already owns a canonical pinned card from task_start; a
         // second card here would duplicate title/activity, so stay silent.
         if (worker?.hasPinnedSurface) return new WidthText(() => []);
@@ -2262,7 +2281,11 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         const waitId =
           view?.id ??
           (context.args?.id != null ? String(context.args.id) : undefined);
-        const pinned = waitId ? workers.get(waitId) : undefined;
+        const pinned = view
+          ? workerByInstance(view.instanceId)
+          : waitId
+            ? workerByHandle(waitId)
+            : undefined;
         const resultText = textContent(result);
         const isError = Boolean((result as { isError?: boolean }).isError);
         const isTimeout = /wait timed out/i.test(resultText);
@@ -2339,7 +2362,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       });
       if (!id)
         return textResult("id is required.", true, abortDetails("rejected", "id is required"));
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(
           `Unknown worker "${id}".`,
@@ -2468,7 +2491,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     async execute(_toolCallId, params) {
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true);
       }
@@ -2504,7 +2527,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         context: ToolRenderContext<AsyncRenderState, any>,
       ) {
         const id = cleanOneLine(args.id ?? "worker", 40);
-        const worker = args.id ? workers.get(String(args.id)) : undefined;
+        const worker = args.id ? workerByHandle(String(args.id)) : undefined;
         if (worker?.hasPinnedSurface) return new WidthText(() => []);
         return new WidthText((width) =>
           context.state.hasResult
@@ -2568,7 +2591,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         // A pinned worker reports completion inside its canonical card. Keep the
         // task_close tool surface silent; legacy/unpinned workers retain this
         // standalone receipt as a fallback.
-        const live = workers.get(view.id);
+        const live = workerByInstance(view.instanceId);
         if (live?.hasPinnedSurface) return new WidthText(() => []);
         let entered = false;
         let exited = false;
@@ -2674,7 +2697,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
           true,
           replyDetails("rejected", "request_id is required"),
         );
-      const worker = workers.get(id);
+      const worker = workerByHandle(id);
       if (!worker) {
         return textResult(
           `Unknown worker "${id}".`,
