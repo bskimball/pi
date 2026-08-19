@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const { default: promptCommands, orchestrateStatusText } = await import(
-  "../prompt-commands.ts"
-);
+const {
+  default: promptCommands,
+  ORCHESTRATE_SYSTEM_BLOCK,
+  orchestrateStatusText,
+} = await import("../prompt-commands.ts");
 
 type StatusCall = [string, string | undefined];
 
@@ -68,6 +70,13 @@ function loadExtension(persisted: Array<{ enabled: boolean }> = []) {
     emit: async (event: string) => {
       for (const handler of listeners[event] ?? []) await handler({}, ctx);
     },
+    beforeAgentStart: async (systemPrompt = "base prompt") => {
+      const results = [];
+      for (const handler of listeners.before_agent_start ?? []) {
+        results.push(await handler({ systemPrompt }, ctx));
+      }
+      return results.at(-1);
+    },
   };
 }
 
@@ -92,6 +101,37 @@ describe("orchestrateStatusText", () => {
       orchestrateStatusText(true, { fg() { throw new Error("theme"); } }),
       "orchestrator",
     );
+  });
+});
+
+describe("strict orchestrator prompt", () => {
+  it("injects only while enabled and carries bounded delegation semantics", async () => {
+    const state = loadExtension();
+    assert.equal(await state.beforeAgentStart(), undefined);
+
+    await state.orchestrate("on");
+    const active = (await state.beforeAgentStart()) as {
+      systemPrompt: string;
+    };
+    assert.ok(active.systemPrompt.startsWith("base prompt"));
+    assert.ok(active.systemPrompt.endsWith(ORCHESTRATE_SYSTEM_BLOCK));
+    assert.match(active.systemPrompt, /Delegate implementation units/);
+    assert.match(active.systemPrompt, /When implementation needs repository scanning/);
+    assert.match(active.systemPrompt, /Parallel writers require isolated worktrees/);
+    assert.match(active.systemPrompt, /reaches acceptance stops/);
+    assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
+    assert.match(active.systemPrompt, /After all writers have settled/);
+    assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
+    assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
+    assert.match(
+      active.systemPrompt,
+      /Never run integrated gates inside Artisan\/Machinist/,
+    );
+    assert.match(active.systemPrompt, /Route browser and screenshot checks to Inspector/);
+    assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
+
+    await state.orchestrate("off");
+    assert.equal(await state.beforeAgentStart(), undefined);
   });
 });
 

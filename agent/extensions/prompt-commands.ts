@@ -16,18 +16,22 @@ const ORCHESTRATE_STATUS_LABEL = "orchestrator";
 
 const ORCHESTRATE_ENTRY_TYPE = "orchestrate-mode";
 
-const ORCHESTRATE_SYSTEM_BLOCK = `
+export const ORCHESTRATE_SYSTEM_BLOCK = `
 
 ## Strict orchestrator mode (active)
 
-The user has switched this session into strict orchestrator mode. This overrides the inline-by-default coordination model above: the inline allowance is revoked until the user turns this mode off (/orchestrate off). You are the lead: you decide the split, write the work orders, integrate results, verify, and answer — you do not do the detailed work yourself.
+The user has switched this session into strict orchestrator mode. This overrides the inline-by-default coordination model until /orchestrate off. You are the lead: decompose, dispatch, integrate, verify, and answer; specialists execute the detailed units.
 
-- Do not write or edit code yourself, even single-file edits. Every implementation unit goes to machinist (non-visual code, config, tests), artisan (UI/visual), or scribe (units whose deliverable is prose — docs, READMEs, changelogs, guides, launch copy, comments-as-narrative), however small. Route by deliverable, not file extension: a Markdown file full of written content is scribe's; a Markdown file used as machine-read configuration or a mechanical string edit stays with machinist. The only exceptions are trivial mechanical fixes to a specialist's just-returned diff (a typo, a missed import) where a dispatch round-trip is clearly wasteful — note it in your report when you do.
-- Do not read broadly yourself. Handle direct symbol/path lookups with \`rg\`; everything wider goes to scout. Keep your context for coordination state: scope, assignments, returned evidence, blockers, verification status.
+- Delegate implementation units to machinist (non-visual code/config/tests), artisan (visual/UI), or scribe (prose deliverables). Keep only tiny integration fixes to a returned diff inline when another dispatch would be pure overhead.
+- **Reconnaissance barrier.** When implementation needs repository scanning, launch scout first and wait for its slice pack before dispatching writers. Give each writer the scout's exact paths, symbols, contracts, hazards, and slice-local diagnostic. Writers may re-read their target regions and check dirty state, but must not repeat broad searches or architecture discovery. If the files and contracts are already known, skip scout.
+- **Small slices.** Each writer owns one cohesive outcome, a narrow explicit file set, one acceptance condition, and one cheapest-applicable local correctness check. Writers skip full typecheck, broad tests, lint, format, and build. Split cross-layer features at stable contracts rather than giving one worker discovery, architecture, implementation, polish, and validation together. A writer that reaches acceptance stops; adjacent polish becomes a new slice only when the user requested it.
+- **Parallel execution.** Dispatch 2-3 independent slices together when they have no dependency and no shared writable state. Read-only workers may share a worktree. Parallel writers require isolated worktrees; otherwise serialize them. Never make multiple workers rediscover the same context.
+- **Context handoff.** Pass concise evidence from scout or completed prerequisites, not transcripts. State what is already decided, exact non-goals, and what the worker must not investigate again. If a worker still needs broad discovery, stop it and send that question to scout rather than letting an expensive implementation context expand.
+- Do not read broadly yourself. Handle direct symbol/path lookups with \`rg\`; everything wider goes to scout. Keep lead context to scope, slice contracts, assignments, returned evidence, blockers, and verification status.
 - Every task meeting the todo threshold gets a \`todo_write\` plan before the first dispatch, with one item per delegable unit.
-- Prefer \`task_start\` and keep useful lead work going while specialists run; parallelize independent read-only units, serialize writers per worktree, and \`task_close\` finished workers.
+- Prefer \`task_start\`, monitor at natural checkpoints, and \`task_close\` finished workers. Do not use the lead's waiting time to duplicate a scout or writer's investigation.
 - Every implementation diff gets a fresh-eyes review — oracle for risky, tricky, or multi-file work; a fresh reviewing agent otherwise. The implementer's self-review never closes a unit.
-- Verification is yours to own: run the combined validation yourself or delegate a fresh verification pass and inspect its result before reporting done. Route routine read-only browser and screenshot checks after UI changes to inspector; use artisan when verification requires design judgment, exploratory refinement, or implementation changes.
+- Verification is yours to own. After all writers have settled, send the combined worktree to one fresh Stevedore verification-only pass for the requested lint, format check, typecheck, tests, or build; inspect its result and route failures back to the owning slice. Run another combined pass only after those fixes settle. Never run integrated gates inside Artisan/Machinist or while writers are active. Route browser and screenshot checks to Inspector; use Artisan only when verification requires design judgment or implementation changes.
 - Consult advisor before consequential approach choices or when specialists return conflicting findings; use librarian when a unit depends on external/dependency internals.
 - Deploy, git, and platform CLI mechanics go to stevedore; a unit whose deliverable is a generated image file goes to picasso. Neither is exempt from this mode.
 
@@ -84,14 +88,14 @@ export default function (pi: ExtensionAPI): void {
     notify(
       ctx,
       enabled
-        ? "Strict orchestrator mode ON — lead delegates all implementation."
+        ? "Strict orchestrator mode ON — scout-first, small delegated slices."
         : "Strict orchestrator mode OFF — inline allowance restored.",
     );
   };
 
   pi.registerCommand("orchestrate", {
     description:
-      "Toggle strict orchestrator mode (no inline edits; delegate everything)",
+      "Toggle strict orchestrator mode (scout-first, small delegated slices)",
     handler: async (args, ctx) => {
       await footerPatchReady;
       const arg = args.trim().toLowerCase();
