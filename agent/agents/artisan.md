@@ -6,7 +6,7 @@ fallbackModels:
   - local-proxy/gemini-3.7-flash-high
   - github-copilot/kimi-k3
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
-thinking: high
+thinking: medium
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
 inheritSkills: true
 maxTurns: 60

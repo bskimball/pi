@@ -5,7 +5,7 @@ model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
   - local-proxy/claude-sonnet-5
-thinking: low
+thinking: medium
 tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: true
 maxTurns: 60
