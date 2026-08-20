@@ -5,6 +5,7 @@
 // and bounded line assembly.
 
 import { padStartToWidth, safeTruncateToWidth } from "./safe-text-layout.ts";
+import { boundExpandedCardText } from "../runtime/text-bounds.ts";
 import {
   DURATION_COLUMN,
   TREE,
@@ -155,7 +156,11 @@ export function buildTreeLines(
       index === rows.length - 1 && !options.hasFollowingContent;
     lines.push(safeTruncateToWidth(row.line(isLast ? TREE.last : TREE.branch), width));
     const prefix = isLast ? TREE.hang : `${theme.fg("dim", TREE.rail)}  `;
-    for (const line of row.continuation ?? []) {
+    const continuation = boundExpandedCardText(
+      (row.continuation ?? []).join("\n"),
+      { maxChars: 2_400, maxLines: 8 },
+    ).text.split("\n").filter((line, index, all) => !(all.length === 1 && line === ""));
+    for (const line of continuation) {
       lines.push(
         safeTruncateToWidth(
           `${prefix}${theme.fg(row.continuationToken ?? "toolOutput", line)}`,

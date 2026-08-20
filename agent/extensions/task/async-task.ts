@@ -64,6 +64,7 @@ import {
   validateCwd,
 } from "./runtime/tool-result.ts";
 import {
+  boundExpandedCardText,
   boundText,
   cleanOneLine,
   extractAssistantText,
@@ -336,7 +337,11 @@ function renderWorkerCard(
     // becoming its own branch, so it can never own the terminal edge.
     let headerPreview: string[] | undefined;
     if (expanded && view.latestText) {
-      const preview = boundText(view.latestText, 1200, 8).text.split(/\r?\n/);
+      const preview = boundExpandedCardText(view.latestText, {
+        maxChars: 2_400,
+        maxLines: 8,
+        keep: "tail",
+      }).text.split(/\r?\n/);
       if (rows.length) rows[rows.length - 1].continuation = preview;
       else headerPreview = preview;
     }

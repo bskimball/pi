@@ -29,6 +29,73 @@ export function boundText(
   return { text, truncated };
 }
 
+/** Caps for expanded task/sub-agent card body text before TUI layout. */
+export const EXPANDED_CARD_MAX_CHARS = 8_000;
+export const EXPANDED_CARD_MAX_LINES = 40;
+export const EXPANDED_CARD_MAX_LINE_CHARS = 240;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** UTF-16 slice that never leaves a lone surrogate at either edge. */
+function sliceCodeUnitsSafe(text: string, start: number, end: number): string {
+  let s = Math.max(0, start);
+  let e = Math.min(text.length, end);
+  if (s < e && isLowSurrogate(text.charCodeAt(s))) s += 1;
+  if (e > s && isHighSurrogate(text.charCodeAt(e - 1))) e -= 1;
+  return text.slice(s, e);
+}
+
+/**
+ * Bound expanded card strings before they enter TUI Text/Markdown/layout.
+ * Default keep is the start of the report (sync). Pass keep: "tail" for
+ * async latest-text previews so the conclusion stays visible.
+ * Caps total characters, line count, and pathological single-line runs.
+ */
+export function boundExpandedCardText(
+  value: unknown,
+  options: {
+    maxChars?: number;
+    maxLines?: number;
+    maxLineChars?: number;
+    keep?: "head" | "tail";
+  } = {},
+): { text: string; truncated: boolean } {
+  const maxChars = options.maxChars ?? EXPANDED_CARD_MAX_CHARS;
+  const maxLines = options.maxLines ?? EXPANDED_CARD_MAX_LINES;
+  const maxLineChars = options.maxLineChars ?? EXPANDED_CARD_MAX_LINE_CHARS;
+  const keepTail = options.keep === "tail";
+  let truncated = false;
+  let text = String(value ?? "").replace(
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+    "",
+  );
+  if (text.length > maxChars) {
+    text = keepTail
+      ? sliceCodeUnitsSafe(text, text.length - maxChars, text.length)
+      : sliceCodeUnitsSafe(text, 0, maxChars);
+    truncated = true;
+  }
+  const rawLines = text.split(/\r?\n/);
+  const selected = keepTail
+    ? rawLines.slice(Math.max(0, rawLines.length - maxLines))
+    : rawLines.slice(0, maxLines);
+  if (rawLines.length > maxLines) truncated = true;
+  const lines = selected.map((line) => {
+    if (line.length <= maxLineChars) return line;
+    truncated = true;
+    return keepTail
+      ? sliceCodeUnitsSafe(line, line.length - maxLineChars, line.length)
+      : sliceCodeUnitsSafe(line, 0, maxLineChars);
+  });
+  return { text: lines.join("\n"), truncated };
+}
+
 export function formatAge(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "?";
   if (ms < 1000) return `${Math.floor(ms)}ms`;

@@ -28,11 +28,11 @@ import {
   modelAttempts,
   qualifyModel,
   stderrDiagnostic,
-  type AgentDef,
 } from "./runtime/agent-discovery.ts";
 import { isolatedChildEnv } from "./runtime/child-process.ts";
 import { missionFromPrompt, shortArgs } from "./presentation/task-view.ts";
 import {
+  boundExpandedCardText,
   boundText,
   extractAssistantText,
   extractAssistantThinking,
@@ -412,34 +412,13 @@ function renderTaskComponent(
       // Body width accounts for the gutter (collapsed) or card padding
       // (expanded) so wrapped text never overflows its container.
       const bodyWidth = Math.max(8, width - (expanded ? 2 : 4));
-      const reportLimit = expanded ? 200 : 12;
-      // Preprocessing is bounded twice: the source is read up to a char/line
-      // cap, and formatting stops as soon as one line past the display limit
-      // exists. A huge report can never build a huge intermediate array.
-      const MAX_REPORT_CHARS = 60_000;
-      const MAX_REPORT_SOURCE_LINES = 1200;
-      // The character cap is applied to the raw report first, so trim/replace
-      // never scan or allocate over a report larger than the cap.
-      const rawReport = details.finalReport;
-      let moreContent = rawReport.length > MAX_REPORT_CHARS;
-      const source = (
-        moreContent ? rawReport.slice(0, MAX_REPORT_CHARS) : rawReport
-      )
-        .trim()
-        .replace(/\t/g, "   ");
-
-      const sourceLines: string[] = [];
-      let cursor = 0;
-      while (
-        cursor < source.length &&
-        sourceLines.length < MAX_REPORT_SOURCE_LINES
-      ) {
-        const next = source.indexOf("\n", cursor);
-        const end = next < 0 ? source.length : next;
-        sourceLines.push(source.slice(cursor, end).replace(/\r$/, ""));
-        cursor = end + 1;
-      }
-      if (cursor < source.length) moreContent = true;
+      const reportLimit = expanded ? 40 : 12;
+      const bounded = boundExpandedCardText(details.finalReport, {
+        maxLines: expanded ? 40 : 12,
+      });
+      let moreContent = bounded.truncated;
+      const source = bounded.text.trim().replace(/\t/g, "   ");
+      const sourceLines = source.split("\n").map((line) => line.replace(/\r$/, ""));
 
       const reportLines: string[] = [];
       // Returns false once enough lines exist to render the limit plus prove
