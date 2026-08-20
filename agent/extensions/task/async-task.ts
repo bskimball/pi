@@ -124,6 +124,13 @@ import {
 } from "./presentation/status-view.ts";
 import { noticeComponent, type NoticeRow } from "./presentation/notice-view.ts";
 import { waitForSnapshot } from "./runtime/wait-policy.ts";
+import {
+  WAIT_DEFAULT_TIMEOUT_SEC,
+  formatCompactWorkerStatus,
+  formatSettledResult,
+  formatWaitHeartbeat,
+  type WorkerStatusSnapshot,
+} from "./runtime/worker-status.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -132,8 +139,6 @@ const MAX_ACTIVITIES = 40;
 const MAX_ERRORS = 12;
 const STATUS_TEXT_CAP = 4_000;
 const STATUS_LINE_CAP = 40;
-const RESULT_TEXT_CAP = 12_000;
-const RESULT_LINE_CAP = 120;
 const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
 
@@ -142,7 +147,7 @@ const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
-  "Use task_status/task_wait for full results; task_send for follow-up; task_close to reap.";
+  "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
 /** Result preview budget in the settlement notice payload. */
 const NOTICE_RESULT_CAP = 400;
 
@@ -701,6 +706,36 @@ export default function (pi: ExtensionAPI) {
     killReason: worker.killReason,
   });
 
+  const workerStatusSnapshot = (worker: Worker): WorkerStatusSnapshot => ({
+    id: worker.id,
+    lifecycle: worker.lifecycle,
+    agent: worker.agent,
+    model: worker.model,
+    generation: worker.generation,
+    turns: worker.turns,
+    maxTurns: worker.maxTurns,
+    phase: worker.phase,
+    createdAt: worker.createdAt,
+    lastEventAt: worker.lastEventAt,
+    mission: worker.mission,
+    pendingSteer: worker.pendingSteer,
+    pendingFollowUp: worker.pendingFollowUp,
+    killReason: worker.killReason,
+    exitCode: worker.exitCode,
+    latestResult: worker.latestResult,
+    latestAssistantText: worker.latestAssistantText,
+    running: worker.ledger.running(),
+    recent: worker.ledger.snapshot(),
+    errors: worker.errors,
+    waitingUi: [...worker.pendingUi.values()]
+      .filter((request) => request.expectsReply)
+      .map((request) => ({
+        id: request.id,
+        method: request.method,
+        title: request.title,
+      })),
+  });
+
   const workerView = (worker: Worker): WorkerView => ({
     instanceId: worker.instanceId,
     id: worker.id,
@@ -924,88 +959,11 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const formatWorkerStatus = (worker: Worker): string => {
-    const now = Date.now();
-    const age = formatAge(now - worker.createdAt);
-    const lastEvent =
-      worker.lastEventAt != null
-        ? formatAge(now - worker.lastEventAt)
-        : "n/a";
-    const running = worker.ledger.running();
-    const runningTools = running
-      .slice(0, 8)
-      .map((a) => `${a.tool}(${a.summary})`);
-    const recent = worker.ledger
-      .snapshot()
-      .slice(-8)
-      .map(
-        (a) =>
-          `  - ${a.status} ${a.tool}: ${a.summary}${a.duration != null ? ` (${formatAge(a.duration)})` : ""}`,
-      );
-    const errLines = worker.errors.slice(-5).map((e) => `  - ${e}`);
-    const resultBound = boundText(
-      worker.latestResult || worker.latestAssistantText,
-      STATUS_TEXT_CAP,
-      STATUS_LINE_CAP,
-    );
-    const waitingUiAll = [...worker.pendingUi.values()].filter((r) => r.expectsReply);
-    const waitingUi = waitingUiAll.slice(0, 4).map(
-      (r) =>
-        `  - ${r.id} method=${r.method}${r.title ? ` title=${cleanOneLine(r.title, 60)}` : ""}`,
-    );
+  const formatWorkerStatus = (worker: Worker): string =>
+    formatCompactWorkerStatus(workerStatusSnapshot(worker));
 
-    const lines = [
-      `${worker.id}  lifecycle=${worker.lifecycle}  agent=${worker.agent}  model=${worker.model ?? "default"}`,
-      `generation=${worker.generation}  turns=${worker.turns}/${worker.maxTurns}  phase=${worker.phase}  age=${age}  last_event_age=${lastEvent}`,
-      `mission: ${cleanOneLine(worker.mission, 140)}`,
-      `cwd: ${cleanOneLine(worker.cwd, 200)}`,
-      `pid: ${worker.pid ?? "-"}  counts_toward_cap: ${worker.countsTowardCap}`,
-      `pending_messages: steer=${worker.pendingSteer} follow_up=${worker.pendingFollowUp}`,
-      worker.sessionId
-        ? `session_id: ${worker.sessionId}`
-        : "session_id: (pending)",
-      // session path is runtime-local and non-secret; still keep it bounded
-      worker.sessionFile
-        ? `session_file: ${cleanOneLine(worker.sessionFile, 200)}`
-        : `session_dir: ${cleanOneLine(worker.sessionDir, 200)}`,
-      worker.killReason ? `kill_reason: ${worker.killReason}` : undefined,
-      worker.exitCode != null ? `exit_code: ${worker.exitCode}` : undefined,
-      "",
-      `running_tools (${running.length}):`,
-      runningTools.length ? runningTools.map((t) => `  - ${t}`).join("\n") : "  (none)",
-      "",
-      "recent_activities:",
-      recent.length ? recent.join("\n") : "  (none)",
-      "",
-      "recent_errors:",
-      errLines.length ? errLines.join("\n") : "  (none)",
-      "",
-      `waiting_ui_requests (${waitingUiAll.length}):`,
-      waitingUi.length ? waitingUi.join("\n") : "  (none)",
-      // Checkpoint deferral note if no UI protocol hit
-      "note: child-initiated checkpoints use extension_ui_request dialogs; reply via task_reply. Fire-and-forget UI methods are recorded but not blocking.",
-      "",
-      `--- latest_result (${resultBound.truncated ? "truncated tail" : "full"}) ---`,
-      resultBound.text || "(empty)",
-    ].filter((line): line is string => line !== undefined);
-    return lines.join("\n");
-  };
-
-  const formatWorkerWaitStatus = (worker: Worker): string => {
-    const currentActivity = [...worker.ledger.running()].at(-1);
-    const activity = currentActivity
-      ? `${currentActivity.tool}: ${cleanOneLine(currentActivity.summary, 240)}`
-      : undefined;
-    return [
-      `${worker.id} lifecycle=${worker.lifecycle} agent=${worker.agent} generation=${worker.generation} turns=${worker.turns}/${worker.maxTurns}`,
-      activity ? `activity: ${activity}` : undefined,
-      worker.sessionFile
-        ? `session_file: ${cleanOneLine(worker.sessionFile, 240)}`
-        : `session_dir: ${cleanOneLine(worker.sessionDir, 240)}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  };
+  const formatWorkerWaitStatus = (worker: Worker): string =>
+    formatWaitHeartbeat(workerStatusSnapshot(worker));
 
   const workerNotifyLine = (worker: Worker): string => {
     const result = cleanOneLine(
@@ -1474,6 +1432,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     promptGuidelines: [
       "Use task_start for long-running or multi-turn specialist work you need to steer later.",
       "Use the synchronous task tool when you need one final report before continuing.",
+      "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
       "Always task_close workers when finished; they hold a concurrency slot until closed.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
@@ -1532,14 +1491,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         `started ${worker.id}`,
         `agent: ${worker.agent}`,
         `model: ${worker.model ?? "default"}`,
-        `lifecycle: ${worker.lifecycle}`,
         `generation: ${worker.generation}`,
-        `pid: ${worker.pid ?? "pending"}`,
-        `cwd: ${worker.cwd}`,
-        `mission: ${worker.mission}`,
-        `counts_toward_cap: true (until task_close)`,
+        `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
-        `Use task_status id="${worker.id}" for progress; task_wait to block on settlement; task_send for steer/follow_up; task_close to reap.`,
+        `After useful independent work, one task_wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}s). task_status is for blockers, not polling.`,
       ].join("\n");
       return textResult(text, false, { worker: workerView(worker) });
     },
@@ -1714,8 +1669,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     name: "task_status",
     label: "Task Status",
     description:
-      "Bounded status for one async RPC worker: lifecycle, model, turns, running tools, last event age, pending messages, session id, recent activities/errors, and latest result text.",
-    promptSnippet: "Inspect an async RPC worker's bounded status and latest result.",
+      "Compact lifecycle snapshot for one async RPC worker (id, agent, turns, running tool, last-event age, waiting UI). Live status omits the result body. Use for blockers (waiting UI, stall, kill reason), not polling.",
+    promptSnippet: "Inspect one worker's compact lifecycle when blocked; do not poll with this.",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start (e.g. task_1)." }),
     }),
@@ -1790,8 +1745,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     name: "task_list",
     label: "Task List",
     description:
-      "Bounded list of active and recent async RPC workers. Persistent live workers count against the concurrency cap until task_close.",
-    promptSnippet: "List async RPC workers (live and recent settled).",
+      "Compact roster of async RPC workers (id, lifecycle, agent, turns, last-event age, mission). Persistent live workers count against the concurrency cap until task_close. Prefer this over repeated task_status when checking several workers.",
+    promptSnippet: "List async RPC workers without dumping result bodies.",
     parameters: Type.Object({
       include_settled: Type.Optional(
         Type.Boolean({
@@ -2179,15 +2134,15 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     name: "task_wait",
     label: "Task Wait",
     description:
-      "Wait until the worker's current generation settles (agent_settled). Blocks and shows live progress updates. Optional bounded timeout returns compact current status without killing the worker. Cancelling this tool call only stops waiting; the worker continues. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact before more orchestration. Use task_abort to stop the worker explicitly.",
+      `Wait until the worker's current generation settles (agent_settled). Default timeout ${WAIT_DEFAULT_TIMEOUT_SEC}s. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
     promptSnippet:
-      "Wait for an async RPC worker generation to settle without aborting it; reserve-boundary timeouts create a compaction checkpoint.",
+      "Wait for an async RPC worker generation to settle; default 600s; timeout returns a compact heartbeat, not a poll cue.",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start." }),
       timeoutSec: Type.Optional(
         Type.Number({
           description:
-            "Max seconds to wait (default 600). On timeout, returns current status without killing.",
+            `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). On timeout, returns a compact heartbeat without killing.`,
         }),
       ),
       generation: Type.Optional(
@@ -2220,12 +2175,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           { worker: workerView(worker), waiting: false },
         );
       }
-      const timeoutSec = params.timeoutSec ?? 600;
+      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
       const timeoutMs = Math.max(0, timeoutSec) * 1000;
 
       const notifyLive = () => {
         if (worker.hasPinnedSurface) return;
-        const text = formatWorkerStatus(worker);
+        const text = formatWorkerWaitStatus(worker);
         onUpdate?.({
           content: [{ type: "text", text }],
           details: { worker: workerView(worker), waiting: true },
@@ -2242,10 +2197,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         worker.generation === targetGen;
       if (alreadySettled) {
         worker.subscribers?.delete(notifyLive);
-        const bound = boundText(
+        const bound = formatSettledResult(
           worker.latestResult || worker.latestAssistantText,
-          RESULT_TEXT_CAP,
-          RESULT_LINE_CAP,
         );
         return textResult(
           [
@@ -2305,9 +2258,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         return textResult(
           [
             `${id} wait interrupted; worker was NOT aborted.`,
-            "The worker continues in the background; use task_status or task_wait to reconnect, or task_abort to stop it explicitly.",
+            "The worker continues in the background; use task_wait to reconnect, or task_abort to stop it explicitly.",
             "",
-            formatWorkerStatus(worker),
+            formatWorkerWaitStatus(worker),
           ].join("\n"),
           false,
           { worker: workerView(worker), waiting: false },
@@ -2348,11 +2301,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         };
       }
 
-      const bound = boundText(
-        snapshot.resultText,
-        RESULT_TEXT_CAP,
-        RESULT_LINE_CAP,
-      );
+      const bound = formatSettledResult(snapshot.resultText);
       return textResult(
         [
           `${id} settled (generation ${snapshot.generation}).`,
@@ -2436,7 +2385,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           // cannot express. Render them as receipts rather than detached alert
           // text so a routine wait timeout does not look like a warning.
           if (isTimeout && !isError) {
-            const timeout = finiteNumber(context.args?.timeoutSec) ?? 600;
+            const timeout = finiteNumber(context.args?.timeoutSec) ?? WAIT_DEFAULT_TIMEOUT_SEC;
             return new WidthText((width) => [
               receiptHeader(theme, width, {
                 tool: "task_wait",

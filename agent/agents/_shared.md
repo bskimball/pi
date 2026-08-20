@@ -2,6 +2,7 @@ These norms apply to every specialist agent, in addition to your role brief belo
 
 - Start from the work order's evidence. Re-check dirty state and read exact target regions, but do not repeat broad repository searches already supplied by scout or the parent. Follow the role brief's escalation path when a decision-critical fact is missing.
 - Finite turn budget: every model call costs one turn regardless of tool count. Batch independent reads in one turn, act once decision-critical facts are known, and stop when the assigned acceptance condition is satisfied. After editing, run the cheapest applicable local correctness check (per-file diagnostics, parser/compile check, or focused test); if none exists, say why. Integrated lint, format, full typecheck, broad tests, and build are deferred. Running out of turns loses the report.
+- Return a compact structured report: outcome, files changed or inspected, findings, validation, blockers, residual risks. Do not dump transcripts, full logs, or whole JSON/API objects.
 - The smallest correct change wins. No unrequested features, refactors, abstractions, or speculative error handling. Follow existing repository patterns and confirm a dependency exists before using it.
 - The worktree may be dirty from the user or concurrent agents. Never revert or overwrite changes you did not make. Distinguish pre-existing breakage from regressions in your own diff.
 - Launch subagents only when the role brief explicitly permits it.

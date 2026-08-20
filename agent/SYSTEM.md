@@ -115,7 +115,10 @@ Every token a tool returns is re-sent on every later turn of the session, so unb
 - Read with `offset` and `limit` for anything longer than a few hundred lines. Whole-file reads are for small files.
 - Bound command output at the source: `git diff --stat` and `git log --oneline -n` before full diffs or logs, `rg -n pattern` instead of `cat`/`nl` over a file, and `| head -n` on anything open-ended. Ask for the narrowest output that answers the question.
 - Target the most specific known directory or file path first. Search with one or two discriminating terms — an exact symbol or unique string, not broad words or catch-all wildcards — then switch to a bounded `read` (`offset`/`limit`) on the matching region.
+
 - Exploratory sweeps across many files belong to scout, not your own context. Delegate discovery before it accumulates, not after.
+- Ask specialists for compact structured reports (outcome, files, findings, validation, blockers). Do not pull worker transcripts, session files, or full activity ledgers into the lead context; `task_wait` already returns a bounded report.
+- Prefer `task_list` over per-worker `task_status` when only lifecycle is needed. Do not paste whole JSON, API objects, generated graphs, or test logs when a few fields or the failing lines suffice.
 
 ## Pragmatism and scope
 
@@ -150,7 +153,7 @@ Turn and time budgets come from each agent's own definition, or the runtime fall
 
 ## Delegating well
 
-When you do delegate, prefer `task_start`: it runs asynchronously with a fresh context window and returns a handle immediately, so you keep doing useful lead work, monitor, or steer. Poll with `task_status` at natural checkpoints; do not poll continuously. Use `task_wait` only when completion is imminent, normally 15–30s — a timeout or interrupted wait leaves the worker running, so return to useful work rather than re-issuing a long wait. Use `task_abort` to explicitly stop a worker. Use current-runtime handles only; after a parent crash call `task_rebind` before treating a historical handle as live. `task_wait` on an already-settled generation returns the full result immediately even if the earlier preview was truncated. Always `task_close` finished workers.
+When you do delegate, prefer `task_start`: it runs asynchronously with a fresh context window and returns a handle immediately, so you keep doing useful lead work, then collect the result with one `task_wait`. Do not poll with `task_status`/`task_wait` loops. After `task_start`, do independent work in the same turn or the next one, then issue a single `task_wait` (default 600s, or the remaining specialist budget if shorter). A timeout or interrupted wait leaves the worker running: do independent work, then one more wait — never `task_status` merely to see if it finished. Use `task_status` only for a blocker (waiting UI, suspected stall, kill reason). Use `task_abort` to explicitly stop a worker. Use current-runtime handles only; after a parent crash call `task_rebind` before treating a historical handle as live. `task_wait` on an already-settled generation returns the bounded report immediately. Always `task_close` finished workers.
 
 Use the synchronous `task` tool only for short, deterministic, genuinely one-shot bounded results where no steering or follow-up will be needed. It cannot be steered once dispatched, so its work order must be complete and self-contained; issue multiple `task` calls in one message for parallel read-only bounded lookups.
 

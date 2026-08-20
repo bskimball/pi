@@ -37,6 +37,7 @@ import {
   extractAssistantText,
   extractAssistantThinking,
 } from "./runtime/text-bounds.ts";
+import { formatSettledResult } from "./runtime/worker-status.ts";
 import {
   padStartToWidth,
   safeTruncateToWidth,
@@ -798,8 +799,8 @@ export default function (pi: ExtensionAPI) {
           let emptyAssistantDiag: string | undefined;
           let stderrTail = "";
           let attemptTurns = 0;
-          // Cap recovered report text so a runaway stream cannot blow the parent
-          // context. Canonical message_end content stays full-size as before.
+          // Cap recovered stream text so a runaway stream cannot blow the parent
+          // context. The returned report is also bounded by formatSettledResult.
           const STREAM_ASSISTANT_CAP = 12_000;
           const STREAM_ASSISTANT_LINES = 200;
           const describeEmptyAssistant = (message: unknown): string | undefined => {
@@ -1085,10 +1086,11 @@ export default function (pi: ExtensionAPI) {
             continue;
           }
 
-          const report =
+          const rawReport =
             attemptIndex > 0
               ? `[${def.name}] succeeded with fallback model ${modelLabel} after ${attemptIndex} failed attempt${attemptIndex === 1 ? "" : "s"}.\n\n${assistantText || "(no output)"}`
               : assistantText || "(no output)";
+          const report = formatSettledResult(rawReport).text;
           return {
             content: [{ type: "text", text: report }],
             isError: false,
@@ -1098,9 +1100,11 @@ export default function (pi: ExtensionAPI) {
 
         const allFailed =
           !killReason && attemptFailures.length === attemptedModels.length;
-        const text = allFailed
-          ? `[${def.name}] all model attempts failed:\n${attemptFailures.map((failure) => `- ${failure}`).join("\n")}`
-          : `[${def.name}] stopped: ${killReason} (${turns} turns). Partial result:\n\n${finalAssistantText || "(no output)"}`;
+        const text = formatSettledResult(
+          allFailed
+            ? `[${def.name}] all model attempts failed:\n${attemptFailures.map((failure) => `- ${failure}`).join("\n")}`
+            : `[${def.name}] stopped: ${killReason} (${turns} turns). Partial result:\n\n${finalAssistantText || "(no output)"}`,
+        ).text;
         return {
           content: [{ type: "text", text }],
           isError: allFailed || (!!killReason && !finalAssistantText),

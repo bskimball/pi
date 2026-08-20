@@ -133,6 +133,9 @@ describe("strict orchestrator prompt", () => {
     );
     assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
     assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
+    assert.match(active.systemPrompt, /one `task_wait` \(default 600s\) per worker/);
+    assert.match(active.systemPrompt, /Do not poll with `task_status`\/`task_wait` loops/);
+    assert.match(active.systemPrompt, /Keep returned evidence compact/);
 
     await state.orchestrate("off");
     assert.equal(await state.beforeAgentStart(), undefined);
