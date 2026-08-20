@@ -5,7 +5,6 @@ model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-# Prefer gemini-3.7-flash-high over the older AGY agent Flash alias.
 thinking: low
 tools: read, bash
 inheritSkills: false

@@ -2,7 +2,7 @@
 name: stevedore
 description: Fast, cheap integrated-verification and release specialist for lint, format check, typecheck, tests, build, deploys, git operations, and shipping platform CLIs. Not for code logic or third-party SaaS/admin/security/credential work.
 tools: read, ffgrep, fffind, ls, bash, edit
-model: local-proxy/gpt-5.6-terra
+model: local-proxy/gpt-5.6-luna
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast
   - local-proxy/gemini-3.7-flash-high

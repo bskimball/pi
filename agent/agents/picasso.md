@@ -5,7 +5,6 @@ model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - local-proxy/gpt-5.6-luna
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-# Prefer gemini-3.7-flash-high over the older AGY agent Flash alias.
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: false
