@@ -405,6 +405,13 @@ export class LspManager {
   private async diagnostics(params: LspToolParams, signal?: AbortSignal) {
     const path = this.requirePath(params);
     const { client, uri } = await this.openDoc(path, signal);
+    const diagnosticStartedAt = Date.now();
+    client.logDiagnosticProbe("diagnosticRequested", {
+      uri,
+      path,
+      supportsPullDiagnostics: client.supportsPullDiagnostics(),
+      diagnosticsWaitMs: timeouts(this.userConfig).diagnosticsWaitMs,
+    });
     client.clearDiagnosticHistory(uri);
     // Re-open sync: ensureDocument already sent didOpen/didChange; for diagnostics
     // re-touch by sending didChange with same text to coax push (some servers).
@@ -444,17 +451,46 @@ export class LspManager {
             signal,
           );
           if (pushed.status === "received" && pushed.diagnostics.length) {
+            client.logDiagnosticProbe("diagnosticCompleted", {
+              uri,
+              path,
+              mode: "push-after-empty-pull",
+              elapsedMs: Date.now() - diagnosticStartedAt,
+              diagnosticCount: pushed.diagnostics.length,
+            });
             return textResult(formatDiagnostics(pushed.diagnostics, path, { status: "received", limit }));
           }
         }
+        client.logDiagnosticProbe("diagnosticCompleted", {
+          uri,
+          path,
+          mode: "pull",
+          elapsedMs: Date.now() - diagnosticStartedAt,
+          diagnosticCount: items.length,
+        });
         return textResult(formatDiagnostics(items, path, { status: "pull", limit }));
       } catch (error) {
         if (isAbortError(error)) throw error;
+        client.logDiagnosticProbe("pullDiagnosticFailed", {
+          uri,
+          path,
+          elapsedMs: Date.now() - diagnosticStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
         // Fall through to push wait.
       }
     }
 
     const pushed = await client.waitForPushDiagnostics(uri, t.diagnosticsWaitMs, signal);
+    client.logDiagnosticProbe("diagnosticCompleted", {
+      uri,
+      path,
+      mode: "push",
+      elapsedMs: Date.now() - diagnosticStartedAt,
+      status: pushed.status,
+      publishes: pushed.publishes,
+      diagnosticCount: pushed.diagnostics.length,
+    });
     return textResult(
       formatDiagnostics(pushed.diagnostics, path, {
         status: pushed.status,

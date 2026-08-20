@@ -16,6 +16,7 @@ import {
 import type { PositionEncoding } from "./positions.ts";
 import { pickEncodingFromInitializeResult } from "./positions.ts";
 import { pathToUri } from "./paths.ts";
+import { logLspDiagnosticEvent, type LspDiagnosticLogger } from "./diagnostic-log.ts";
 
 export interface DocumentState {
   uri: string;
@@ -36,6 +37,7 @@ export interface ClientOptions {
   requestTimeoutMs: number;
   initializeTimeoutMs: number;
   diagnosticsWaitMs: number;
+  diagnosticLogger?: LspDiagnosticLogger;
 }
 
 export interface PublishDiagnostics {
@@ -49,6 +51,7 @@ type DiagnosticWaitResult = {
   status: "received" | "unknown";
   diagnostics: unknown[];
   publishes: number;
+  completionReason: "settled" | "timeout" | "shutdown";
 };
 
 type PendingDiagnosticWaiter = {
@@ -78,14 +81,30 @@ export class LspClient {
   private capabilities: Record<string, unknown> = {};
   private documents = new Map<string, DocumentState>();
   private publishes = new Map<string, PublishDiagnostics[]>();
+  private documentOpenedAt = new Map<string, number>();
   private waiters = new Set<PendingDiagnosticWaiter>();
   private settings: unknown;
+  private readonly diagnosticLogger: LspDiagnosticLogger;
   /** True when the language server was launched via cmd.exe (Windows .cmd/.bat). */
   private cmdWrapped = false;
 
   constructor(options: ClientOptions) {
     this.options = options;
     this.settings = options.settings ?? {};
+    this.diagnosticLogger = options.diagnosticLogger ?? logLspDiagnosticEvent;
+  }
+
+  private logDiagnostic(event: string, details: Record<string, unknown> = {}): void {
+    try {
+      this.diagnosticLogger({
+        ...details,
+        event,
+        language: this.options.languageKey,
+        root: this.options.rootPath,
+      });
+    } catch {
+      // Instrumentation must never break LSP operations.
+    }
   }
 
   get encoding(): PositionEncoding {
@@ -94,6 +113,10 @@ export class LspClient {
 
   get serverCapabilities(): Record<string, unknown> {
     return this.capabilities;
+  }
+
+  logDiagnosticProbe(event: string, details: Record<string, unknown> = {}): void {
+    this.logDiagnostic(event, details);
   }
 
   get isAlive(): boolean {
@@ -180,17 +203,25 @@ export class LspClient {
       diagnostics?: unknown[];
     }) => {
       if (!params?.uri) return;
+      const receivedAt = Date.now();
       const pub: PublishDiagnostics = {
         uri: params.uri,
         version: params.version,
         diagnostics: Array.isArray(params.diagnostics) ? params.diagnostics : [],
-        at: Date.now(),
+        at: receivedAt,
       };
       const list = this.publishes.get(params.uri) ?? [];
       list.push(pub);
       // Bound history per URI.
       if (list.length > 20) list.splice(0, list.length - 20);
       this.publishes.set(params.uri, list);
+      const openedAt = this.documentOpenedAt.get(params.uri);
+      this.logDiagnostic("publishDiagnostics", {
+        uri: params.uri,
+        version: params.version,
+        diagnosticCount: pub.diagnostics.length,
+        msSinceDocumentOpen: openedAt === undefined ? undefined : receivedAt - openedAt,
+      });
       this.notifyWaiters(params.uri);
     });
 
@@ -202,6 +233,7 @@ export class LspClient {
     const rootUri = pathToUri(this.options.rootPath);
     try {
       throwIfAborted(signal);
+      const initializeStartedAt = Date.now();
       const result = await this.requestUnsafe(
         "initialize",
         {
@@ -250,6 +282,12 @@ export class LspClient {
 
       this.capabilities = ((result as { capabilities?: Record<string, unknown> })?.capabilities) ?? {};
       this.positionEncoding = pickEncodingFromInitializeResult(result);
+      this.logDiagnostic("serverInitialized", {
+        serverInfo: (result as { serverInfo?: unknown })?.serverInfo,
+        capabilities: this.capabilities,
+        supportsPullDiagnostics: this.supportsPullDiagnostics(),
+        initializeRequestElapsedMs: Date.now() - initializeStartedAt,
+      });
       connection.sendNotification("initialized", {});
       this.started = true;
       this.dead = false;
@@ -264,8 +302,18 @@ export class LspClient {
     if (!existing) {
       const doc: DocumentState = { uri, path, languageId, version: 1, text };
       this.documents.set(uri, doc);
+      const openedAt = Date.now();
+      this.documentOpenedAt.set(uri, openedAt);
       await this.notify("textDocument/didOpen", {
         textDocument: { uri, languageId, version: 1, text },
+      });
+      this.logDiagnostic("documentOpened", {
+        uri,
+        path,
+        languageId,
+        version: 1,
+        textBytes: Buffer.byteLength(text, "utf8"),
+        notificationElapsedMs: Date.now() - openedAt,
       });
       return doc;
     }
@@ -364,6 +412,11 @@ export class LspClient {
   ): Promise<DiagnosticWaitResult> {
     throwIfAborted(signal);
     const startAt = Date.now();
+    this.logDiagnostic("diagnosticWaitStarted", {
+      uri,
+      waitMs,
+      priorPublishes: this.publishes.get(uri)?.length ?? 0,
+    });
     const existing = this.publishes.get(uri) ?? [];
     if (existing.length) return this.settleFrom(uri, existing, waitMs, startAt, signal);
 
@@ -381,6 +434,15 @@ export class LspClient {
         if (done) return;
         done = true;
         cleanup();
+        this.logDiagnostic("diagnosticWaitCompleted", {
+          uri,
+          waitMs,
+          elapsedMs: Date.now() - startAt,
+          status: result.status,
+          publishes: result.publishes,
+          diagnosticCount: result.diagnostics.length,
+          completionReason: result.completionReason,
+        });
         resolve(result);
       };
       const fail = (error: Error) => {
@@ -390,11 +452,18 @@ export class LspClient {
         reject(error);
       };
 
-      const snapshot = (): DiagnosticWaitResult => {
+      const snapshot = (completionReason: DiagnosticWaitResult["completionReason"]): DiagnosticWaitResult => {
         const pubs = this.publishes.get(uri) ?? [];
-        if (!pubs.length) return { status: "unknown", diagnostics: [], publishes: 0 };
+        if (!pubs.length) {
+          return { status: "unknown", diagnostics: [], publishes: 0, completionReason };
+        }
         const last = pubs[pubs.length - 1];
-        return { status: "received", diagnostics: last.diagnostics, publishes: pubs.length };
+        return {
+          status: "received",
+          diagnostics: last.diagnostics,
+          publishes: pubs.length,
+          completionReason,
+        };
       };
 
       const waiter: PendingDiagnosticWaiter = {
@@ -402,11 +471,11 @@ export class LspClient {
         onPublish: () => {
           if (done) return;
           if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
-          waiter.settleTimer = setTimeout(() => complete(snapshot()), SETTLE_MS);
+          waiter.settleTimer = setTimeout(() => complete(snapshot("settled")), SETTLE_MS);
         },
         finish: complete,
         reject: fail,
-        timer: setTimeout(() => complete(snapshot()), waitMs),
+        timer: setTimeout(() => complete(snapshot("timeout")), waitMs),
         signal,
       };
 
@@ -431,13 +500,14 @@ export class LspClient {
       const remaining = Math.max(0, waitMs - elapsed);
       let done = false;
 
-      const snapshot = (): DiagnosticWaitResult => {
+      const snapshot = (completionReason: DiagnosticWaitResult["completionReason"]): DiagnosticWaitResult => {
         const pubs = this.publishes.get(uri) ?? existing;
         const last = pubs[pubs.length - 1];
         return {
           status: pubs.length ? "received" : "unknown",
           diagnostics: last?.diagnostics ?? [],
           publishes: pubs.length,
+          completionReason,
         };
       };
 
@@ -454,6 +524,15 @@ export class LspClient {
         if (done) return;
         done = true;
         cleanup();
+        this.logDiagnostic("diagnosticWaitCompleted", {
+          uri,
+          waitMs,
+          elapsedMs: Date.now() - startAt,
+          status: result.status,
+          publishes: result.publishes,
+          completionReason: result.completionReason,
+          diagnosticCount: result.diagnostics.length,
+        });
         resolve(result);
       };
       const fail = (error: Error) => {
@@ -468,11 +547,14 @@ export class LspClient {
         onPublish: () => {
           if (done) return;
           if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
-          waiter.settleTimer = setTimeout(() => complete(snapshot()), SETTLE_MS);
+          waiter.settleTimer = setTimeout(() => complete(snapshot("settled")), SETTLE_MS);
         },
         finish: complete,
         reject: fail,
-        timer: setTimeout(() => complete(snapshot()), Math.max(SETTLE_MS, remaining)),
+        timer: setTimeout(
+          () => complete(snapshot("timeout")),
+          Math.max(SETTLE_MS, remaining),
+        ),
         signal,
       };
       if (signal) {
@@ -507,6 +589,7 @@ export class LspClient {
         status: pubs.length ? "received" : "unknown",
         diagnostics: last?.diagnostics ?? [],
         publishes: pubs.length,
+        completionReason: "shutdown",
       });
     }
     this.waiters.clear();

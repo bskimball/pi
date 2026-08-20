@@ -1,5 +1,5 @@
 {
-  "defaultModel": "grok-4.6",
+  "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.2",

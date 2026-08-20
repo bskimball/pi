@@ -45,6 +45,7 @@ describe("abort helpers", () => {
       requestTimeoutMs: 5_000,
       initializeTimeoutMs: 5_000,
       diagnosticsWaitMs: 5_000,
+      diagnosticLogger: () => undefined,
     });
 
     const ac = new AbortController();
