@@ -43,6 +43,18 @@ describe("config", () => {
     assert.equal(resolveServer("typescript", cfg).enabled, true);
   });
 
+  it("supports Rust and Zig overrides", () => {
+    const cwd = join(dir, "rust-zig");
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "lsp.json"),
+      JSON.stringify({ servers: { rust: { enabled: false }, zig: { command: "custom-zls" } } }),
+    );
+    const cfg = loadUserConfig(cwd);
+    assert.equal(resolveServer("rust", cfg).enabled, false);
+    assert.equal(resolveServer("zig", cfg).candidates[0].command, "custom-zls");
+  });
+
   it("flows rootMarkers into ResolvedServer", () => {
     const cwd = join(dir, "markers");
     mkdirSync(join(cwd, ".pi"), { recursive: true });

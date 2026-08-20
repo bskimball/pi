@@ -88,6 +88,9 @@ export default function (pi: ExtensionAPI): void {
   let localStore = emptyStore();
   let globalStore = emptyStore();
   let globalLoadError: string | undefined;
+  let compactReminderPending = false;
+  const memoryWriteReminder =
+    "If this session produced a durable fact (preference, failure, project decision) that is not already listed above, offer memory_write — do not auto-write. Skip secrets, transcripts, and one-off task dump.";
 
   const persistLocal = (): void => {
     // Snapshot so later mutations do not rewrite earlier in-memory custom entries.
@@ -113,6 +116,20 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
     reconstructLocal(ctx);
   });
+  pi.on("session_compact", () => {
+    if (process.env.PI_SUBAGENT === "1") return;
+    compactReminderPending = true;
+  });
+
+  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+    if (process.env.PI_SUBAGENT === "1") return;
+    const message = "If this session produced a durable fact, offer memory_write — do not auto-write.";
+    if (ctx.hasUI) {
+      ctx.ui.notify(message, "info");
+      return;
+    }
+    process.stderr.write(`${message}\n`);
+  });
 
   pi.on("before_agent_start", async (event) => {
     if (process.env.PI_SUBAGENT === "1") return undefined;
@@ -124,8 +141,12 @@ export default function (pi: ExtensionAPI): void {
     const warning = globalLoadError
       ? `\n\n(Continual memory: global store unavailable — ${globalLoadError})`
       : "";
+    const reminder = compactReminderPending
+      ? `\n\n${memoryWriteReminder}`
+      : "";
+    compactReminderPending = false;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${overview}${warning}`,
+      systemPrompt: `${event.systemPrompt}\n\n${overview}${warning}${reminder}`,
     };
   });
 

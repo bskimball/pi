@@ -8,6 +8,9 @@ web-search.json
 .env.*
 !.env.example
 
+# Nested git worktrees created by the worktree helper
+.pi-worktrees/
+
 # Pi runtime state
 agent/sessions/
 agent/run-history.jsonl

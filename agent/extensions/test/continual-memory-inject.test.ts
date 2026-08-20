@@ -23,17 +23,22 @@ function withPiSubagent<T>(value: string | undefined, run: () => Promise<T> | T)
   }
 }
 
-function loadBeforeAgentStart(): (event: { systemPrompt: string }) => Promise<unknown> {
-  let handler: ((event: { systemPrompt: string }) => Promise<unknown>) | undefined;
+function loadHandlers(): Record<string, (...args: unknown[]) => unknown> {
+  const handlers: Record<string, (...args: unknown[]) => unknown> = {};
   continualMemory({
-    on(name: string, fn: (event: { systemPrompt: string }) => Promise<unknown>) {
-      if (name === "before_agent_start") handler = fn;
+    on(name: string, fn: (...args: unknown[]) => unknown) {
+      handlers[name] = fn;
     },
     registerTool() {},
     appendEntry() {},
   } as never);
+  return handlers;
+}
+
+function loadBeforeAgentStart(): (event: { systemPrompt: string }) => Promise<unknown> {
+  const handler = loadHandlers().before_agent_start;
   assert.ok(handler, "expected before_agent_start handler");
-  return handler;
+  return handler as (event: { systemPrompt: string }) => Promise<unknown>;
 }
 
 test("continual memory skips overview injection for subagents", async () => {
@@ -52,5 +57,31 @@ test("continual memory injects overview when not a subagent", async () => {
     const prompt = (result as { systemPrompt: string }).systemPrompt;
     assert.match(prompt, /^base\n\n/);
     assert.ok(prompt.length > "base\n\n".length);
+  });
+});
+
+test("continual memory injects the compact reminder once", async () => {
+  await withPiSubagent(undefined, async () => {
+    const handlers = loadHandlers();
+    assert.ok(handlers.session_compact, "expected session_compact handler");
+    assert.ok(handlers.before_agent_start, "expected before_agent_start handler");
+    handlers.session_compact({});
+    const first = await handlers.before_agent_start({ systemPrompt: "base" }) as {
+      systemPrompt: string;
+    };
+    assert.match(first.systemPrompt, /offer memory_write — do not auto-write/);
+    const second = await handlers.before_agent_start({ systemPrompt: "base" }) as {
+      systemPrompt: string;
+    };
+    assert.doesNotMatch(second.systemPrompt, /offer memory_write — do not auto-write/);
+  });
+});
+
+test("continual memory never injects the compact reminder for subagents", async () => {
+  await withPiSubagent("1", async () => {
+    const handlers = loadHandlers();
+    handlers.session_compact?.({});
+    const result = await handlers.before_agent_start?.({ systemPrompt: "base" });
+    assert.equal(result, undefined);
   });
 });

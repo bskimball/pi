@@ -47,7 +47,7 @@ print(f'Transcribed {len(transcript_paths)} file(s)', file=sys.stderr)
 
 After transcription:
 - Read the transcript paths from `graphify-out/.graphify_transcripts.json`
-- Add them to the docs list before serialized machinist Part B in the main SKILL (not generic/parallel writers)
+- Add them to the docs list before serialized machinist Part B in `references/build.md` (not generic/parallel writers)
 - Print how many transcripts were created: `Transcribed N video file(s) -> treating as docs`
 - If transcription fails for a file, print a warning and continue with the rest
 

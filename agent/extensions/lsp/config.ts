@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { LanguageKey } from "./paths.ts";
-import { configSearchPaths } from "./paths.ts";
+import { configSearchPaths, LANGUAGE_KEYS, type LanguageKey } from "./paths.ts";
 
 export interface ServerCommandSpec {
   command: string;
@@ -107,6 +106,24 @@ const DEFAULTS: Record<LanguageKey, ResolvedServer> = {
     missingHint:
       "Install phpactor (https://phpactor.readthedocs.io) or intelephense (npm i -g intelephense) and ensure it is on PATH.",
   },
+  rust: {
+    key: "rust",
+    enabled: true,
+    candidates: [{ command: "rust-analyzer", args: [] }],
+    initializationOptions: {},
+    settings: {},
+    rootMarkers: ["Cargo.toml", "rust-project.json", ".git"],
+    missingHint: "Install rust-analyzer and keep it on PATH.",
+  },
+  zig: {
+    key: "zig",
+    enabled: true,
+    candidates: [{ command: "zls", args: [] }],
+    initializationOptions: {},
+    settings: {},
+    rootMarkers: ["build.zig", "build.zig.zon", ".git"],
+    missingHint: "Install zls and keep it on PATH.",
+  },
 };
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
@@ -144,7 +161,7 @@ function sanitizeConfig(obj: Record<string, unknown>): LspUserConfig {
   }
   if (obj.servers && typeof obj.servers === "object" && !Array.isArray(obj.servers)) {
     const servers: LspUserConfig["servers"] = {};
-    for (const key of ["typescript", "python", "go", "php"] as LanguageKey[]) {
+    for (const key of LANGUAGE_KEYS) {
       const entry = (obj.servers as Record<string, unknown>)[key];
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       servers[key] = sanitizeServer(entry as Record<string, unknown>);

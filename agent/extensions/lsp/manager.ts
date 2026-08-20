@@ -29,6 +29,7 @@ import {
   languageForPath,
   pathToUri,
   resolvePath,
+  LANGUAGE_KEYS,
   type LanguageKey,
   uriToPath,
 } from "./paths.ts";
@@ -276,7 +277,7 @@ export class LspManager {
     const lang = languageForPath(path);
     if (!lang) {
       throw new Error(
-        `Unsupported file type for ${path}. Supported: TypeScript/JavaScript, Python, Go, PHP.`,
+        `Unsupported file type for ${path}. Supported: TypeScript/JavaScript, Python, Go, PHP, Rust, Zig.`,
       );
     }
     const { client, server } = await this.clientFor(path, lang.key, signal);
@@ -370,7 +371,7 @@ export class LspManager {
       languageKey = languageForPath(anchorPath)?.key;
     }
     if (!languageKey) {
-      const order: LanguageKey[] = ["typescript", "python", "go", "php"];
+      const order = LANGUAGE_KEYS;
       let lastError: string | undefined;
       const all: string[] = [];
       for (const key of order) {
@@ -626,9 +627,9 @@ export class LspManager {
     signal?: AbortSignal,
   ): Promise<NormalizedSymbol[]> {
     const lang = languageForPath(anchorPath)?.key;
-    const keys: LanguageKey[] = lang
+    const keys: readonly LanguageKey[] = lang
       ? [lang]
-      : ["typescript", "python", "go", "php"];
+      : LANGUAGE_KEYS;
     const collected: NormalizedSymbol[] = [];
     for (const key of keys) {
       if (signal?.aborted) throw new Error("LSP operation aborted.");

@@ -17,6 +17,8 @@ describe("paths", () => {
     assert.equal(languageForPath("a.py")?.key, "python");
     assert.equal(languageForPath("a.go")?.key, "go");
     assert.equal(languageForPath("a.php")?.key, "php");
+    assert.equal(languageForPath("a.rs")?.key, "rust");
+    assert.equal(languageForPath("a.zig")?.key, "zig");
     assert.equal(languageForPath("a.md"), undefined);
   });
 

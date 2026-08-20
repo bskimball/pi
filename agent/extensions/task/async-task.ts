@@ -1,6 +1,6 @@
 // async-task: session-backed bidirectional RPC sub-agents.
 //
-// Tools: task_start, task_status, task_list, task_send, task_wait,
+// Tools: task_start, task_rebind, task_status, task_list, task_send, task_wait,
 //        task_abort, task_close, task_reply.
 // Additive to the existing synchronous `task` tool in amp-task.ts.
 // Plain bounded tool results only — no custom TUI renderers or render timers.
@@ -38,6 +38,14 @@ import {
   findWorkerByHandle,
   findWorkerByInstance,
 } from "./runtime/worker-identity.ts";
+import {
+  classifyWorkerSidecar,
+  deleteWorkerSidecar,
+  isPidAlive,
+  listWorkerSidecars,
+  writeWorkerSidecar,
+  type WorkerSidecar,
+} from "./runtime/worker-sidecar.ts";
 import {
   killProcessTree,
   killProcessTreeSync,
@@ -141,6 +149,7 @@ const NOTICE_RESULT_CAP = 400;
 const EXCLUDED_CHILD_TOOLS = [
   "task",
   "task_start",
+  "task_rebind",
   "task_status",
   "task_list",
   "task_send",
@@ -238,6 +247,7 @@ interface Worker extends RuntimeEventWorker {
   cleanupWorkers?: number;
   cleanupMaxWorkers?: number;
   pendingUi: Map<string, PendingUiRequest>;
+  lastPersistedSidecar?: { lifecycle: WorkerLifecycle; generation: number; pid?: number };
 }
 
 // ---------------------------------------------------------------- helpers
@@ -600,7 +610,46 @@ export default function (pi: ExtensionAPI) {
 
   const liveCount = () => runtime.liveCount();
   const pruneSettled = () => runtime.pruneSettled();
-  const notifySubscribers = (worker: Worker) => runtime.notify(worker);
+  const persistWorker = (worker: Worker) => {
+    if (worker.closed) return;
+    const snapshot = {
+      lifecycle: worker.lifecycle,
+      generation: worker.generation,
+      pid: worker.pid,
+    };
+    if (
+      worker.lastPersistedSidecar?.lifecycle === snapshot.lifecycle &&
+      worker.lastPersistedSidecar.generation === snapshot.generation &&
+      worker.lastPersistedSidecar.pid === snapshot.pid
+    ) return;
+    try {
+      writeWorkerSidecar({
+        version: 1,
+        instanceId: worker.instanceId,
+        id: worker.id,
+        agent: worker.agent,
+        mission: worker.mission,
+        cwd: worker.cwd,
+        model: worker.model,
+        thinking: worker.thinking,
+        sessionDir: worker.sessionDir,
+        pid: worker.pid,
+        parentPid: process.pid,
+        createdAt: worker.createdAt,
+        updatedAt: worker.updatedAt,
+        lifecycle: worker.lifecycle,
+        generation: worker.generation,
+        closed: false,
+      });
+      worker.lastPersistedSidecar = snapshot;
+    } catch {
+      // Sidecars are durability metadata; a live worker remains usable.
+    }
+  };
+  const notifySubscribers = (worker: Worker) => {
+    persistWorker(worker);
+    runtime.notify(worker);
+  };
   const touch = (worker: Worker) => runtime.touch(worker);
   const pushError = (worker: Worker, message: string) =>
     runtime.pushError(worker, message);
@@ -1061,8 +1110,10 @@ export default function (pi: ExtensionAPI) {
     options?: { error?: string; killReason?: string },
   ) => runtime.settleGeneration(worker, lifecycle, options, eventHooks);
 
-  const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) =>
+  const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) => {
     runtime.handleEvent(worker, event, eventHooks);
+    persistWorker(worker);
+  };
 
   const handleUiRequest = (
     worker: Worker,
@@ -1082,14 +1133,18 @@ export default function (pi: ExtensionAPI) {
       prompt: string;
       cwd: string;
       model?: string;
+      rebind?: WorkerSidecar;
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
-    const { id, instanceId } = createWorkerIdentity(nextId++);
+    const identity = params.rebind
+      ? { id: createWorkerIdentity(nextId++).id, instanceId: params.rebind.instanceId }
+      : createWorkerIdentity(nextId++);
+    const { id, instanceId } = identity;
     writeLastPhase(`task_start:pre-spawn agent=${def.name} id=${id}`);
-    const sessionDir = ensureSessionDir(instanceId);
+    const sessionDir = params.rebind?.sessionDir ?? ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
-    const attempts = modelAttempts(def, params.model);
+    const attempts = modelAttempts(def, params.model ?? params.rebind?.model);
     // Skip known-unhealthy provider/model circuits before spawn. When every
     // candidate is open, selectAttempt still returns a deterministic fail-safe
     // without erasing circuit state.
@@ -1101,11 +1156,11 @@ export default function (pi: ExtensionAPI) {
       instanceId,
       id,
       agent: def.name,
-      mission: missionFromPrompt(params.prompt),
+      mission: params.rebind?.mission ?? missionFromPrompt(params.prompt),
       cwd: params.cwd,
       model: modelLabel,
       thinking: def.thinking,
-      initialPrompt: params.prompt,
+      initialPrompt: params.rebind ? "" : params.prompt,
       modelAttempts: attempts,
       modelAttemptIndex: initial.index,
       circuitFailureAttempt: undefined,
@@ -1114,9 +1169,9 @@ export default function (pi: ExtensionAPI) {
       fallbackInProgress: false,
       fallbackAwaitingAgentStart: false,
       fallbackEpoch: 0,
-      lifecycle: "starting",
-      generation: 1,
-      createdAt: Date.now(),
+      lifecycle: params.rebind ? "settled" : "starting",
+      generation: params.rebind?.generation ?? 1,
+      createdAt: params.rebind?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
       renderVersion: 0,
       phase: "none",
@@ -1136,7 +1191,7 @@ export default function (pi: ExtensionAPI) {
       closed: false,
       waiters: [],
       pendingUi: new Map(),
-      generationStartedAt: Date.now(),
+      generationStartedAt: params.rebind?.updatedAt ?? Date.now(),
     };
 
     workers.set(instanceId, worker);
@@ -1225,9 +1280,16 @@ export default function (pi: ExtensionAPI) {
 
     worker.client = client;
     worker.pid = client.pid;
+    persistWorker(worker);
     writeLastPhase(
       `task_start:spawned id=${id} pid=${String(client.pid ?? "none")}`,
     );
+
+    if (params.rebind) {
+      worker.killReason = "rebound after parent exit; use task_send mode=prompt to continue";
+      notifySubscribers(worker);
+      return { worker };
+    }
 
     runtime.armHard(worker, timeoutMs);
 
@@ -1250,6 +1312,11 @@ export default function (pi: ExtensionAPI) {
           worker.countsTowardCap = false;
           worker.lifecycle = "failed";
           worker.closed = true;
+          try {
+            deleteWorkerSidecar(worker.sessionDir);
+          } catch {
+            // Sidecar deletion is best effort after a rejected prompt.
+          }
           clearHard(worker);
           clearIdle(worker);
           try {
@@ -1270,7 +1337,12 @@ export default function (pi: ExtensionAPI) {
         forceKillWorker(worker, `prompt accept failed: ${finalError}`);
         worker.countsTowardCap = false;
         worker.lifecycle = "failed";
-        // Leave metadata for diagnosis; process will exit via kill.
+        worker.closed = true;
+        try {
+          deleteWorkerSidecar(worker.sessionDir);
+        } catch {
+          // Sidecar deletion is best effort after a failed prompt acceptance.
+        }
         return { error: `${id} failed to accept prompt: ${finalError}` };
       }
     }
@@ -1365,6 +1437,11 @@ export default function (pi: ExtensionAPI) {
     worker.client = undefined;
     worker.pid = undefined;
     worker.updatedAt = Date.now();
+    try {
+      deleteWorkerSidecar(worker.sessionDir);
+    } catch {
+      // Clean shutdown must not revive this worker; deletion is best effort.
+    }
     if (worker.hasPinnedSurface && reason === "task_close") {
       worker.cleanupComplete = true;
       worker.cleanupWorkers = liveCount();
@@ -1570,6 +1647,62 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         }, "[async worker display unavailable]");
       },
     }),
+  });
+
+  pi.registerTool({
+    name: "task_rebind",
+    label: "Task Rebind",
+    description:
+      "Recover dead async RPC workers after a parent crash. Live orphan processes are reported but never attached to or killed because their stdio pipes are not stolen.",
+    promptSnippet:
+      "After a parent crash or resume, call task_rebind; historical handles are not valid until task_status confirms a rebound worker.",
+    parameters: Type.Object({
+      id: Type.Optional(Type.String({ description: "Optional prior task handle or durable instance id." })),
+    }),
+    executionMode: "parallel",
+    async execute(_toolCallId, params) {
+      const requested = params.id?.trim();
+      const lines: string[] = [];
+      let stoppedForCap = false;
+      for (const sidecar of listWorkerSidecars(rpcSessionRoot())) {
+        if (requested && sidecar.id !== requested && sidecar.instanceId !== requested) continue;
+        const classification = classifyWorkerSidecar(sidecar, {
+          registered: !!workerByInstance(sidecar.instanceId),
+          pidAlive: isPidAlive,
+        });
+        if (classification === "skip") continue;
+        if (classification === "orphan") {
+          lines.push(`orphan pid=${sidecar.pid ?? "missing"} session_dir=${sidecar.sessionDir} (not rebound; pipes are not stolen)`);
+          continue;
+        }
+        if (stoppedForCap || liveCount() >= MAX_LIVE_WORKERS) {
+          stoppedForCap = true;
+          lines.push(`skipped-for-cap instance=${sidecar.instanceId}`);
+          continue;
+        }
+        const def = discoverAgents().get(sidecar.agent);
+        if (!def) {
+          lines.push(`error instance=${sidecar.instanceId}: agent "${sidecar.agent}" is unavailable`);
+          continue;
+        }
+        const { worker, error } = await spawnWorker(def, {
+          prompt: "",
+          cwd: sidecar.cwd,
+          model: sidecar.model,
+          rebind: sidecar,
+        });
+        lines.push(error
+          ? `error instance=${sidecar.instanceId}: ${error}`
+          : `rebound ${worker!.id} instance=${sidecar.instanceId} session_dir=${sidecar.sessionDir}`);
+      }
+      return textResult(lines.length ? lines.slice(0, 32).join("\n") : "No eligible worker sidecars found.", false);
+    },
+    ...controlRenderers("task_rebind", (result, theme, width, expanded) =>
+      controlLines(theme, width, "task_rebind", {
+        operation: "recover",
+        kind: result?.isError ? "failed" : "succeeded",
+        message: cleanOneLine(textContent(result), 240),
+      }, expanded)),
   });
 
   pi.registerTool({

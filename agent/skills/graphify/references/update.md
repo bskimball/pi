@@ -61,9 +61,9 @@ print('code_only:', code_only)
 "
 ```
 
-If `code_only` is True: print `[graphify update] Code-only changes detected - skipping semantic extraction (no LLM needed)`, run only main SKILL Part A (AST) on the changed files, skip Part B entirely (no machinist writers), then go straight to Part C merge and Steps 4–8.
+If `code_only` is True: print `[graphify update] Code-only changes detected - skipping semantic extraction (no LLM needed)`, run only Part A (AST) in `references/build.md` on the changed files, skip Part B entirely (no machinist writers), then go straight to Part C merge and Steps 4–8.
 
-If `code_only` is False (any changed file is a doc/paper/image/video): **first, if any changed file is in `new_files['video']`, run `references/transcribe.md` (Step 2.5) on those files, then rewrite `.graphify_detect.json` to move the resulting transcript paths into `files['document']` and drop `files['video']`** — otherwise raw `.mp4/.mp3` paths are fed to semantic extraction as unreadable media (#1392). Then run the **main SKILL serialized machinist Part B** (one writing `machinist` at a time via `task` or `task_start` + `task_close`; never scout, never generic/general-purpose/parallel writers) plus Part A/C as documented in SKILL.md. Do not invent a parallel-subagent or generic Agent API flow.
+If `code_only` is False (any changed file is a doc/paper/image/video): **first, if any changed file is in `new_files['video']`, run `references/transcribe.md` (Step 2.5) on those files, then rewrite `.graphify_detect.json` to move the resulting transcript paths into `files['document']` and drop `files['video']`** — otherwise raw `.mp4/.mp3` paths are fed to semantic extraction as unreadable media (#1392). Then run the **serialized machinist Part B in `references/build.md`** (one writing `machinist` at a time via `task` or `task_start` + `task_close`; never scout, never generic/general-purpose/parallel writers) plus Part A/C as documented there. Do not invent a parallel-subagent or generic Agent API flow.
 
 
 If no new files exist (only deletions), create an empty extraction so the merge step can prune:

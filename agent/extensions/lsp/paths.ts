@@ -12,9 +12,10 @@ import {
 import { pathToFileURL } from "node:url";
 
 /** Language id and server key for a file path. */
-export type LanguageKey = "typescript" | "python" | "go" | "php";
+export type LanguageKey = "typescript" | "python" | "go" | "php" | "rust" | "zig";
+export const LANGUAGE_KEYS: readonly LanguageKey[] = ["typescript", "python", "go", "php", "rust", "zig"];
 
-const EXT_TO_LANG: Record<string, { languageId: string; key: LanguageKey }> = {
+export const EXT_TO_LANG: Record<string, { languageId: string; key: LanguageKey }> = {
   ".ts": { languageId: "typescript", key: "typescript" },
   ".tsx": { languageId: "typescriptreact", key: "typescript" },
   ".js": { languageId: "javascript", key: "typescript" },
@@ -27,9 +28,11 @@ const EXT_TO_LANG: Record<string, { languageId: string; key: LanguageKey }> = {
   ".pyi": { languageId: "python", key: "python" },
   ".go": { languageId: "go", key: "go" },
   ".php": { languageId: "php", key: "php" },
+  ".rs": { languageId: "rust", key: "rust" },
+  ".zig": { languageId: "zig", key: "zig" },
 };
 
-const ROOT_MARKERS: Record<LanguageKey, string[]> = {
+export const ROOT_MARKERS: Record<LanguageKey, string[]> = {
   typescript: [
     "tsconfig.json",
     "jsconfig.json",
@@ -48,6 +51,8 @@ const ROOT_MARKERS: Record<LanguageKey, string[]> = {
   ],
   go: ["go.work", "go.mod", ".git"],
   php: ["composer.json", "phpactor.json", ".git"],
+  rust: ["Cargo.toml", "rust-project.json", ".git"],
+  zig: ["build.zig", "build.zig.zon", ".git"],
 };
 
 export function languageForPath(filePath: string): { languageId: string; key: LanguageKey } | undefined {

@@ -89,6 +89,7 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
 - User profile: loader owned directly by `user-profile.ts`.
 - MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.
+- Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; stock tool rendering for isolated writer worktrees.
 
 ## Secrets
 

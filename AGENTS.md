@@ -38,6 +38,7 @@ agent/extensions/
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
 ├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate
 ├── graphify.ts                            local knowledge-graph query
+├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
 ├── mcp-adapter.ts                         pi-mcp-adapter bridge
 ├── read-guard.ts                          duplicate-image + downscale guard
 ├── user-profile.ts                        private user context injection

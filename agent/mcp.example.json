@@ -9,10 +9,10 @@
       ],
       "lifecycle": "lazy"
     },
-    "example-http-server": {
-      "url": "https://mcp.example.com/mcp",
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
       "auth": "bearer",
-      "bearerTokenEnv": "EXAMPLE_MCP_TOKEN"
+      "bearerTokenEnv": "CONTEXT7_API_KEY"
     }
   },
   "settings": {

@@ -161,17 +161,15 @@ semantics: `node_modules/pi-mcp-adapter/README.md` ("Server Options" and
   `!!` to escape a literal leading `!`.
 - OAuth tokens are stored in the OS credential store, not in this file or
   `oauthDir`.
-- This repo's active `agent/mcp.json` currently defines a plain-text
-  `CONTEXT7_API_KEY` header value rather than an env-var reference — that is
-  why the file is gitignored. Do not "fix" this by editing the active file as
-  part of documentation work; only the example file should model the safer
-  `env`/`bearerTokenEnv` pattern.
+- The active `agent/mcp.json` should use env-var references for secrets (for
+  example, Context7 uses `bearerTokenEnv: "CONTEXT7_API_KEY"`); the tracked
+  example file models this pattern without a real token.
 
 ### Example (`agent/mcp.example.json`)
 
-Includes one stdio server (`chrome-devtools`, no secrets) and one HTTP server
-using `bearerTokenEnv` instead of an inline header value, plus a minimal
-`settings` block that disables persistent MCP footer status. The
+Includes one stdio server (`chrome-devtools`, no secrets) and Context7 as an
+HTTP server using `bearerTokenEnv`, plus a minimal settings block that disables
+persistent MCP footer status. The
 `chrome-devtools-mcp` package is pinned to a tested
 version because `npx -y` downloads and executes that package when it is not
 already cached. Review and update the pin deliberately.
