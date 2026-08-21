@@ -34,6 +34,25 @@ export const EXPANDED_CARD_MAX_CHARS = 8_000;
 export const EXPANDED_CARD_MAX_LINES = 40;
 export const EXPANDED_CARD_MAX_LINE_CHARS = 240;
 
+/** Hard ceiling for a fully assembled expanded card, regardless of per-section limits. */
+export const EXPANDED_CARD_RENDER_MAX_LINES = 40;
+
+/** Slice assembled card lines to the expanded-frame height cap. */
+export function capRenderedCardLines(
+  lines: readonly string[],
+  maxLines = EXPANDED_CARD_RENDER_MAX_LINES,
+): string[] {
+  if (lines.length <= maxLines) return [...lines];
+  return lines.slice(0, Math.max(0, maxLines));
+}
+
+/** Character budget reported on expand breadcrumbs (assembled card, not UTF-16 .length of ANSI). */
+export function renderedCardCharCount(lines: readonly string[]): number {
+  let n = 0;
+  for (const line of lines) n += line.length;
+  return n;
+}
+
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }

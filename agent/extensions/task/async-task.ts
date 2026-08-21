@@ -1,7 +1,7 @@
 // async-task: session-backed bidirectional RPC sub-agents.
 //
 // Tools: task_start, task_rebind, task_status, task_list, task_send, task_wait,
-//        task_abort, task_close, task_reply.
+//        task_abort, task_close, task_reply, task_chain.
 // Additive to the existing synchronous `task` tool in amp-task.ts.
 // Plain bounded tool results only — no custom TUI renderers or render timers.
 
@@ -66,10 +66,17 @@ import {
 import {
   boundExpandedCardText,
   boundText,
+  capRenderedCardLines,
   cleanOneLine,
   extractAssistantText,
   formatAge,
+  renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
+import {
+  FLEET_WIDGET_KEY,
+  renderFleetWidgetLines,
+  type FleetWorkerItem,
+} from "./presentation/fleet-view.ts";
 import { safeTruncateToWidth } from "./presentation/safe-text-layout.ts";
 import {
   TREE,
@@ -82,6 +89,7 @@ import {
 import {
   MAX_LIVE_WORKERS,
   MAX_SETTLED_META,
+  isLiveLifecycle,
   shouldRetryModelFallback,
   splitQualifiedModel,
   workerStateLabel,
@@ -126,11 +134,21 @@ import { noticeComponent, type NoticeRow } from "./presentation/notice-view.ts";
 import { waitForSnapshot } from "./runtime/wait-policy.ts";
 import {
   WAIT_DEFAULT_TIMEOUT_SEC,
+  SETTLED_RESULT_CHARS,
+  SETTLED_RESULT_LINES,
   formatCompactWorkerStatus,
   formatSettledResult,
   formatWaitHeartbeat,
   type WorkerStatusSnapshot,
 } from "./runtime/worker-status.ts";
+import {
+  evaluateSettledReport,
+  parseReportSchema,
+  reportInstruction,
+  reportStatusLine,
+  type ReportStatus,
+} from "./runtime/report-schema.ts";
+import { substitutePrev } from "./runtime/chain-prev.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -163,6 +181,7 @@ const EXCLUDED_CHILD_TOOLS = [
   "task_abort",
   "task_close",
   "task_reply",
+  "task_chain",
   "subagent",
   "wait_for_subagents",
   "wait",
@@ -209,6 +228,7 @@ interface WorkerView {
   latestText: string;
   killReason?: string;
   countsTowardCap: boolean;
+  reportStatus?: ReportStatus;
   cleanupComplete?: boolean;
   cleanupWorkers?: number;
   cleanupMaxWorkers?: number;
@@ -254,6 +274,10 @@ interface Worker extends RuntimeEventWorker {
   cleanupMaxWorkers?: number;
   pendingUi: Map<string, PendingUiRequest>;
   lastPersistedSidecar?: { lifecycle: WorkerLifecycle; generation: number; pid?: number };
+  reportSchema?: string;
+  parsedReport: Record<string, unknown> | null;
+  reportStatus: ReportStatus;
+  reportError?: string;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -380,15 +404,31 @@ function renderWorkerCard(
           ),
       });
     }
+    if (view.reportStatus && view.reportStatus !== "none-requested") {
+      rows.push({
+        line: (rail) =>
+          safeTruncateToWidth(
+            `${theme.fg("dim", rail)}${TREE.hang}${theme.fg("muted", reportStatusLine(view.reportStatus!, null))}`,
+            width,
+          ),
+      });
+    }
 
-    return buildTreeLines(
+    const assembled = buildTreeLines(
       theme,
       width,
       lines[0],
       rows,
       boundedRailTextLines(theme, width, headerPreview ?? []),
     );
+    return expanded ? capRenderedCardLines(assembled) : assembled;
   }, "[async worker display unavailable]");
+}
+
+function noteExpandedCardRender(kind: string, lines: readonly string[]): void {
+  writeLastPhase(
+    `task-card:expand kind=${kind} chars=${renderedCardCharCount(lines)}`,
+  );
 }
 
 function viewFromDetails(details: unknown): WorkerView | undefined {
@@ -526,6 +566,9 @@ function controlRenderers(
       theme: any,
       context: ToolRenderContext<AsyncRenderState, any>,
     ): Component {
+      if (context.expanded) {
+        noteExpandedCardRender(`${tool}-call`, []);
+      }
       return new WidthText(
         (width) =>
           context.state.hasResult
@@ -541,10 +584,17 @@ function controlRenderers(
       context: ToolRenderContext<AsyncRenderState, any>,
     ): Component {
       context.state.hasResult = true;
-      return new WidthText(
-        (width) => build(result, theme, width, context.expanded || options.expanded),
-        `[${tool} result unavailable]`,
-      );
+      const expanded = context.expanded || options.expanded;
+      if (expanded) {
+        const preview = capRenderedCardLines(build(result, {} as any, 80, true));
+        noteExpandedCardRender(tool, preview);
+      }
+      return new WidthText((width) => {
+        const lines = build(result, theme, width, context.expanded || options.expanded);
+        return (context.expanded || options.expanded)
+          ? capRenderedCardLines(lines)
+          : lines;
+      }, `[${tool} result unavailable]`);
     },
   });
 }
@@ -617,6 +667,59 @@ export default function (pi: ExtensionAPI) {
   let nextId = 1;
   let agentBusy = false;
   let shuttingDown = false;
+  let fleetUiCtx: ExtensionContext | undefined;
+  let cachedFleetItems: FleetWorkerItem[] = [];
+
+  const snapshotFleetItems = (): FleetWorkerItem[] => {
+    const items: FleetWorkerItem[] = [];
+    for (const worker of workers.values()) {
+      if (!isLiveLifecycle(worker.lifecycle) || worker.closed) continue;
+      items.push({
+        id: worker.id,
+        agent: worker.agent,
+        lifecycle: worker.lifecycle,
+        createdAt: worker.createdAt,
+        lastEventAt: worker.lastEventAt,
+      });
+    }
+    return items;
+  };
+
+  const syncFleetWidget = (ctx?: ExtensionContext) => {
+    if (ctx) fleetUiCtx = ctx;
+    const uiCtx = fleetUiCtx;
+    if (!taskPresentationEnabled()) {
+      cachedFleetItems = [];
+      if (uiCtx?.hasUI && uiCtx.mode === "tui") {
+        try {
+          uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+        } catch {
+          // Widget teardown must not interrupt a session transition.
+        }
+      }
+      return;
+    }
+    cachedFleetItems = snapshotFleetItems();
+    if (!uiCtx?.hasUI || uiCtx.mode !== "tui") return;
+    try {
+      if (!cachedFleetItems.length) {
+        uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+        return;
+      }
+      const items = cachedFleetItems;
+      uiCtx.ui.setWidget(
+        FLEET_WIDGET_KEY,
+        (_tui, theme) =>
+          new WidthText(
+            (width) => renderFleetWidgetLines(theme, width, items),
+            "[subagent fleet unavailable]",
+          ),
+        { placement: "belowEditor" },
+      );
+    } catch {
+      // Transcript cards remain if the widget cannot mount.
+    }
+  };
 
   const liveCount = () => runtime.liveCount();
   const pruneSettled = () => runtime.pruneSettled();
@@ -764,6 +867,7 @@ export default function (pi: ExtensionAPI) {
     ).text,
     killReason: worker.killReason,
     countsTowardCap: worker.countsTowardCap,
+    reportStatus: worker.reportStatus,
     cleanupComplete: worker.cleanupComplete,
     cleanupWorkers: worker.cleanupWorkers,
     cleanupMaxWorkers: worker.cleanupMaxWorkers,
@@ -1062,20 +1166,37 @@ export default function (pi: ExtensionAPI) {
     retryFallback: retryModelFallback,
     onSuccessfulSettlement: noteCircuitSuccess,
     onFailedSettlement: noteCircuitFailure,
-    beforeSettlementNotify: (worker) =>
-      resolveWaiters(worker, generationSnapshot(worker)),
+    beforeSettlementNotify: (worker) => {
+      applySettledReport(worker);
+      resolveWaiters(worker, generationSnapshot(worker));
+    },
     afterSettlementNotify: maybeNotifySettled,
+  };
+
+  const applySettledReport = (worker: Worker) => {
+    const evaluation = evaluateSettledReport(
+      worker.latestResult || worker.latestAssistantText || "",
+      worker.reportSchema,
+    );
+    worker.reportStatus = evaluation.status;
+    worker.parsedReport = evaluation.parsed;
+    worker.reportError = evaluation.error;
   };
 
   const settleGeneration = (
     worker: Worker,
     lifecycle: "settled" | "failed",
     options?: { error?: string; killReason?: string },
-  ) => runtime.settleGeneration(worker, lifecycle, options, eventHooks);
+  ) => {
+    const result = runtime.settleGeneration(worker, lifecycle, options, eventHooks);
+    syncFleetWidget();
+    return result;
+  };
 
   const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) => {
     runtime.handleEvent(worker, event, eventHooks);
     persistWorker(worker);
+    syncFleetWidget();
   };
 
   const handleUiRequest = (
@@ -1097,13 +1218,18 @@ export default function (pi: ExtensionAPI) {
       cwd: string;
       model?: string;
       rebind?: WorkerSidecar;
+      reportSchema?: string;
+      forkSessionFile?: string;
+      lastPhaseTag?: string;
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
     const identity = params.rebind
       ? { id: createWorkerIdentity(nextId++).id, instanceId: params.rebind.instanceId }
       : createWorkerIdentity(nextId++);
     const { id, instanceId } = identity;
-    writeLastPhase(`task_start:pre-spawn agent=${def.name} id=${id}`);
+    writeLastPhase(
+      `${params.lastPhaseTag ?? "task_start:pre-spawn"} agent=${def.name} id=${id}`,
+    );
     const sessionDir = params.rebind?.sessionDir ?? ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -1155,6 +1281,13 @@ export default function (pi: ExtensionAPI) {
       waiters: [],
       pendingUi: new Map(),
       generationStartedAt: params.rebind?.updatedAt ?? Date.now(),
+      reportSchema: params.rebind ? undefined : params.reportSchema,
+      parsedReport: null,
+      reportStatus: params.rebind
+        ? "none-requested"
+        : params.reportSchema?.trim()
+          ? "missing"
+          : "none-requested",
     };
 
     workers.set(instanceId, worker);
@@ -1177,6 +1310,12 @@ export default function (pi: ExtensionAPI) {
       "--name",
       `async-${def.name}-${id}`,
     ];
+    // Pi CLI: --fork coexists with --session-dir (conflicts only with
+    // --session/--continue/--resume/--no-session). New transcript is written
+    // under sessionDir; source file is the parent session.
+    if (!params.rebind && params.forkSessionFile) {
+      args.push("--fork", params.forkSessionFile);
+    }
     if (model) {
       const slash = model.indexOf("/");
       if (slash > 0) {
@@ -1206,8 +1345,14 @@ export default function (pi: ExtensionAPI) {
       .filter(Boolean)
       .join("\n\n");
     if (systemPrompt) args.push("--system-prompt", systemPrompt);
-    if (shared.appendSystemPrompt) {
-      args.push("--append-system-prompt", shared.appendSystemPrompt);
+    const appendParts = [
+      shared.appendSystemPrompt,
+      !params.rebind && params.reportSchema?.trim()
+        ? reportInstruction(params.reportSchema)
+        : undefined,
+    ].filter(Boolean);
+    if (appendParts.length) {
+      args.push("--append-system-prompt", appendParts.join("\n\n"));
     }
 
     let client: RpcClient;
@@ -1339,8 +1484,42 @@ export default function (pi: ExtensionAPI) {
       worker.lifecycle = "running";
     }
     armIdle(worker);
+    syncFleetWidget();
     return { worker };
   };
+
+  const waitWorkerGeneration = (
+    worker: Worker,
+    targetGen: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) =>
+    waitForSnapshot<GenerationSnapshot>({
+      signal,
+      timeoutMs,
+      register(resolve) {
+        const waiter: Worker["waiters"][number] = {
+          generation: targetGen,
+          resolve,
+          timer: undefined,
+        };
+        worker.waiters.push(waiter);
+        notifySubscribers(worker);
+        if (
+          (worker.lifecycle === "settled" ||
+            worker.lifecycle === "failed" ||
+            worker.lifecycle === "closed") &&
+          worker.generation >= targetGen
+        ) {
+          resolve(generationSnapshot(worker));
+        }
+        return () => {
+          const index = worker.waiters.indexOf(waiter);
+          if (index >= 0) worker.waiters.splice(index, 1);
+          notifySubscribers(worker);
+        };
+      },
+    });
 
   const closeWorker = (
     worker: Worker,
@@ -1413,6 +1592,7 @@ export default function (pi: ExtensionAPI) {
     notifySubscribers(worker);
     worker.pinnedInvalidate = undefined;
     pruneSettled();
+    syncFleetWidget();
     return `${worker.id} closed (${reason}).`;
   };
 
@@ -1455,9 +1635,22 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
             "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider.",
         }),
       ),
+      reportSchema: Type.Optional(
+        Type.String({
+          description:
+            "JSON Schema subset (object; properties string|number|boolean; required[]; optional enum). Child final message must include a ```report``` JSON fence matching it.",
+        }),
+      ),
+      context: Type.Optional(
+        Type.Union([Type.Literal("fresh"), Type.Literal("fork")], {
+          description:
+            "fresh (default) starts empty. fork copies this parent session unfiltered, including prior task_* calls. Falls back to fresh if the parent session is not yet persisted.",
+        }),
+      ),
     }),
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
       const def = agents.get(params.agent);
       if (!def) {
         return textResult(
@@ -1478,10 +1671,37 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       const cwdError = validateCwd(cwd);
       if (cwdError) return textResult(cwdError, true);
 
+      let reportSchema = params.reportSchema?.trim() || undefined;
+      if (reportSchema) {
+        const parsed = parseReportSchema(reportSchema);
+        if (parsed.error) {
+          return textResult(`Invalid reportSchema: ${parsed.error}`, true);
+        }
+      }
+
+      let forkSessionFile: string | undefined;
+      let contextNote = "context: fresh";
+      if (params.context === "fork") {
+        let parentFile: string | undefined;
+        try {
+          parentFile = ctx.sessionManager?.getSessionFile?.();
+        } catch {
+          parentFile = undefined;
+        }
+        if (parentFile && fs.existsSync(parentFile)) {
+          forkSessionFile = parentFile;
+          contextNote = "context: fork";
+        } else {
+          contextNote = "context: fresh (parent session not yet persisted)";
+        }
+      }
+
       const { worker, error } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
         model: params.model,
+        reportSchema,
+        forkSessionFile,
       });
       if (error || !worker) {
         return textResult(error ?? "Failed to start worker.", true);
@@ -1492,10 +1712,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         `agent: ${worker.agent}`,
         `model: ${worker.model ?? "default"}`,
         `generation: ${worker.generation}`,
+        contextNote,
+        reportSchema ? "reportSchema: requested" : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
         `After useful independent work, one task_wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}s). task_status is for blockers, not polling.`,
-      ].join("\n");
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
       return textResult(text, false, { worker: workerView(worker) });
     },
     ...withTaskPresentation({
@@ -1527,6 +1751,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
           countsTowardCap: true,
         };
         const call = renderLaunchReceipt(view, theme);
+        if (context.expanded) {
+          noteExpandedCardRender("worker-call", call.render(80));
+        }
         return new WidthText((width) =>
           context.state.hasResult ? [] : call.render(width),
         );
@@ -1595,18 +1822,155 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
             expanded,
             waiting,
           ).render(width);
+          const capped = expanded ? capRenderedCardLines(lines) : lines;
+          if (expanded && cached?.expanded !== true) {
+            noteExpandedCardRender("worker", capped);
+          }
           cached = {
             width,
             expanded,
             waiting,
             renderVersion,
             timeBucket,
-            lines,
+            lines: capped,
           };
-          return lines;
+          return capped;
         }, "[async worker display unavailable]");
       },
     }),
+  });
+
+  pi.registerTool({
+    name: "task_chain",
+    label: "Task Chain",
+    description:
+      "Run 1-6 specialists sequentially in one live-worker slot. Each step's bounded report replaces every {{prev}} in the next prompt. For mechanical pipelines only; no mid-chain steering. Not rebindable. First failed/killed step stops the chain.",
+    promptSnippet:
+      "Sequential 1-6 specialist pipeline; {{prev}} substitution; one slot; not rebindable.",
+    parameters: Type.Object({
+      steps: Type.Array(
+        Type.Object({
+          agent: Type.String({ description: agentParamDescription(agents) }),
+          prompt: Type.String({
+            description:
+              "Work order for this step. Use {{prev}} to insert the previous step's bounded report.",
+          }),
+        }),
+        {
+          minItems: 1,
+          maxItems: 6,
+          description: "1-6 sequential steps; max 6.",
+        },
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
+      const steps = params.steps ?? [];
+      if (!Array.isArray(steps) || steps.length < 1) {
+        return textResult("steps must contain at least one {agent, prompt}.", true);
+      }
+      if (steps.length > 6) {
+        return textResult("task_chain supports at most 6 steps.", true);
+      }
+      for (const [i, step] of steps.entries()) {
+        if (!agents.get(step.agent)) {
+          return textResult(
+            `Unknown agent "${step.agent}" at step ${i + 1}. Available: ${[...agents.keys()].join(", ")}`,
+            true,
+          );
+        }
+        if (!step.prompt?.trim()) {
+          return textResult(`prompt is required at step ${i + 1}.`, true);
+        }
+      }
+      if (!runtime.canStart()) {
+        return textResult(
+          `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a worker with task_close first.`,
+          true,
+        );
+      }
+      const cwd = resolveCwd(undefined, ctx.cwd);
+      const cwdError = validateCwd(cwd);
+      if (cwdError) return textResult(cwdError, true);
+
+      const digest: string[] = [];
+      let prevText = "";
+      let lastReport = "";
+      let failed = false;
+
+      for (let i = 0; i < steps.length; i++) {
+        if (signal?.aborted) {
+          digest.push(`stopped: aborted before step ${i + 1}`);
+          failed = true;
+          break;
+        }
+        const step = steps[i];
+        const def = agents.get(step.agent)!;
+        const prompt = substitutePrev(step.prompt, prevText);
+        writeLastPhase(`task_chain:spawn step=${i + 1}/${steps.length}`);
+        const { worker, error } = await spawnWorker(def, {
+          prompt,
+          cwd,
+          lastPhaseTag: `task_chain:spawn step=${i + 1}/${steps.length}`,
+        });
+        if (error || !worker) {
+          digest.push(`step ${i + 1} failed ${step.agent} · ${error ?? "spawn failed"}`);
+          failed = true;
+          break;
+        }
+
+        const startedAt = Date.now();
+        const snapshot = await waitWorkerGeneration(
+          worker,
+          worker.generation,
+          worker.timeoutMs,
+          signal,
+        );
+        const elapsed = formatDuration(Date.now() - startedAt);
+
+        if (snapshot === "interrupted") {
+          closeWorker(worker, "task_chain abort", "sync");
+          digest.push(`step ${i + 1} aborted ${step.agent} · ${elapsed}`);
+          digest.push(`stopped: abort signal killed step ${i + 1}`);
+          failed = true;
+          break;
+        }
+        if (snapshot === "timeout") {
+          closeWorker(worker, "task_chain timeout", "sync");
+          digest.push(`step ${i + 1} timeout ${step.agent} · ${elapsed}`);
+          digest.push(`stopped: step ${i + 1} wait timed out`);
+          failed = true;
+          break;
+        }
+
+        const reportLine = reportStatusLine(worker.reportStatus, worker.parsedReport);
+        const ok = worker.lifecycle === "settled" && !worker.killReason;
+        const errorLine = snapshot.killReason || snapshot.errorText;
+        digest.push(
+          `step ${i + 1} ${ok ? "ok" : "failed"} ${step.agent} · ${elapsed} · ${reportLine}`,
+        );
+        const bound = formatSettledResult(snapshot.resultText);
+        lastReport = bound.text;
+        prevText = boundText(bound.text, SETTLED_RESULT_CHARS, Number.POSITIVE_INFINITY).text;
+        closeWorker(worker, "task_chain step complete", "sync");
+        if (!ok) {
+          if (errorLine) digest.push(`stopped: step ${i + 1} ${errorLine}`);
+          else digest.push(`stopped: step ${i + 1} lifecycle=${worker.lifecycle}`);
+          failed = true;
+          break;
+        }
+      }
+
+      const body = [
+        ...digest,
+        "",
+        "--- final ---",
+        lastReport || "(empty)",
+      ].join("\n");
+      const capped = boundText(body, SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES);
+      return textResult(capped.text, failed);
+    },
   });
 
   pi.registerTool({
@@ -1620,7 +1984,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       id: Type.Optional(Type.String({ description: "Optional prior task handle or durable instance id." })),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
       const requested = params.id?.trim();
       const lines: string[] = [];
       let stoppedForCap = false;
@@ -2154,6 +2519,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      syncFleetWidget(ctx);
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
       const worker = workerByHandle(id);
@@ -2204,6 +2570,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           [
             `${id} already settled (generation ${targetGen}, lifecycle=${worker.lifecycle}).`,
             `turns: ${worker.turns}`,
+            reportStatusLine(worker.reportStatus, worker.parsedReport),
             worker.killReason ? `kill_reason: ${worker.killReason}` : undefined,
             "",
             `--- result ---`,
@@ -2212,42 +2579,21 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             .filter(Boolean)
             .join("\n"),
           worker.lifecycle === "failed",
-          { worker: workerView(worker), waiting: false },
+          {
+            worker: workerView(worker),
+            waiting: false,
+            parsedReport: worker.parsedReport,
+            reportStatus: worker.reportStatus,
+          },
         );
       }
 
-      const snapshot = await waitForSnapshot<GenerationSnapshot>({
-        signal,
+      const snapshot = await waitWorkerGeneration(
+        worker,
+        targetGen,
         timeoutMs,
-        register(resolve) {
-          const waiter: Worker["waiters"][number] = {
-            generation: targetGen,
-            resolve,
-            timer: undefined,
-          };
-          worker.waiters.push(waiter);
-          // The pinned card derives its waiting hint from the waiter list.
-          notifySubscribers(worker);
-
-          // If settlement races registration, re-check. All later completion
-          // is event-driven through resolveWaiters; no presentation poll timer.
-          if (
-            (worker.lifecycle === "settled" ||
-              worker.lifecycle === "failed" ||
-              worker.lifecycle === "closed") &&
-            worker.generation >= targetGen
-          ) {
-            resolve(generationSnapshot(worker));
-          }
-
-          return () => {
-            const index = worker.waiters.indexOf(waiter);
-            if (index >= 0) worker.waiters.splice(index, 1);
-            // The pinned card derives its waiting hint from the waiter list.
-            notifySubscribers(worker);
-          };
-        },
-      });
+        signal,
+      );
 
       worker.subscribers?.delete(notifyLive);
 
@@ -2307,10 +2653,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           `${id} settled (generation ${snapshot.generation}).`,
           `lifecycle: ${worker.lifecycle}`,
           `turns: ${snapshot.turns}`,
+          reportStatusLine(worker.reportStatus, worker.parsedReport),
           snapshot.killReason
             ? `kill_reason: ${snapshot.killReason}`
             : undefined,
           snapshot.errorText ? `error: ${snapshot.errorText}` : undefined,
+          worker.reportError ? `report_error: ${worker.reportError}` : undefined,
           "",
           `--- result ---`,
           bound.text || "(empty)",
@@ -2318,7 +2666,12 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           .filter(Boolean)
           .join("\n"),
         worker.lifecycle === "failed",
-        { worker: workerView(worker), waiting: false },
+        {
+          worker: workerView(worker),
+          waiting: false,
+          parsedReport: worker.parsedReport,
+          reportStatus: worker.reportStatus,
+        },
       );
     },
     ...withTaskPresentation({
@@ -2438,7 +2791,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       id: Type.String({ description: "Worker id from task_start." }),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
       const id = params.id?.trim();
       const abortDetails = (
         outcome: string,
@@ -2575,7 +2929,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       id: Type.String({ description: "Worker id from task_start." }),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
       const worker = workerByHandle(id);
@@ -2722,11 +3077,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               ),
             );
           }
+          const capped = options.expanded ? capRenderedCardLines(lines) : lines;
+          if (options.expanded) noteExpandedCardRender("task_close", capped);
           if (!exited) {
             exited = true;
             writeLastPhase(`task_close:receipt-render:exit id=${view.id} standalone`);
           }
-          return lines;
+          return capped;
         });
       },
       }),
@@ -2942,9 +3299,14 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   pi.on("agent_settled", () => {
     agentBusy = false;
     drainSettledNotifications();
+    syncFleetWidget();
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_start", (_event, ctx: ExtensionContext) => {
+    syncFleetWidget(ctx);
+  });
+
+  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
     shuttingDown = true;
     try {
       for (const { item: worker } of workers.entries()) {
@@ -2960,6 +3322,16 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         worker.pinnedInvalidate = undefined;
       }
       workers.clear();
+      syncFleetWidget(ctx);
+      try {
+        if (ctx.hasUI && ctx.mode === "tui") {
+          ctx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+        }
+      } catch {
+        // ignore
+      }
+      fleetUiCtx = undefined;
+      cachedFleetItems = [];
     }
   });
 }

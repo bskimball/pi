@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   boundExpandedCardText,
+  capRenderedCardLines,
   EXPANDED_CARD_MAX_CHARS,
   EXPANDED_CARD_MAX_LINE_CHARS,
   EXPANDED_CARD_MAX_LINES,
+  EXPANDED_CARD_RENDER_MAX_LINES,
 } from "../text-bounds.ts";
 
 describe("boundExpandedCardText", () => {
@@ -97,5 +99,18 @@ describe("boundExpandedCardText", () => {
       keep: "tail",
     });
     assert.equal(keepPairTail.text, emoji);
+  });
+
+  it("caps assembled expanded frames to the render line ceiling", () => {
+    const many = Array.from({ length: EXPANDED_CARD_RENDER_MAX_LINES + 12 }, (_, i) => `row-${i}`);
+    const capped = capRenderedCardLines(many);
+    assert.equal(capped.length, EXPANDED_CARD_RENDER_MAX_LINES);
+    assert.equal(capped[0], "row-0");
+    assert.equal(
+      capped[capped.length - 1],
+      `row-${EXPANDED_CARD_RENDER_MAX_LINES - 1}`,
+    );
+    const short = ["a", "b"];
+    assert.deepEqual(capRenderedCardLines(short), short);
   });
 });

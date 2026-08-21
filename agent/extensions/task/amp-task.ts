@@ -31,11 +31,14 @@ import {
 } from "./runtime/agent-discovery.ts";
 import { isolatedChildEnv } from "./runtime/child-process.ts";
 import { missionFromPrompt, shortArgs } from "./presentation/task-view.ts";
+import { writeLastPhase } from "./runtime/last-phase.ts";
 import {
   boundExpandedCardText,
   boundText,
+  capRenderedCardLines,
   extractAssistantText,
   extractAssistantThinking,
+  renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
 import { formatSettledResult } from "./runtime/worker-status.ts";
 import {
@@ -377,7 +380,7 @@ function renderTaskComponent(
       {
         expanded,
         collapsedLimit: 4,
-        expandedLimit: 80,
+        expandedLimit: 16,
         now,
       },
     );
@@ -413,9 +416,9 @@ function renderTaskComponent(
       // Body width accounts for the gutter (collapsed) or card padding
       // (expanded) so wrapped text never overflows its container.
       const bodyWidth = Math.max(8, width - (expanded ? 2 : 4));
-      const reportLimit = expanded ? 40 : 12;
+      const reportLimit = expanded ? 16 : 12;
       const bounded = boundExpandedCardText(details.finalReport, {
-        maxLines: expanded ? 40 : 12,
+        maxLines: expanded ? 16 : 12,
       });
       let moreContent = bounded.truncated;
       const source = bounded.text.trim().replace(/\t/g, "   ");
@@ -510,7 +513,7 @@ function renderTaskComponent(
         );
       }
     }
-    return lines;
+    return expanded ? capRenderedCardLines(lines) : lines;
   }, "[task display unavailable]");
 }
 
@@ -1152,6 +1155,11 @@ export default function (pi: ExtensionAPI) {
           turns: 0,
         };
         const call = renderTaskComponent(details, context.expanded, theme);
+        if (context.expanded) {
+          writeLastPhase(
+            `task-card:expand kind=task-call chars=${renderedCardCharCount(call.render(80))}`,
+          );
+        }
         // ToolExecutionComponent composes renderCall and renderResult. The
         // result renderer flips this shared state before the composed component
         // renders, preserving the queued/running call until a result exists and
@@ -1171,7 +1179,14 @@ export default function (pi: ExtensionAPI) {
         if (!details)
           return new WidthText(() => [textContent(result) || "(no output)"]);
         if (!options.isPartial) context.state.endedAt ??= Date.now();
-        return renderTaskComponent(details, options.expanded, theme);
+        const expanded = context.expanded || options.expanded;
+        const card = renderTaskComponent(details, expanded, theme);
+        if (expanded) {
+          writeLastPhase(
+            `task-card:expand kind=task chars=${renderedCardCharCount(card.render(80))}`,
+          );
+        }
+        return card;
       },
     }),
   });
