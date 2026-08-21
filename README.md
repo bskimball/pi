@@ -33,7 +33,7 @@ Each task spawns a separate `pi` process with the specialist's own system prompt
 - **`steer`** — queued at the next **model-call boundary**: it cannot interrupt inference or an in-flight tool call, and is delivered after the current assistant turn finishes its tool calls, just before the next LLM call.
 - **`follow_up`** — delivered only after the worker fully **settles** (no more tool calls or pending steering).
 
-A `prompt`-mode send is only allowed once a worker is settled or failed; use `steer`/`follow_up` while it's still running.
+A `prompt`-mode send is only allowed once a worker is settled or failed; use `steer`/`follow_up` while it's still running. Live `task_start` / `task_chain` workers also appear as the Agents tab on the above-editor todo dock (`alt+a` / `/agents`); see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
 
 The task tool and the sub-agent prompts are **based on Amp's prompts and sub-agents**. Amp ships a small set of built-in sub-agents (an orchestrator, a search/oracle reviewer, a librarian, and fast workers); the reference prompts live under `reference/amp-prompts/` and are used as behavioral and structural templates. On top of that foundation this configuration adds a broader roster of purpose-built specialists:
 
@@ -86,13 +86,13 @@ This is enforced structurally, not just by convention: every extension's import 
 apex/apex-ui.ts
 ├── builtin-tools.ts
 ├── internal/edit/               unified edit tool + row edit planner
-├── internal/todo/               todo_write / todo_read + docked todo panel
+├── internal/todo/               todo_write / todo_read + docked todos/agents panel
 ├── internal/presentation/       receipts, diffs, headless-tool wraps, the PI_APEX_UI=0 gate
 ├── internal/runtime/            segmenter shield, last-phase, terminal-restore, agent discovery
 └── observatory/                 blank-chat landing screen (see below)
 ```
 
-Apex owns the Observatory startup header, styled receipts for the builtin `read`/`bash`/`edit`/`write` tools, the session todo panel (`todo_write`/`todo_read`), the unified edit tool, and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo panel, which stays mounted but switches to a plain, uncolored list.
+Apex owns the Observatory startup header, styled receipts for the builtin `read`/`bash`/`edit`/`write` tools, the session todo dock (`todo_write`/`todo_read`, plus live async workers as an Agents tab), the unified edit tool, and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo dock, which stays mounted but switches to a plain, uncolored list with no Agents tab.
 
 `task/` renders its own delegated-worker activity cards through a separate gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0` so they never paint their own chrome.
 
@@ -108,7 +108,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 - **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
 - **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
 - **`continual-memory.ts`** — `memory_list`/`memory_write`; small evidence-backed durable notes outside the chat transcript. Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default write scope is global; local is this-session scratch. Global entries live under `agent/harness/global.json` (gitignored).
-- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, and `/orchestrate` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands).
+- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, and `/orchestrate` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands). `/todos` and `/agents` are registered by Apex (`todo-tools.ts`), not here.
 - **`graphify.ts`** — see [Graphify](#graphify) below.
 - **`mcp-adapter.ts`** — standalone bridge that boots the root `pi-mcp-adapter` dependency on this `ExtensionAPI`. MCP tools use Pi's stock renderer. Do not also add `pi-mcp-adapter` to `agent/settings.json` `packages`; a second package-loaded copy would initialize a duplicate MCP extension.
 - **`read-guard.ts`** — blocks a repeated `read` of the same image path when mtime/size are unchanged; downscales image blocks in any tool result to a 1568px long edge; gives an advisory nudge on very large bash output. No text re-read guard.
@@ -132,7 +132,7 @@ A single on-demand `lsp` tool for semantic navigation (`definition`, `references
 
 ## Slash commands
 
-`/browser`, `/deploy`, and `/orchestrate` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, and sticky session-mode switching, respectively — that plain prompt-template expansion can't do. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI.
+`/browser`, `/deploy`, and `/orchestrate` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, and sticky session-mode switching, respectively — that plain prompt-template expansion can't do. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
 
 Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 

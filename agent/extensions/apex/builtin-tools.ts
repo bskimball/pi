@@ -236,11 +236,12 @@ export function installBuiltinTools(pi: ExtensionAPI): void {
 
 /**
  * Tools Apex owns outright rather than re-skinning: the unified row-edit `edit`
- * tool and the session todo list (tools, docked panel, alt+t). These must be
- * installed even under PI_APEX_UI=0 — the gate strips their styling and custom
- * render hooks, not their behavior — so apex-ui calls this before the
- * presentation opt-out. The todo panel keeps an unstyled plain widget mounted
- * in that mode; only its styled chrome and the alt+t / `/todos` toggle drop out.
+ * tool and the session todo dock (tools, above-editor panel, alt+t / `/todos`,
+ * alt+a / `/agents`). These must be installed even under PI_APEX_UI=0 — the
+ * gate strips their styling and custom render hooks, not their behavior — so
+ * apex-ui calls this before the presentation opt-out. The dock keeps an
+ * unstyled plain todo widget mounted in that mode; styled chrome and the
+ * alt+t / alt+a / `/todos` / `/agents` triggers drop out.
  */
 export function installApexOwnedTools(pi: ExtensionAPI): void {
   installEditTool(pi);

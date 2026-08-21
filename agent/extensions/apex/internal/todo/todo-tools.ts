@@ -1,5 +1,5 @@
 // todo-tools: registration, validation, and session state for `todo_write` /
-// `todo_read`, plus the docked todo panel above the editor.
+// `todo_read`, plus the docked todos/agents panel above the editor.
 //
 // Presentation is pure and lives in ./todo-view.ts. Everything here is
 // registration and state: no render timers, no pi-tui Text/Markdown/Container.

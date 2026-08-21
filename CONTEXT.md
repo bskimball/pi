@@ -49,11 +49,25 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 - `PI_APEX_UI=0` remains the emergency opt-out for every custom presentation surface. It disables Apex UI and Task cards without disabling either extension's tool behavior.
 - Rendering remains passive and event-driven. No extension presentation timer calls `requestRender()`.
 
+## Todo dock
+
+One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and Apex listens — no cross-extension import, no extra footer rows.
+
+| Trigger | Effect |
+| --- | --- |
+| `todo_write` / `todo_read` | Mount or refresh the Todos pane. |
+| Live `task_start` / `task_chain` worker | Mount `[todos] / [agents N]`. Agents-only sessions open on Agents. |
+| `alt+t` or `/todos` | Collapse or expand the dock. |
+| `alt+a` | Toggle Todos / Agents when chrome is on. |
+| `/agents` | Switch to Agents. |
+| Last live worker settles | Drop the Agents tab; clear the dock if no todo list remains. |
+| `PI_APEX_UI=0` | Plain todo list only. No tabs, no `alt+t` / `alt+a` / `/todos` / `/agents`. |
+
 ## Task extension
 
 | | Sync (`task/amp-task.ts`) | Async (`task/async-task.ts`) |
 |--|---------------------------|------------------------------|
-| Tool interface | `task` | `task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply` |
+| Tool interface | `task` | `task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`, `task_chain` |
 | Child | `pi --mode json -p` subprocess | session-backed RPC worker |
 | Runtime | local mission host | `task/runtime/worker-runtime.ts` control plane |
 | Presentation | bounded Task-owned mission card | bounded Task-owned worker activity |
@@ -85,7 +99,7 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Background jobs: `bg-process.ts` plus `bg-process/internal/`; Apex attaches receipt chrome on `bg_start`/`bg_status`/`bg_list`/`bg_kill`, plus notice chrome on `bg-process-settled`.
 - Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; stock tool rendering.
 - Web search: standalone `web-search.ts`; Apex receipt chrome on `web_search` / `fetch_content` / `get_search_content`.
-- Todo list and unified edit: Apex-owned (`apex/internal/todo/`, `apex/internal/edit/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todo panel, or stock rendering under `PI_APEX_UI=0`.
+- Todo list and unified edit: Apex-owned (`apex/internal/todo/`, `apex/internal/edit/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todos/agents panel, or stock rendering under `PI_APEX_UI=0`.
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
 - User profile: loader owned directly by `user-profile.ts`.
 - MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.

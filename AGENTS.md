@@ -61,6 +61,7 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 `apex/` owns the interactive presentation layer; every other extension is either headless or renders its own chrome locally. Receipt modules for headless tools live under `apex/internal/presentation/`; see `CONTEXT.md` for presentation ownership detail.
 
 - `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables Apex styling, chrome, and custom render hooks. Apex-owned tools remain registered and executable — execution and tool registration are unaffected. The one deliberate exception is the todo panel: it stays mounted and falls back to a plain, uncolored list instead of disappearing.
+- Live async workers share that same above-editor dock as an Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
 - `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task children are spawned with `PI_APEX_UI=0` so workers never paint chrome.
 - Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt chrome to several of these, skipped entirely when `PI_APEX_UI=0`.
 - There is no custom footer. Pi owns the footer.

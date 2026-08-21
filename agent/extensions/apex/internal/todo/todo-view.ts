@@ -1,4 +1,4 @@
-// todo-view: Apex chrome for the session todo list (plan/checklist) surface.
+// todo-view: Apex chrome for the session todo dock (plan/checklist + agents tab).
 //
 // Pure data + string building, in the same shape as the other Apex receipts:
 // a builder that normalizes untrusted input into a `TodoListView`, and a
