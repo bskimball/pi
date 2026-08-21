@@ -35,4 +35,5 @@ Thumbs.db
 browser
 __pycache__/
 nul
+*.bak
 graphify-out/
