@@ -56,8 +56,51 @@ export function parseReportSchema(raw: string): { schema: ReportSchema; error?: 
   if (!isPlainObject(parsed)) {
     return { schema: {}, error: "reportSchema must be a JSON object" };
   }
+  const allowed = new Set(["type", "properties", "required"]);
+  for (const key of Object.keys(parsed)) {
+    if (!allowed.has(key)) {
+      return { schema: {}, error: `reportSchema unknown key: ${key}` };
+    }
+  }
   if (parsed.type !== undefined && parsed.type !== "object") {
-    return { schema: parsed as ReportSchema, error: "reportSchema.type must be object" };
+    return { schema: {}, error: "reportSchema.type must be object" };
+  }
+  if (parsed.properties !== undefined && !isPlainObject(parsed.properties)) {
+    return { schema: {}, error: "reportSchema.properties must be an object" };
+  }
+  if (parsed.properties) {
+    for (const [name, spec] of Object.entries(parsed.properties)) {
+      if (!isPlainObject(spec)) {
+        return { schema: {}, error: `reportSchema.properties.${name} must be an object` };
+      }
+      for (const k of Object.keys(spec)) {
+        if (k !== "type" && k !== "enum") {
+          return { schema: {}, error: `reportSchema.properties.${name} unknown key: ${k}` };
+        }
+      }
+      if (spec.type !== "string" && spec.type !== "number" && spec.type !== "boolean") {
+        return {
+          schema: {},
+          error: `reportSchema.properties.${name}.type must be string|number|boolean`,
+        };
+      }
+      if (spec.enum !== undefined) {
+        if (!Array.isArray(spec.enum) || spec.enum.length === 0) {
+          return { schema: {}, error: `reportSchema.properties.${name}.enum must be a non-empty array` };
+        }
+        if (spec.enum.some((item) => typeof item !== "string")) {
+          return { schema: {}, error: `reportSchema.properties.${name}.enum must be an array of strings` };
+        }
+      }
+    }
+  }
+  if (parsed.required !== undefined) {
+    if (
+      !Array.isArray(parsed.required) ||
+      parsed.required.some((item) => typeof item !== "string")
+    ) {
+      return { schema: {}, error: "reportSchema.required must be an array of strings" };
+    }
   }
   return { schema: parsed as ReportSchema };
 }
@@ -84,12 +127,12 @@ export function validateReportJson(
     ? schema.required.filter((key): key is string => typeof key === "string")
     : [];
   for (const key of required) {
-    if (!(key in value)) {
+    if (!Object.hasOwn(value, key)) {
       return { status: "invalid", parsed: value, error: `missing required key: ${key}` };
     }
   }
   for (const [key, spec] of Object.entries(properties)) {
-    if (!(key in value)) continue;
+    if (!Object.hasOwn(value, key)) continue;
     const expected = spec?.type;
     if (expected !== undefined && !typeOk(expected, value[key])) {
       return {

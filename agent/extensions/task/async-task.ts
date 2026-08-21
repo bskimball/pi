@@ -74,6 +74,7 @@ import {
 } from "./runtime/text-bounds.ts";
 import {
   FLEET_WIDGET_KEY,
+  renderFleetCollapsed,
   renderFleetWidgetLines,
   type FleetWorkerItem,
 } from "./presentation/fleet-view.ts";
@@ -135,7 +136,6 @@ import { waitForSnapshot } from "./runtime/wait-policy.ts";
 import {
   WAIT_DEFAULT_TIMEOUT_SEC,
   SETTLED_RESULT_CHARS,
-  SETTLED_RESULT_LINES,
   formatCompactWorkerStatus,
   formatSettledResult,
   formatWaitHeartbeat,
@@ -148,7 +148,7 @@ import {
   reportStatusLine,
   type ReportStatus,
 } from "./runtime/report-schema.ts";
-import { substitutePrev } from "./runtime/chain-prev.ts";
+import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -584,16 +584,12 @@ function controlRenderers(
       context: ToolRenderContext<AsyncRenderState, any>,
     ): Component {
       context.state.hasResult = true;
-      const expanded = context.expanded || options.expanded;
-      if (expanded) {
-        const preview = capRenderedCardLines(build(result, {} as any, 80, true));
-        noteExpandedCardRender(tool, preview);
-      }
       return new WidthText((width) => {
-        const lines = build(result, theme, width, context.expanded || options.expanded);
-        return (context.expanded || options.expanded)
-          ? capRenderedCardLines(lines)
-          : lines;
+        const expandedNow = context.expanded || options.expanded;
+        const lines = build(result, theme, width, expandedNow);
+        const out = expandedNow ? capRenderedCardLines(lines) : lines;
+        if (expandedNow) noteExpandedCardRender(tool, out);
+        return out;
       }, `[${tool} result unavailable]`);
     },
   });
@@ -669,6 +665,9 @@ export default function (pi: ExtensionAPI) {
   let shuttingDown = false;
   let fleetUiCtx: ExtensionContext | undefined;
   let cachedFleetItems: FleetWorkerItem[] = [];
+  let lastFleetCollapsed: string | undefined;
+  let lastFleetExpandedKey: string | undefined;
+  let lastFleetWidgetMounted = false;
 
   const snapshotFleetItems = (): FleetWorkerItem[] => {
     const items: FleetWorkerItem[] = [];
@@ -690,9 +689,12 @@ export default function (pi: ExtensionAPI) {
     const uiCtx = fleetUiCtx;
     if (!taskPresentationEnabled()) {
       cachedFleetItems = [];
-      if (uiCtx?.hasUI && uiCtx.mode === "tui") {
+      lastFleetCollapsed = undefined;
+      lastFleetExpandedKey = undefined;
+      if (uiCtx?.hasUI && uiCtx.mode === "tui" && lastFleetWidgetMounted) {
         try {
           uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+          lastFleetWidgetMounted = false;
         } catch {
           // Widget teardown must not interrupt a session transition.
         }
@@ -703,10 +705,28 @@ export default function (pi: ExtensionAPI) {
     if (!uiCtx?.hasUI || uiCtx.mode !== "tui") return;
     try {
       if (!cachedFleetItems.length) {
-        uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+        if (lastFleetWidgetMounted) {
+          uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
+          lastFleetWidgetMounted = false;
+        }
+        lastFleetCollapsed = undefined;
+        lastFleetExpandedKey = undefined;
         return;
       }
       const items = cachedFleetItems;
+      const collapsed = renderFleetCollapsed(items) ?? "";
+      const expandedKey = items
+        .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.lastEventAt ?? ""}`)
+        .join("\n");
+      if (
+        lastFleetWidgetMounted &&
+        lastFleetCollapsed === collapsed &&
+        lastFleetExpandedKey === expandedKey
+      ) {
+        return;
+      }
+      lastFleetCollapsed = collapsed;
+      lastFleetExpandedKey = expandedKey;
       uiCtx.ui.setWidget(
         FLEET_WIDGET_KEY,
         (_tui, theme) =>
@@ -716,6 +736,7 @@ export default function (pi: ExtensionAPI) {
           ),
         { placement: "belowEditor" },
       );
+      lastFleetWidgetMounted = true;
     } catch {
       // Transcript cards remain if the widget cannot mount.
     }
@@ -1375,6 +1396,7 @@ export default function (pi: ExtensionAPI) {
             stderrDiagnostic(client.stderr.text) ??
             `process exited (code=${code ?? "null"})`;
           runtime.handleExit(worker, code, diagnostic, eventHooks);
+          syncFleetWidget();
         },
         onError: (error) => {
           pushError(worker, `spawn error: ${error.message}`);
@@ -1962,14 +1984,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         }
       }
 
-      const body = [
-        ...digest,
-        "",
-        "--- final ---",
-        lastReport || "(empty)",
-      ].join("\n");
-      const capped = boundText(body, SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES);
-      return textResult(capped.text, failed);
+      const assembled = assembleChainDigest(digest, lastReport || "(empty)");
+      return textResult(assembled.text, failed);
     },
   });
 

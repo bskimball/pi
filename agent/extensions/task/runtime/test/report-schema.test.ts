@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   evaluateSettledReport,
   extractLastReportFence,
+  parseReportSchema,
   validateReportJson,
 } from "../report-schema.ts";
 
@@ -65,5 +66,41 @@ describe("report-schema", () => {
   it("returns none-requested without a schema", () => {
     const result = evaluateSettledReport("```report\n{}\n```");
     assert.equal(result.status, "none-requested");
+  });
+
+  it("does not treat prototype names as present required keys", () => {
+    const result = validateReportJson(
+      { type: "object", required: ["toString"] },
+      JSON.stringify({}),
+    );
+    assert.equal(result.status, "invalid");
+    assert.match(result.error ?? "", /missing required key: toString/);
+  });
+
+  it("rejects unknown top-level schema keys", () => {
+    const parsed = parseReportSchema(JSON.stringify({ type: "object", additionalProperties: false }));
+    assert.match(parsed.error ?? "", /unknown key: additionalProperties/);
+  });
+
+  it("rejects non-object root schemas", () => {
+    const parsed = parseReportSchema(JSON.stringify(["string"]));
+    assert.match(parsed.error ?? "", /must be a JSON object/);
+  });
+
+  it("rejects property specs that are not string|number|boolean", () => {
+    const parsed = parseReportSchema(
+      JSON.stringify({ type: "object", properties: { nested: { type: "object" } } }),
+    );
+    assert.match(parsed.error ?? "", /nested\.type must be string\|number\|boolean/);
+  });
+
+  it("rejects non-string enum members", () => {
+    const parsed = parseReportSchema(
+      JSON.stringify({
+        type: "object",
+        properties: { kind: { type: "string", enum: [1, 2] } },
+      }),
+    );
+    assert.match(parsed.error ?? "", /enum must be an array of strings/);
   });
 });

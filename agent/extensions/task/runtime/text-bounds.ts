@@ -46,10 +46,13 @@ export function capRenderedCardLines(
   return lines.slice(0, Math.max(0, maxLines));
 }
 
-/** Character budget reported on expand breadcrumbs (assembled card, not UTF-16 .length of ANSI). */
+const ANSI_RE =
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[P^_][\s\S]*?\x1b\\)/g;
+
+/** Character budget on expand breadcrumbs: UTF-16 length after stripping ANSI escapes. */
 export function renderedCardCharCount(lines: readonly string[]): number {
   let n = 0;
-  for (const line of lines) n += line.length;
+  for (const line of lines) n += String(line ?? "").replace(ANSI_RE, "").length;
   return n;
 }
 

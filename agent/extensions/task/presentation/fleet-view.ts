@@ -3,7 +3,7 @@
 // Event-driven only. Callers snapshot workers outside the render closure and
 // pass a frozen list so the widget factory never scans a registry.
 
-import { safeTruncateToWidth } from "./safe-text-layout.ts";
+import { safeTruncateToWidth, safeVisibleWidth } from "./safe-text-layout.ts";
 import { formatDuration } from "./ui-common.ts";
 import { lifecycleKind, statusLabel, type StatusTheme } from "./status-view.ts";
 
@@ -34,8 +34,8 @@ function compactAge(ms: number): string {
 
 function clipAgent(agent: string): string {
   const text = String(agent ?? "").replace(/\s+/g, " ").trim() || "agent";
-  if (text.length <= AGENT_CAP) return text;
-  return `${text.slice(0, AGENT_CAP - 3)}...`;
+  if (safeVisibleWidth(text) <= AGENT_CAP) return text;
+  return `${safeTruncateToWidth(text, AGENT_CAP - 3)}...`;
 }
 
 /** One bounded collapsed line. Empty when there are no live workers. */
