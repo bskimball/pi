@@ -14,12 +14,19 @@ import type {
 import {
   CANONICAL_STATUSES,
   buildTodoList,
+  renderAgentList,
   renderPlainTodoList,
   renderTodoList,
+  type DockPane,
   type TodoItem,
   type TodoListView,
   type TodoStatus,
 } from "./todo-view.ts";
+import {
+  currentDockAgents,
+  subscribeDockAgents,
+  type DockAgentItem,
+} from "./fleet-listen.ts";
 import {
   apexPresentationEnabled,
   withApexPresentation,
@@ -275,12 +282,18 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let current: TodoListView | undefined;
   let currentCtx: ExtensionContext | undefined;
   let panelCollapsed = false;
+  let dockPane: DockPane = "todos";
+  let liveAgents: DockAgentItem[] = currentDockAgents();
+  let lastDockKey = "";
+  let unsubscribeFleet = () => {};
   const PANEL_KEY = "todo-list";
   const TOGGLE_HINT = "alt+t";
+  const SWITCH_HINT = "alt+a";
   const presentationEnabled = apexPresentationEnabled();
 
   function clearPanel(): void {
     const ctx = currentCtx;
+    lastDockKey = "";
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
     try {
       ctx.ui.setWidget(PANEL_KEY, undefined);
@@ -289,23 +302,62 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
   }
 
+  function dockHasSurface(): boolean {
+    return Boolean(current) || (presentationEnabled && liveAgents.length > 0);
+  }
+
+  function dockTabs() {
+    if (!liveAgents.length) return undefined;
+    return {
+      pane: dockPane,
+      agentCount: liveAgents.length,
+      switchHint: presentationEnabled ? SWITCH_HINT : undefined,
+    };
+  }
+
   function renderPanel(): void {
     const ctx = currentCtx;
-    if (!ctx?.hasUI || ctx.mode !== "tui" || !current) return;
+    if (!ctx?.hasUI || ctx.mode !== "tui") return;
+    if (!dockHasSurface()) {
+      clearPanel();
+      return;
+    }
+    if (dockPane === "agents" && liveAgents.length === 0) dockPane = "todos";
+    const key = [
+      dockPane,
+      panelCollapsed ? "1" : "0",
+      current ? `${current.done}/${current.total}/${current.activeIndex}` : "-",
+      liveAgents
+        .map((item) => `${item.id}:${item.lifecycle}:${item.lastEventAt ?? item.createdAt}`)
+        .join(","),
+    ].join("|");
+    if (key === lastDockKey) return;
+    lastDockKey = key;
     try {
       ctx.ui.setWidget(
         PANEL_KEY,
         (_tui, theme) =>
-          new WidthText(
-            (width) =>
-              presentationEnabled
-                ? renderTodoList(theme, width, current!, {
-                    collapsed: panelCollapsed,
-                    toggleHint: TOGGLE_HINT,
-                  })
-                : renderPlainTodoList(current!, width),
-            "[todo panel unavailable]",
-          ),
+          new WidthText((width) => {
+            if (dockPane === "agents") {
+              return renderAgentList(theme, width, liveAgents, {
+                collapsed: panelCollapsed,
+                tabs: dockTabs(),
+              });
+            }
+            if (!current) {
+              return renderAgentList(theme, width, liveAgents, {
+                collapsed: panelCollapsed,
+                tabs: dockTabs(),
+              });
+            }
+            return presentationEnabled
+              ? renderTodoList(theme, width, current, {
+                  collapsed: panelCollapsed,
+                  toggleHint: TOGGLE_HINT,
+                  tabs: dockTabs(),
+                })
+              : renderPlainTodoList(current, width);
+          }, "[todo panel unavailable]"),
         { placement: "aboveEditor" },
       );
     } catch {
@@ -315,44 +367,92 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   function togglePanel(ctx: ExtensionContext): void {
     currentCtx = ctx;
-    if (!current) {
+    if (!dockHasSurface()) {
       ctx.ui.notify("No todo list for this session yet.", "info");
       return;
     }
     panelCollapsed = !panelCollapsed;
+    lastDockKey = "";
     renderPanel();
   }
+
+  function switchPane(ctx: ExtensionContext, pane: DockPane): void {
+    currentCtx = ctx;
+    if (pane === "agents" && liveAgents.length === 0) {
+      ctx.ui.notify("No live agents.", "info");
+      return;
+    }
+    if (pane === "todos" && !current && liveAgents.length > 0) {
+      dockPane = "agents";
+      lastDockKey = "";
+      renderPanel();
+      return;
+    }
+    dockPane = pane;
+    lastDockKey = "";
+    renderPanel();
+  }
+
+  unsubscribeFleet = subscribeDockAgents((items) => {
+    liveAgents = [...items];
+    if (liveAgents.length === 0 && dockPane === "agents") dockPane = "todos";
+    if (presentationEnabled && liveAgents.length > 0 && !current) {
+      dockPane = "agents";
+    }
+    if (currentCtx) renderPanel();
+  });
+
   if (presentationEnabled) {
     pi.registerShortcut("alt+t", {
       description: "Collapse or expand the todo panel",
       handler: (ctx) => togglePanel(ctx),
+    });
+    pi.registerShortcut("alt+a", {
+      description: "Show the agents tab in the todo dock",
+      handler: (ctx) => switchPane(ctx, dockPane === "agents" ? "todos" : "agents"),
     });
 
     pi.registerCommand("todos", {
       description: "Collapse or expand the todo panel above the input",
       handler: async (_args, ctx) => togglePanel(ctx),
     });
+    pi.registerCommand("agents", {
+      description: "Show live sub-agents in the todo dock",
+      handler: async (_args, ctx) => switchPane(ctx, "agents"),
+    });
   }
 
   pi.on("session_start", (event: any, ctx: ExtensionContext) => {
     clearPanel();
     panelCollapsed = false;
+    dockPane = "todos";
     currentCtx = ctx;
     current = event?.reason === "new" ? undefined : reconstructTodoState(ctx);
-    if (current) renderPanel();
+    liveAgents = currentDockAgents();
+    if (presentationEnabled && liveAgents.length > 0 && !current) {
+      dockPane = "agents";
+    }
+    if (dockHasSurface()) renderPanel();
   });
 
   pi.on("session_tree", (_event: any, ctx: ExtensionContext) => {
     clearPanel();
     currentCtx = ctx;
     current = reconstructTodoState(ctx);
-    if (current) renderPanel();
+    liveAgents = currentDockAgents();
+    if (presentationEnabled && liveAgents.length > 0 && !current) {
+      dockPane = "agents";
+    }
+    if (dockHasSurface()) renderPanel();
   });
 
   pi.on("session_shutdown", () => {
     clearPanel();
     current = undefined;
     currentCtx = undefined;
+    liveAgents = [];
+    dockPane = "todos";
+    unsubscribeFleet();
   });
 
   pi.registerTool({

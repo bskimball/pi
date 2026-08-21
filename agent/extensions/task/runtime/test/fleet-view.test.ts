@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import { renderFleetCollapsed } from "../../presentation/fleet-view.ts";
+import {
+  currentFleetSnapshot,
+  publishFleetSnapshot,
+  resetFleetBus,
+  subscribeFleetSnapshot,
+} from "../fleet-bus.ts";
+
+beforeEach(() => {
+  resetFleetBus();
+});
 
 describe("renderFleetCollapsed", () => {
   it("returns undefined with no live workers", () => {
@@ -29,5 +39,27 @@ describe("renderFleetCollapsed", () => {
       now,
     );
     assert.equal(line, "2 agents · oracle running 4m · machinist killed 12m");
+  });
+});
+
+describe("fleet bus", () => {
+  it("publishes a snapshot to subscribers without stacking widgets", () => {
+    const seen: number[] = [];
+    const stop = subscribeFleetSnapshot((items) => {
+      seen.push(items.length);
+    });
+    publishFleetSnapshot([
+      {
+        id: "task_1",
+        agent: "scout",
+        lifecycle: "running",
+        createdAt: 1,
+      },
+    ]);
+    assert.equal(currentFleetSnapshot().length, 1);
+    assert.deepEqual(seen, [0, 1]);
+    stop();
+    publishFleetSnapshot([]);
+    assert.deepEqual(seen, [0, 1]);
   });
 });

@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
-const { installTodoTools, reconstructTodoState } = await import(
-  "../internal/todo/todo-tools.ts"
+const { installTodoTools } = await import("../internal/todo/todo-tools.ts");
+const { publishDockAgents, resetDockAgents } = await import(
+  "../internal/todo/fleet-listen.ts"
 );
 const {
   TODO_LIST_MAX_LINES,
   buildTodoList,
+  renderAgentList,
   renderPlainTodoList,
   renderTodoList,
 } = await import("../internal/todo/todo-view.ts");
@@ -950,6 +952,98 @@ describe("renderPlainTodoList (PI_APEX_UI=0 persistent widget)", () => {
       mountedComponent,
       undefined,
       "widget cleared when the branch has no todo state",
+    );
+  });
+});
+
+describe("dock tabs and agents pane", () => {
+  it("renders a tab strip when live agents share the todo dock", () => {
+    const view = buildTodoList([
+      { content: "Inspect the screenshot", status: "in_progress" },
+    ]);
+    const lines = renderTodoList(theme, 80, view, {
+      tabs: { pane: "todos", agentCount: 1, switchHint: "alt+a" },
+    });
+    assert.match(lines[0], /\[todos\]/);
+    assert.match(lines[0], /agents 1/);
+    assert.match(lines[0], /alt\+a/);
+    assert.match(lines.join("\n"), /Inspect the screenshot/);
+    assert.doesNotMatch(lines[0], /^◆ todos /);
+  });
+
+  it("renders live agents as a tree under the agents tab", () => {
+    const now = 1_000_000;
+    const lines = renderAgentList(
+      theme,
+      80,
+      [
+        {
+          id: "task_1",
+          agent: "oracle",
+          lifecycle: "running",
+          createdAt: now - 4 * 60_000,
+          lastEventAt: now - 4 * 60_000,
+        },
+      ],
+      {
+        tabs: { pane: "agents", agentCount: 1, switchHint: "alt+a" },
+        now,
+      },
+    );
+    assert.match(lines[0], /\[agents 1\]/);
+    assert.match(lines.join("\n"), /oracle/);
+    assert.match(lines.join("\n"), /running/);
+  });
+
+  it("mounts the agents pane on a live snapshot even without todos", () => {
+    resetDockAgents();
+    const mock = createMockPi("1");
+    assert.equal(mock.shortcuts.has("alt+a"), true);
+    assert.equal(mock.commands.has("agents"), true);
+
+    let mountedKey: string | undefined;
+    let mountedComponent: any;
+    const tuiCtx = {
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        setWidget(key: string, component: any) {
+          mountedKey = key;
+          mountedComponent = component;
+        },
+        notify() {},
+      },
+    } as any;
+
+    mock.emit("session_start", { reason: "new" }, tuiCtx);
+    assert.equal(mountedComponent, undefined);
+
+    publishDockAgents([
+      {
+        id: "task_1",
+        agent: "scout",
+        lifecycle: "running",
+        createdAt: Date.now(),
+      },
+    ]);
+    assert.equal(mountedKey, "todo-list");
+    const getLines = (width = 80): string[] => {
+      const factory = mountedComponent as
+        | ((tui: unknown, theme: unknown) => { render: (width: number) => string[] })
+        | { render: (width: number) => string[] }
+        | undefined;
+      const comp = typeof factory === "function" ? factory(null, theme) : factory;
+      return comp?.render ? comp.render(width) : [];
+    };
+    const lines = getLines();
+    assert.match(lines[0], /\[agents 1\]/);
+    assert.match(lines.join("\n"), /scout/);
+
+    publishDockAgents([]);
+    assert.equal(
+      mountedComponent,
+      undefined,
+      "clears the dock when no todos or agents remain",
     );
   });
 });

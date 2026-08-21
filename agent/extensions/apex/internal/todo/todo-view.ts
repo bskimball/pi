@@ -238,6 +238,139 @@ export interface TodoListOptions {
   pad?: number;
   /** Actionable follow-up shown only when the list is empty. */
   emptyHint?: string;
+  /** Tab strip when live agents share this dock. */
+  tabs?: DockTabOptions;
+}
+
+export type DockPane = "todos" | "agents";
+
+export interface DockTabOptions {
+  pane: DockPane;
+  agentCount: number;
+  switchHint?: string;
+  /** Right-side detail, typically the todo tally. */
+  detail?: string;
+}
+
+export interface DockAgentItem {
+  id: string;
+  agent: string;
+  lifecycle: string;
+  createdAt: number;
+  lastEventAt?: number;
+}
+
+const AGENT_GLYPHS: Record<string, string> = {
+  starting: "\u25cb",
+  running: "\u25cf",
+  retrying: "\u25cf",
+  compacting: "\u25cf",
+  aborting: "\u00d7",
+};
+
+const AGENT_TONES: Record<string, string> = {
+  starting: "muted",
+  running: "warning",
+  retrying: "warning",
+  compacting: "warning",
+  aborting: "error",
+};
+
+const AGENT_LABELS: Record<string, string> = {
+  starting: "starting",
+  running: "running",
+  retrying: "running",
+  compacting: "running",
+  aborting: "killed",
+};
+
+function agentAge(item: DockAgentItem, now: number): string {
+  const stamp = item.lastEventAt ?? item.createdAt;
+  const ms = Math.max(0, now - stamp);
+  if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
+  return `${Math.floor(ms / 60_000)}m`;
+}
+
+function tabChip(
+  theme: StatusTheme,
+  label: string,
+  count: number | undefined,
+  active: boolean,
+): string {
+  const text = count === undefined ? label : `${label} ${count}`;
+  return active
+    ? theme.fg("accent", `[${text}]`)
+    : theme.fg("muted", text);
+}
+
+export function renderDockTabs(
+  theme: StatusTheme,
+  width: number,
+  tabs: DockTabOptions,
+): string {
+  const left = [
+    theme.fg("dim", TREE.header),
+    tabChip(theme, "todos", undefined, tabs.pane === "todos"),
+    theme.fg("dim", "/"),
+    tabChip(theme, "agents", tabs.agentCount, tabs.pane === "agents"),
+  ].join(" ");
+  const right = [tabs.detail, tabs.switchHint]
+    .filter(Boolean)
+    .map((part) => theme.fg("dim", part as string))
+    .join(" ");
+  return fitLine(left, right, width);
+}
+
+export function renderAgentList(
+  theme: StatusTheme,
+  width: number,
+  items: readonly DockAgentItem[],
+  options: {
+    collapsed?: boolean;
+    tabs?: DockTabOptions;
+    now?: number;
+  } = {},
+): string[] {
+  if (width <= 0) return [];
+  const now = options.now ?? Date.now();
+  const header =
+    options.tabs
+      ? renderDockTabs(theme, width, options.tabs)
+      : fitLine(
+          `${theme.fg("dim", TREE.header)} ${theme.fg("toolTitle", "agents")}`,
+          theme.fg("dim", `${items.length} live`),
+          width,
+        );
+  if (options.collapsed) return [safeTruncateToWidth(header, width)];
+  if (!items.length) {
+    return [
+      header,
+      safeTruncateToWidth(
+        `${theme.fg("dim", TREE.last)} ${theme.fg("muted", "no live agents")}`,
+        width,
+      ),
+    ].slice(0, TODO_LIST_MAX_LINES);
+  }
+  const rows: TreeRow[] = items.slice(0, ROWS_COLLAPSED).map((item) => {
+    const glyph = AGENT_GLYPHS[item.lifecycle] ?? "\u00b7";
+    const tone = AGENT_TONES[item.lifecycle] ?? "muted";
+    const label = AGENT_LABELS[item.lifecycle] ?? item.lifecycle;
+    const title = cleanInline(item.agent, 40) || "agent";
+    return {
+      line: (rail) =>
+        safeTruncateToWidth(
+          [
+            theme.fg("dim", rail),
+            theme.fg(tone, glyph),
+            theme.fg("text", title),
+            theme.fg("muted", label),
+            theme.fg("dim", agentAge(item, now)),
+          ].join(" "),
+          width,
+        ),
+    };
+  });
+  return buildTreeLines(theme, width, header, rows).slice(0, TODO_LIST_MAX_LINES);
 }
 
 /**
@@ -318,6 +451,17 @@ export function renderTodoList(
       .map((line) => safeTruncateToWidth(inset ? `${inset}${line}` : line, width));
 
   if (view.total === 0) {
+    if (options.tabs) {
+      const header = renderDockTabs(theme, inner, options.tabs);
+      if (options.collapsed) return emit([header]);
+      return emit([
+        header,
+        safeTruncateToWidth(
+          `${theme.fg("dim", TREE.last)} ${theme.fg("muted", options.emptyHint || "no todos yet")}`,
+          inner,
+        ),
+      ]);
+    }
     return emit(
       emptyStateLines(
         theme,
@@ -359,7 +503,12 @@ export function renderTodoList(
   ]
     .filter(Boolean)
     .join(" ");
-  const header = fitLine(headerLeft, right, inner);
+  const header = options.tabs
+    ? renderDockTabs(theme, inner, {
+        ...options.tabs,
+        detail: options.tabs.detail ?? tallyText,
+      })
+    : fitLine(headerLeft, right, inner);
   if (options.collapsed) return emit([header]);
 
   const limit = expanded ? ROWS_EXPANDED : ROWS_COLLAPSED;

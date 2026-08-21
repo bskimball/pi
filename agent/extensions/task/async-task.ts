@@ -73,11 +73,9 @@ import {
   renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
 import {
-  FLEET_WIDGET_KEY,
-  renderFleetCollapsed,
-  renderFleetWidgetLines,
-  type FleetWorkerItem,
-} from "./presentation/fleet-view.ts";
+  publishFleetSnapshot,
+  type FleetSnapshotItem,
+} from "./runtime/fleet-bus.ts";
 import { safeTruncateToWidth } from "./presentation/safe-text-layout.ts";
 import {
   TREE,
@@ -663,14 +661,10 @@ export default function (pi: ExtensionAPI) {
   let nextId = 1;
   let agentBusy = false;
   let shuttingDown = false;
-  let fleetUiCtx: ExtensionContext | undefined;
-  let cachedFleetItems: FleetWorkerItem[] = [];
-  let lastFleetCollapsed: string | undefined;
-  let lastFleetExpandedKey: string | undefined;
-  let lastFleetWidgetMounted = false;
+  let lastFleetKey = "";
 
-  const snapshotFleetItems = (): FleetWorkerItem[] => {
-    const items: FleetWorkerItem[] = [];
+  const snapshotFleetItems = (): FleetSnapshotItem[] => {
+    const items: FleetSnapshotItem[] = [];
     for (const worker of workers.values()) {
       if (!isLiveLifecycle(worker.lifecycle) || worker.closed) continue;
       items.push({
@@ -684,62 +678,14 @@ export default function (pi: ExtensionAPI) {
     return items;
   };
 
-  const syncFleetWidget = (ctx?: ExtensionContext) => {
-    if (ctx) fleetUiCtx = ctx;
-    const uiCtx = fleetUiCtx;
-    if (!taskPresentationEnabled()) {
-      cachedFleetItems = [];
-      lastFleetCollapsed = undefined;
-      lastFleetExpandedKey = undefined;
-      if (uiCtx?.hasUI && uiCtx.mode === "tui" && lastFleetWidgetMounted) {
-        try {
-          uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
-          lastFleetWidgetMounted = false;
-        } catch {
-          // Widget teardown must not interrupt a session transition.
-        }
-      }
-      return;
-    }
-    cachedFleetItems = snapshotFleetItems();
-    if (!uiCtx?.hasUI || uiCtx.mode !== "tui") return;
-    try {
-      if (!cachedFleetItems.length) {
-        if (lastFleetWidgetMounted) {
-          uiCtx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
-          lastFleetWidgetMounted = false;
-        }
-        lastFleetCollapsed = undefined;
-        lastFleetExpandedKey = undefined;
-        return;
-      }
-      const items = cachedFleetItems;
-      const collapsed = renderFleetCollapsed(items) ?? "";
-      const expandedKey = items
-        .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.lastEventAt ?? ""}`)
-        .join("\n");
-      if (
-        lastFleetWidgetMounted &&
-        lastFleetCollapsed === collapsed &&
-        lastFleetExpandedKey === expandedKey
-      ) {
-        return;
-      }
-      lastFleetCollapsed = collapsed;
-      lastFleetExpandedKey = expandedKey;
-      uiCtx.ui.setWidget(
-        FLEET_WIDGET_KEY,
-        (_tui, theme) =>
-          new WidthText(
-            (width) => renderFleetWidgetLines(theme, width, items),
-            "[subagent fleet unavailable]",
-          ),
-        { placement: "belowEditor" },
-      );
-      lastFleetWidgetMounted = true;
-    } catch {
-      // Transcript cards remain if the widget cannot mount.
-    }
+  const syncFleetWidget = (_ctx?: ExtensionContext) => {
+    const items: FleetSnapshotItem[] = snapshotFleetItems();
+    const key = items
+      .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.lastEventAt ?? ""}`)
+      .join("\n");
+    if (key === lastFleetKey) return;
+    lastFleetKey = key;
+    publishFleetSnapshot(items);
   };
 
   const liveCount = () => runtime.liveCount();
@@ -3318,11 +3264,11 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     syncFleetWidget();
   });
 
-  pi.on("session_start", (_event, ctx: ExtensionContext) => {
-    syncFleetWidget(ctx);
+  pi.on("session_start", () => {
+    syncFleetWidget();
   });
 
-  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+  pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
     shuttingDown = true;
     try {
       for (const { item: worker } of workers.entries()) {
@@ -3338,16 +3284,8 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         worker.pinnedInvalidate = undefined;
       }
       workers.clear();
-      syncFleetWidget(ctx);
-      try {
-        if (ctx.hasUI && ctx.mode === "tui") {
-          ctx.ui.setWidget(FLEET_WIDGET_KEY, undefined);
-        }
-      } catch {
-        // ignore
-      }
-      fleetUiCtx = undefined;
-      cachedFleetItems = [];
+      lastFleetKey = "";
+      publishFleetSnapshot([]);
     }
   });
 }
