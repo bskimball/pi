@@ -333,7 +333,7 @@ instead of loaded from this array; see the mcp.json section above for why),
 retaining the upstream `keepRecentTokens: 20000` behavior), `steeringMode`,
 `transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme`,
 `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
-`openai-codex/*`, `xai/*`, and other providers for optional manual selection).
+`openai-codex/*`, `xai/*`, `opencode/*`, and other providers for optional manual selection).
 
 Active default and subagent routes use `local-proxy` (for example
 `local-proxy/gpt-5.6-luna`, `local-proxy/gpt-5.6-sol`, `local-proxy/grok-4.5`,
