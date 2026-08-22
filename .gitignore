@@ -19,6 +19,7 @@ agent/mcp-cache.json
 agent/mcp-npx-cache.json
 agent/trust.json
 agent/harness/
+agent/logs/
 agent/fff/
 exa-usage.json
 .tmp/

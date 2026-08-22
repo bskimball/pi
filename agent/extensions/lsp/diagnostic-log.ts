@@ -12,7 +12,7 @@ export type LspDiagnosticLogger = (event: LspDiagnosticEvent) => void;
 
 function logPath(): string {
   const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-  return join(agentDir, "pi-lsp.log");
+  return join(agentDir, "logs", "pi-lsp.log");
 }
 
 function rotateIfNeeded(path: string): void {

@@ -19,7 +19,7 @@ agent/
 ├── themes/                # apex-dark.json
 ├── harness/                # runtime state: global memory, model circuits
 ├── extensions/             # see below
-└── pi-*.log               # render / crash / lifecycle traces
+└── logs/                  # render / crash / lifecycle / lsp traces
 reference/                 # source material, not runtime data
 ```
 
@@ -85,7 +85,7 @@ The blank-chat landing screen (shark wordmark + star field) lives in `agent/exte
 
 `crash-logger.ts` installs the segmenter shield, last-phase breadcrumbs, and terminal-restore watchdog independent of `PI_APEX_UI`. See `CONTEXT.md` § "Long-session and subagent stability" for the full mechanism.
 
-Logs: `agent/pi-crash.log` (fatal JS), `agent/pi-render.log` (render failures), `agent/pi-lifecycle.log` (compaction, exits). Read these before blaming a provider or subagent on an unclean session death.
+Logs: `agent/logs/pi-crash.log` (fatal JS), `agent/logs/pi-render.log` (render failures), `agent/logs/pi-lifecycle.log` (compaction, exits), `agent/logs/pi-lsp.log` (LSP diagnostic probes). Read these before blaming a provider or subagent on an unclean session death.
 
 ## Validation
 

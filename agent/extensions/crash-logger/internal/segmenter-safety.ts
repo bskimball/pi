@@ -3,7 +3,7 @@
 // Pi TUI measures every compositor line with a shared Segmenter
 // (`visibleWidth` / `truncateToWidth` / alt-screen clip). On Windows the
 // native ICU grapheme path can abort the Node process — no JS exception,
-// no pi-crash.log — and leave the parent shell in raw/mouse mode.
+// no agent/logs/pi-crash.log — and leave the parent shell in raw/mouse mode.
 //
 // Default grapheme segmentation is a JS extended-grapheme scan and never
 // calls native ICU. Word/sentence stay native so editor Ctrl/Alt word
@@ -78,6 +78,16 @@ function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
 }
 
+function renderLogPath(): string {
+  return path.join(agentDir(), "logs", "pi-render.log");
+}
+
+function appendRenderLog(entry: string): void {
+  const logPath = renderLogPath();
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.appendFileSync(logPath, entry, "utf8");
+}
+
 function reportOnce(error: unknown): void {
   if (reportedNativeFailure) return;
   reportedNativeFailure = true;
@@ -85,7 +95,7 @@ function reportOnce(error: unknown): void {
     error instanceof Error ? error.stack || error.message : String(error);
   const entry = `\n=== segmenter-safety fallback at ${new Date().toISOString()} ===\n${message}\n`;
   try {
-    fs.appendFileSync(path.join(agentDir(), "pi-render.log"), entry, "utf8");
+    appendRenderLog(entry);
   } catch {
     // A safety net must never throw.
   }
@@ -116,7 +126,7 @@ function noteLargeInput(text: string, granularity: string): void {
       `segmenter-safety large-input at ${new Date().toISOString()} ` +
       `n=${largeInputCount} len=${text.length} gran=${granularity} ` +
       `heap=${mem.heapUsed} rss=${mem.rss}\n`;
-    fs.appendFileSync(path.join(agentDir(), "pi-render.log"), line, "utf8");
+    appendRenderLog(line);
   } catch {
     // A safety net must never throw.
   }

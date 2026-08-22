@@ -106,7 +106,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 - **`apex/apex-ui.ts`** — see [Apex is the UI](#apex-is-the-ui) and [The shark / Observatory](#the-shark--observatory).
 - **`bg-process.ts`** — `bg_start`/`bg_status`/`bg_list`/`bg_kill` for dev servers and watchers; support code in `bg-process/internal/`.
 - **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
-- **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
+- **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/logs/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/logs/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
 - **`continual-memory.ts`** — `memory_list`/`memory_write`; small evidence-backed durable notes outside the chat transcript. Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default write scope is global; local is this-session scratch. Global entries live under `agent/harness/global.json` (gitignored).
 - **`prompt-commands.ts`** — registers `/browser`, `/deploy`, and `/orchestrate` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands). `/todos` and `/agents` are registered by Apex (`todo-tools.ts`), not here.
 - **`graphify.ts`** — see [Graphify](#graphify) below.
@@ -128,7 +128,7 @@ A single on-demand `lsp` tool for semantic navigation (`definition`, `references
 
 ### Crash and stability
 
-`crash-logger.ts` installs the segmenter shield (defends against a native ICU grapheme-segmentation crash on Windows), last-phase breadcrumbs per pid, and a terminal-restore watchdog for unclean session deaths, independent of `PI_APEX_UI`. Logs: `agent/pi-crash.log`, `agent/pi-lifecycle.log`, `agent/pi-render.log`. See [CONTEXT.md](CONTEXT.md#long-session-and-subagent-stability) and [AGENTS.md](AGENTS.md#crash-and-stability-diagnostics) for the full mechanism; this README does not reproduce it.
+`crash-logger.ts` installs the segmenter shield (defends against a native ICU grapheme-segmentation crash on Windows), last-phase breadcrumbs per pid, and a terminal-restore watchdog for unclean session deaths, independent of `PI_APEX_UI`. Logs: `agent/logs/pi-crash.log`, `agent/logs/pi-lifecycle.log`, `agent/logs/pi-render.log`. See [CONTEXT.md](CONTEXT.md#long-session-and-subagent-stability) and [AGENTS.md](AGENTS.md#crash-and-stability-diagnostics) for the full mechanism; this README does not reproduce it.
 
 ## Slash commands
 

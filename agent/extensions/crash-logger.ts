@@ -105,7 +105,7 @@ function processMetadata(): string {
 
 function appendToLog(logName: string, kind: string, value: unknown): void {
   try {
-    const logPath = path.join(os.homedir(), ".pi", "agent", logName);
+    const logPath = path.join(os.homedir(), ".pi", "agent", "logs", logName);
     const body = [
       "",
       `=== ${kind} at ${new Date().toISOString()} ===`,

@@ -27,7 +27,7 @@ import {
 
 const reportedRenderFailures = new Set<string>();
 
-/** Append a one-time render failure note to agent/pi-render.log. Never throws. */
+/** Append a one-time render failure note to agent/logs/pi-render.log. Never throws. */
 export function reportRenderFailure(surface: string, error: unknown): void {
   const message =
     error instanceof Error ? error.stack || error.message : String(error);
@@ -37,7 +37,11 @@ export function reportRenderFailure(surface: string, error: unknown): void {
   const entry = `\n=== apex-ui ${surface} render fallback at ${new Date().toISOString()} ===\n${message}\n`;
   const agentDir =
     process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
-  void fs.appendFile(path.join(agentDir, "pi-render.log"), entry).catch(() => {});
+  const logPath = path.join(agentDir, "logs", "pi-render.log");
+  void fs
+    .mkdir(path.dirname(logPath), { recursive: true })
+    .then(() => fs.appendFile(logPath, entry))
+    .catch(() => {});
 }
 
 /**

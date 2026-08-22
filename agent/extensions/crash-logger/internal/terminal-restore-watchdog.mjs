@@ -55,14 +55,14 @@ function statePath(pid) {
 function lifecycleLogPath() {
   return envOrDefault(
     "PI_TERMINAL_WATCHDOG_LOG_PATH",
-    path.join(os.homedir(), ".pi", "agent", "pi-lifecycle.log"),
+    path.join(os.homedir(), ".pi", "agent", "logs", "pi-lifecycle.log"),
   );
 }
 
 function crashLogPath() {
   return envOrDefault(
     "PI_TERMINAL_WATCHDOG_CRASH_LOG_PATH",
-    path.join(os.homedir(), ".pi", "agent", "pi-crash.log"),
+    path.join(os.homedir(), ".pi", "agent", "logs", "pi-crash.log"),
   );
 }
 

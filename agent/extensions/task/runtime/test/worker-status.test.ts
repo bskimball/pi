@@ -27,7 +27,7 @@ function snapshot(
     pendingFollowUp: 0,
     latestResult: "",
     latestAssistantText: "x".repeat(8_000),
-    running: [{ tool: "read", summary: '{"path":"agent/pi-crash.log"}' }],
+    running: [{ tool: "read", summary: '{"path":"agent/logs/pi-crash.log"}' }],
     recent: [
       {
         status: "completed",
