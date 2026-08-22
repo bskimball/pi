@@ -1,9 +1,9 @@
 ---
 name: librarian
 description: Remote source-code researcher for external libraries, framework internals, reference implementations, and cross-repository investigation.
-model: local-proxy/grok-4.6
+model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
-  - local-proxy/gemini-3.7-flash-high
+  - local-proxy/grok-composer-2.5-fast
   - local-proxy/claude-sonnet-5
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content

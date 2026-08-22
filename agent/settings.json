@@ -1,7 +1,7 @@
 {
-  "defaultModel": "x-preview-f-free",
-  "defaultProvider": "opencode",
-  "defaultThinkingLevel": "high",
+  "defaultModel": "grok-4.6",
+  "defaultProvider": "local-proxy",
+  "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:@ff-labs/pi-fff"
