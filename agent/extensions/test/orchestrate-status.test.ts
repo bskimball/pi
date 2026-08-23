@@ -123,7 +123,7 @@ describe("strict orchestrator prompt", () => {
     assert.match(active.systemPrompt, /After all writers have settled/);
     assert.match(
       active.systemPrompt,
-      /Every delegated implementation diff gets a fresh-eyes Oracle review/,
+      /Every implementation diff gets a fresh-eyes Oracle review/,
     );
     assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
     assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
@@ -133,6 +133,12 @@ describe("strict orchestrator prompt", () => {
     );
     assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
     assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
+    assert.match(active.systemPrompt, /security-sensitive architecture, migrations/);
+    assert.match(active.systemPrompt, /destructive data changes, public API architecture/);
+    assert.match(active.systemPrompt, /other consequential approach choices/);
+    assert.match(active.systemPrompt, /specialists return conflicting findings/);
+    assert.match(active.systemPrompt, /do not implement code inline in this mode/);
+    assert.doesNotMatch(active.systemPrompt, /tiny integration fixes/);
     assert.match(active.systemPrompt, /one `task_wait` \(default 600s\) per worker/);
     assert.match(active.systemPrompt, /Do not poll with `task_status`\/`task_wait` loops/);
     assert.match(active.systemPrompt, /Keep returned evidence compact/);

@@ -113,7 +113,7 @@ export function discoverAgents(cwd: string = process.cwd()): Map<string, AgentDe
 const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
   {
     agents: ["artisan"],
-    text: "UI/frontend/styling/layout implementation to artisan",
+    text: "substantial visual design work needing separate creative judgment to artisan",
   },
   {
     agents: ["inspector"],
@@ -125,7 +125,7 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
   },
   {
     agents: ["machinist"],
-    text: "other non-visual code, config, and tests to machinist",
+    text: "independent separable non-visual implementation slices to machinist",
   },
 ];
 
@@ -134,7 +134,7 @@ export function routingHint(agents: Map<string, AgentDef>): string {
     clause.agents.every((name) => agents.has(name)),
   ).map((clause) => clause.text);
   if (clauses.length === 0) return "";
-  return `Route ${clauses.join("; ")}. Route by deliverable, not file extension.`;
+  return `This parameter chooses a specialist after delegation is justified; it does not decide whether to delegate. Route ${clauses.join("; ")}. Route by the reason for delegation and deliverable, not file extension.`;
 }
 
 /** `agent` parameter description shared by the sync `task` and async `task_start` tools. */

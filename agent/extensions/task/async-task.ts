@@ -1569,7 +1569,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_start",
     label: "Task Start",
-    description: `Start an asynchronous specialist sub-agent in an isolated session. The lead delegates all multi-file implementation and broad investigation through this tool; inline work is for single known-file edits only. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
+    description: `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
 
 Available agents:
 ${agentList}
@@ -1578,7 +1578,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     promptSnippet:
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
-      "Use task_start for long-running or multi-turn specialist work you need to steer later.",
+      "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
       "Use the synchronous task tool when you need one final report before continuing.",
       "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
       "Always task_close workers when finished; they hold a concurrency slot until closed.",

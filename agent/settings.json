@@ -1,7 +1,7 @@
 {
-  "defaultModel": "grok-4.6",
+  "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "xhigh",
   "lastChangelogVersion": "0.84.2",
   "packages": [
     "npm:@ff-labs/pi-fff"
