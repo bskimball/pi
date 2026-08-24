@@ -45,6 +45,8 @@ import {
   textContent,
   type ToolRenderContext,
 } from "../presentation/ui-common.ts";
+import { requestHostRender } from "../presentation/render-safety.ts";
+import { writeLastPhase } from "../runtime/last-phase.ts";
 import { safeLine, type StatusTheme } from "../presentation/receipt-tree.ts";
 
 // ---------------------------------------------------------------- types
@@ -284,7 +286,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let panelCollapsed = false;
   let dockPane: DockPane = "todos";
   let liveAgents: DockAgentItem[] = currentDockAgents();
-  let lastDockKey = "";
+  let dockMounted = false;
   let unsubscribeFleet = () => {};
   const PANEL_KEY = "todo-list";
   const TOGGLE_HINT = "alt+t";
@@ -293,7 +295,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   function clearPanel(): void {
     const ctx = currentCtx;
-    lastDockKey = "";
+    const wasMounted = dockMounted;
+    dockMounted = false;
+    if (wasMounted) writeLastPhase("todo-dock:unmount");
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
     try {
       ctx.ui.setWidget(PANEL_KEY, undefined);
@@ -319,20 +323,19 @@ export function installTodoTools(pi: ExtensionAPI): void {
     const ctx = currentCtx;
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
     if (!dockHasSurface()) {
-      clearPanel();
+      if (dockMounted) clearPanel();
       return;
     }
     if (dockPane === "agents" && liveAgents.length === 0) dockPane = "todos";
-    const key = [
-      dockPane,
-      panelCollapsed ? "1" : "0",
-      current ? `${current.done}/${current.total}/${current.activeIndex}` : "-",
-      liveAgents
-        .map((item) => `${item.id}:${item.lifecycle}:${item.lastEventAt ?? item.createdAt}`)
-        .join(","),
-    ].join("|");
-    if (key === lastDockKey) return;
-    lastDockKey = key;
+    // The WidthText factory closes over this state. Remounting via setWidget
+    // on every todo_write / fleet lifecycle tick rebuilds the above-editor
+    // widget and has coincided with unclean Windows parent deaths. Paint
+    // the live host instead; remount only to create or destroy the surface.
+    if (dockMounted) {
+      requestHostRender();
+      return;
+    }
+    writeLastPhase("todo-dock:mount");
     try {
       ctx.ui.setWidget(
         PANEL_KEY,
@@ -360,6 +363,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
           }, "[todo panel unavailable]"),
         { placement: "aboveEditor" },
       );
+      dockMounted = true;
     } catch {
       // The transcript receipt remains available if the dock cannot be mounted.
     }
@@ -372,7 +376,6 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return;
     }
     panelCollapsed = !panelCollapsed;
-    lastDockKey = "";
     renderPanel();
   }
 
@@ -384,12 +387,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
     if (pane === "todos" && !current && liveAgents.length > 0) {
       dockPane = "agents";
-      lastDockKey = "";
       renderPanel();
       return;
     }
     dockPane = pane;
-    lastDockKey = "";
     renderPanel();
   }
 

@@ -1158,6 +1158,7 @@ export default function (pi: ExtensionAPI) {
     lifecycle: "settled" | "failed",
     options?: { error?: string; killReason?: string },
   ) => {
+    writeLastPhase(`task_settle:${lifecycle} id=${worker.id}`);
     const result = runtime.settleGeneration(worker, lifecycle, options, eventHooks);
     syncFleetWidget();
     return result;
@@ -2282,7 +2283,10 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         try {
           worker.initialPrompt = message;
           worker.fallbackReplaySafe = true;
+          writeLastPhase(`task_send:prompt:enter id=${id}`);
           startGeneration(worker);
+          syncFleetWidget();
+          writeLastPhase(`task_send:prompt:rpc id=${id} gen=${worker.generation}`);
           const response = await worker.client.request(
             { type: "prompt", message },
             PROMPT_ACCEPT_TIMEOUT_MS,
@@ -2297,6 +2301,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               sendDetails("rejected", response.error ?? "unknown"),
             );
           }
+          writeLastPhase(`task_send:prompt:accepted id=${id} gen=${worker.generation}`);
           return textResult(
             [
               `${id} accepted new prompt (generation ${worker.generation}).`,

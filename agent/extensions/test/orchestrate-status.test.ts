@@ -131,6 +131,8 @@ describe("strict orchestrator prompt", () => {
       active.systemPrompt,
       /Never run integrated gates inside Artisan\/Machinist/,
     );
+    assert.match(active.systemPrompt, /UI and interaction slices are proven on the live page through Inspector/);
+    assert.match(active.systemPrompt, /writer-local checks and a passing Stevedore gate are not that proof/);
     assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
     assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
     assert.match(active.systemPrompt, /security-sensitive architecture, migrations/);

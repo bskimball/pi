@@ -1046,4 +1046,91 @@ describe("dock tabs and agents pane", () => {
       "clears the dock when no todos or agents remain",
     );
   });
+
+  it("paints a live dock in place instead of remounting on fleet and todo updates", async () => {
+    resetDockAgents();
+    const mock = createMockPi("1");
+    const write = mock.tools.find((tool) => tool.name === "todo_write");
+    let mountedComponent: any;
+    let mountedSurface:
+      | { render: (width: number) => string[] }
+      | undefined;
+    let setWidgetCalls = 0;
+    const tuiCtx = {
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        setWidget(_key: string, component: any) {
+          setWidgetCalls += 1;
+          mountedComponent = component;
+          mountedSurface =
+            component == null
+              ? undefined
+              : typeof component === "function"
+                ? component(null, theme)
+                : component;
+        },
+        notify() {},
+      },
+    } as any;
+    const renderMounted = (width = 80): string[] =>
+      mountedSurface?.render ? mountedSurface.render(width) : [];
+
+    mock.emit("session_start", { reason: "new" }, tuiCtx);
+    assert.equal(setWidgetCalls, 0);
+
+    await write.execute(
+      "call_1",
+      { todos: [{ content: "Review the crash", status: "in_progress" }] },
+      undefined,
+      undefined,
+      tuiCtx,
+    );
+    assert.equal(setWidgetCalls, 1, "first todo_write mounts the dock");
+    const mountedOnce = mountedComponent;
+    assert.match(renderMounted().join("\n"), /Review the crash/);
+
+    publishDockAgents([
+      {
+        id: "task_1",
+        agent: "oracle",
+        lifecycle: "settled",
+        createdAt: 1,
+        lastEventAt: 10,
+      },
+    ]);
+    assert.equal(setWidgetCalls, 1, "first live snapshot does not remount");
+    assert.equal(mountedComponent, mountedOnce);
+    assert.match(renderMounted()[0] ?? "", /agents 1/);
+
+    publishDockAgents([
+      {
+        id: "task_1",
+        agent: "oracle",
+        lifecycle: "running",
+        createdAt: 1,
+        lastEventAt: 99_999,
+      },
+    ]);
+    assert.equal(setWidgetCalls, 1, "task_send lifecycle tick does not remount");
+    assert.equal(mountedComponent, mountedOnce);
+
+    await write.execute(
+      "call_2",
+      { todos: [{ content: "Finish the review", status: "completed" }] },
+      undefined,
+      undefined,
+      tuiCtx,
+    );
+    assert.equal(setWidgetCalls, 1, "todo_write does not remount a live dock");
+    assert.equal(mountedComponent, mountedOnce);
+    assert.match(renderMounted().join("\n"), /Finish the review/);
+
+    publishDockAgents([]);
+    assert.equal(setWidgetCalls, 1, "agents leaving does not remount a todo dock");
+    assert.equal(mountedComponent, mountedOnce);
+    const afterAgentsLeave = renderMounted();
+    assert.match(afterAgentsLeave.join("\n"), /Finish the review/);
+    assert.doesNotMatch(afterAgentsLeave[0] ?? "", /\[agents/);
+  });
 });
