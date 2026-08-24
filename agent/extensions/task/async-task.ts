@@ -73,6 +73,7 @@ import {
   renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
 import {
+  fleetSnapshotKey,
   publishFleetSnapshot,
   type FleetSnapshotItem,
 } from "./runtime/fleet-bus.ts";
@@ -680,9 +681,11 @@ export default function (pi: ExtensionAPI) {
 
   const syncFleetWidget = (_ctx?: ExtensionContext) => {
     const items: FleetSnapshotItem[] = snapshotFleetItems();
-    const key = items
-      .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.lastEventAt ?? ""}`)
-      .join("\n");
+    // Fleet consumers remount an Apex widget when a snapshot changes. Keep the
+    // key structural: lastEventAt advances for every RPC delta, including the
+    // streaming updates deliberately excluded from pinned-card repaint below.
+    // Publishing those heartbeats would restore a second full-render path.
+    const key = fleetSnapshotKey(items);
     if (key === lastFleetKey) return;
     lastFleetKey = key;
     publishFleetSnapshot(items);

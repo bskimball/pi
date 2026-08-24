@@ -53,6 +53,8 @@ describe("routing hint", () => {
     assert.match(description, /^Agent to run\. One of: /);
     assert.match(description, /after delegation is justified/);
     assert.match(description, /substantial visual design/);
+    assert.match(description, /browser verification to inspector only on explicit user request in regular mode/);
+    assert.doesNotMatch(description, /routine read-only browser\/screenshot verification to inspector/);
     assert.doesNotMatch(description, /UI\/frontend\/styling\/layout implementation to artisan/);
   });
 
@@ -75,13 +77,22 @@ describe("routing hint", () => {
       "utf8",
     );
     const advisor = fs.readFileSync(path.resolve("agent/agents/advisor.md"), "utf8");
+    const inspector = fs.readFileSync(path.resolve("agent/agents/inspector.md"), "utf8");
 
     assert.match(system, /Keep coherent implementation in the main model even when it is long-running, multi-file, or frontend-heavy/);
     assert.match(system, /machinist only for an independent separable non-visual implementation slice/);
     assert.match(system, /advisor only when the user explicitly asks for it in regular mode/);
     assert.match(system, /lead normally runs lint, format checks, typechecks, tests, and builds directly/);
+    assert.match(system, /lead performs browser verification and uses inspector only when the user explicitly requests it/);
+    assert.match(system, /drive browser checks yourself and use inspector only when the user explicitly requests it/);
+    assert.doesNotMatch(system, /automatically route routine post-implementation UI verification to inspector/i);
+    assert.doesNotMatch(system, /prefer inspector for routine/i);
     assert.match(asyncTask, /Multi-file, long-running, or frontend work may remain inline in regular mode/);
     assert.doesNotMatch(asyncTask, /delegates all multi-file implementation/);
     assert.match(advisor, /In regular mode, only when the user explicitly requests advisor consultation/);
+    assert.match(inspector, /regular mode only when the user explicitly requests Inspector/);
+    assert.match(inspector, /strict orchestrate mode routes live browser and screenshot verification here/);
+    assert.doesNotMatch(inspector, /materially helps/);
+    assert.doesNotMatch(inspector, /routine[^\n]*browser[^\n]*(?:to|use|prefer)[^\n]*Inspector/i);
   });
 });

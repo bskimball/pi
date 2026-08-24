@@ -11,6 +11,15 @@ export interface FleetSnapshotItem {
   lastEventAt?: number;
 }
 
+/** Stable render key; heartbeat-only activity must not remount the fleet UI. */
+export function fleetSnapshotKey(
+  items: readonly FleetSnapshotItem[],
+): string {
+  return items
+    .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}`)
+    .join("\n");
+}
+
 type FleetListener = (items: readonly FleetSnapshotItem[]) => void;
 
 interface FleetBus {

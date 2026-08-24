@@ -1,6 +1,6 @@
 ---
 name: inspector
-description: Fast, cheap browser-based UI verification through live interaction, screenshots, responsive checks, and focused visual regression analysis.
+description: Fast, cheap read-only browser verification for live interaction, screenshots, responsive checks, and focused visual regression analysis. Use in regular mode only when the user explicitly requests Inspector; strict orchestrate mode routes live browser and screenshot verification here.
 model: local-proxy/gemini-3.7-flash-high
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast

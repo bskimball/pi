@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 import { renderFleetCollapsed } from "../../presentation/fleet-view.ts";
 import {
   currentFleetSnapshot,
+  fleetSnapshotKey,
   publishFleetSnapshot,
   resetFleetBus,
   subscribeFleetSnapshot,
@@ -43,6 +44,24 @@ describe("renderFleetCollapsed", () => {
 });
 
 describe("fleet bus", () => {
+  it("ignores heartbeat-only changes in the render key", () => {
+    const structural = {
+      id: "task_1",
+      agent: "scout",
+      lifecycle: "running",
+      createdAt: 1,
+    };
+    const before = fleetSnapshotKey([structural]);
+    const after = fleetSnapshotKey([
+      { ...structural, lastEventAt: 99_999 },
+    ]);
+    assert.equal(after, before);
+    assert.notEqual(
+      fleetSnapshotKey([{ ...structural, lifecycle: "compacting" }]),
+      before,
+    );
+  });
+
   it("publishes a snapshot to subscribers without stacking widgets", () => {
     const seen: number[] = [];
     const stop = subscribeFleetSnapshot((items) => {

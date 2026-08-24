@@ -117,7 +117,7 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
   },
   {
     agents: ["inspector"],
-    text: "routine read-only browser/screenshot verification to inspector",
+    text: "read-only browser verification to inspector only on explicit user request in regular mode",
   },
   {
     agents: ["scribe"],
