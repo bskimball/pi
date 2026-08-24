@@ -1,9 +1,9 @@
 ---
 name: machinist
 description: Implementation specialist for independent separable non-visual slices across backend logic, data, CLI, build/config, refactors, migrations, bug fixes, and tests. Long or multi-file work alone is not a reason to delegate in regular mode. Not for UI or prose deliverables.
-model: local-proxy/gpt-5.6-sol
+model: local-proxy/grok-4.6
 fallbackModels:
-  - local-proxy/grok-4.6
+  - local-proxy/gpt-5.6-terra
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731'
 thinking: low
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
