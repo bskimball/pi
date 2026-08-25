@@ -4,14 +4,16 @@
 // import that extension. First registration wins the whole tool, so this skins
 // receipts through the shared headless ToolExecutionComponent wrap.
 //
-// PI_APEX_UI=0 skips the wrap. Any existing powershell presentation
-// (renderCall, renderResult, or a non-default renderShell) wins.
+// Apex owns PowerShell presentation and replaces any stale/legacy renderer
+// still present on the independently loaded tool. PI_APEX_UI=0 makes newly
+// constructed receipts use stock Pi presentation after the wrapper is loaded.
 
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
   componentOwnsPresentation,
+  getHeadlessReceiptState,
   installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
@@ -119,7 +121,11 @@ export function powershellOwnsPresentation(
 
 /** Attach Apex receipts to powershell ToolExecutionComponent instances. */
 export function installPowerShellReceipts(): void {
-  if (!apexPresentationEnabled()) return;
-  registerHeadlessReceipt(POWERSHELL_RECEIPT_TOOL, powershellReceiptRenderers);
-  installHeadlessReceipts();
+  registerHeadlessReceipt(POWERSHELL_RECEIPT_TOOL, powershellReceiptRenderers, {
+    overrideOwned: true,
+    suppressOwnedWhenDisabled: true,
+  });
+  if (apexPresentationEnabled() || getHeadlessReceiptState().installed) {
+    installHeadlessReceipts();
+  }
 }

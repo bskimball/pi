@@ -16,10 +16,11 @@ export const HEADLESS_STATE_KEY = Symbol.for("pi.apex.headlessReceipts.state");
 export const RECEIPTS_KEY = Symbol.for("pi.apex.headlessReceipts.registry");
 const LEGACY_INSTALL_KEY = Symbol.for("pi.apex.headlessReceipts.installed");
 
-export const HEADLESS_WRAPPER_VERSION = 1;
+export const HEADLESS_WRAPPER_VERSION = 2;
 
 export type HeadlessReceiptOptions = {
   overrideOwned?: boolean;
+  suppressOwnedWhenDisabled?: boolean;
 };
 
 export type HeadlessRenderers = {
@@ -29,6 +30,7 @@ export type HeadlessRenderers = {
 
 export type RegisteredReceipt = HeadlessRenderers & {
   overrideOwned: boolean;
+  suppressOwnedWhenDisabled?: boolean;
 };
 
 export type HeadlessPresentation = {
@@ -139,11 +141,23 @@ export function registerHeadlessReceipt(
   const overrideOwned =
     options?.overrideOwned ??
     Boolean((renderers as { overrideOwned?: boolean }).overrideOwned);
+  const suppressOwnedWhenDisabled = options?.suppressOwnedWhenDisabled ?? false;
   state.registry.set(toolName, {
     renderCall: renderers.renderCall,
     renderResult: renderers.renderResult,
     overrideOwned,
+    suppressOwnedWhenDisabled,
   });
+}
+
+function shouldSuppressOwnedPresentation(
+  component: HeadlessComponent,
+): boolean {
+  if (apexPresentationEnabled() || !component.toolName) return false;
+  return Boolean(
+    getHeadlessReceiptState().registry.get(component.toolName)
+      ?.suppressOwnedWhenDisabled,
+  );
 }
 
 export function shouldAttachApexReceipts(
@@ -182,9 +196,8 @@ function callOriginal<T>(
   }
 }
 
-// Keep global state decision logic up-to-date with current module version
+// Keep process-global decision logic current across extension module reloads.
 const moduleState = getHeadlessReceiptState();
-moduleState.version = Math.max(moduleState.version, HEADLESS_WRAPPER_VERSION);
 moduleState.shouldAttach = shouldAttachApexReceipts;
 
 /** Attach registered Apex receipts to matching ToolExecutionComponent instances. */
@@ -192,8 +205,11 @@ export function installHeadlessReceipts(): void {
   const state = getHeadlessReceiptState();
   state.shouldAttach = shouldAttachApexReceipts;
 
-  if (!apexPresentationEnabled()) return;
-  if (state.installed) return;
+  // A disabled clean startup must not add a process-wide presentation wrap.
+  // An older installed wrap must still be upgraded so v2 can suppress stale
+  // owned presentation and restore stock Pi chrome while Apex is disabled.
+  if (!apexPresentationEnabled() && !state.installed) return;
+  if (state.installed && state.version >= HEADLESS_WRAPPER_VERSION) return;
 
   const proto = ToolExecutionComponent.prototype as object;
   const call = findOwnMethod(proto, "getCallRenderer");
@@ -202,18 +218,23 @@ export function installHeadlessReceipts(): void {
   const hasRenderer = findOwnMethod(proto, "hasRendererDefinition");
   if (!call || !result || !shell || !hasRenderer) return;
 
-  state.originals = {
-    getCallRenderer: call.method as (this: HeadlessComponent) => unknown,
-    getResultRenderer: result.method as (this: HeadlessComponent) => unknown,
-    getRenderShell: shell.method as (this: HeadlessComponent) => unknown,
-    hasRendererDefinition: hasRenderer.method as (this: object) => boolean,
-  };
+  // On a version migration the process-global state already holds the true
+  // pre-Apex methods. Replace old wrappers without stacking them as originals.
+  if (!state.installed) {
+    state.originals = {
+      getCallRenderer: call.method as (this: HeadlessComponent) => unknown,
+      getResultRenderer: result.method as (this: HeadlessComponent) => unknown,
+      getRenderShell: shell.method as (this: HeadlessComponent) => unknown,
+      hasRendererDefinition: hasRenderer.method as (this: object) => boolean,
+    };
+  }
 
   call.target.getCallRenderer = function getHeadlessCallRenderer(
     this: HeadlessComponent,
   ) {
     const s = getHeadlessReceiptState();
     const existing = callOriginal(s, this, s.originals.getCallRenderer);
+    if (shouldSuppressOwnedPresentation(this)) return undefined;
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
       : shouldAttachApexReceipts(this);
@@ -228,6 +249,7 @@ export function installHeadlessReceipts(): void {
   ) {
     const s = getHeadlessReceiptState();
     const existing = callOriginal(s, this, s.originals.getResultRenderer);
+    if (shouldSuppressOwnedPresentation(this)) return undefined;
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
       : shouldAttachApexReceipts(this);
@@ -242,6 +264,7 @@ export function installHeadlessReceipts(): void {
   ) {
     const s = getHeadlessReceiptState();
     const existing = callOriginal(s, this, s.originals.getRenderShell);
+    if (shouldSuppressOwnedPresentation(this)) return "default";
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
       : shouldAttachApexReceipts(this);
@@ -266,5 +289,6 @@ export function installHeadlessReceipts(): void {
     ) ?? false;
   };
 
+  state.version = HEADLESS_WRAPPER_VERSION;
   state.installed = true;
 }

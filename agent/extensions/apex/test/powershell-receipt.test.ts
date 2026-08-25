@@ -15,6 +15,10 @@ const {
   powershellReceiptRenderers,
 } = await import("../internal/presentation/powershell-receipt.ts");
 
+const { getHeadlessReceiptState, HEADLESS_WRAPPER_VERSION } = await import(
+  "../internal/presentation/headless-receipts.ts"
+);
+
 const theme = {
   fg: (_key: string, text: string) => text,
   bg: (_key: string, text: string) => text,
@@ -167,17 +171,29 @@ describe("apex powershell receipts", () => {
           renderResult: ownResult,
         },
       };
-      assert.equal(proto.getCallRenderer.call(ownedBoth), ownCall);
-      assert.equal(proto.getResultRenderer.call(ownedBoth), ownResult);
-      assert.equal(proto.getRenderShell.call(ownedBoth), "default");
+      assert.equal(
+        proto.getCallRenderer.call(ownedBoth),
+        powershellReceiptRenderers.renderCall,
+      );
+      assert.equal(
+        proto.getResultRenderer.call(ownedBoth),
+        powershellReceiptRenderers.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(ownedBoth), "self");
 
       const ownedCallOnly = {
         toolName: POWERSHELL_RECEIPT_TOOL,
         toolDefinition: { name: "powershell", renderCall: ownCall },
       };
-      assert.equal(proto.getCallRenderer.call(ownedCallOnly), ownCall);
-      assert.equal(proto.getResultRenderer.call(ownedCallOnly), undefined);
-      assert.equal(proto.getRenderShell.call(ownedCallOnly), "default");
+      assert.equal(
+        proto.getCallRenderer.call(ownedCallOnly),
+        powershellReceiptRenderers.renderCall,
+      );
+      assert.equal(
+        proto.getResultRenderer.call(ownedCallOnly),
+        powershellReceiptRenderers.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(ownedCallOnly), "self");
 
       const ownedShell = {
         toolName: POWERSHELL_RECEIPT_TOOL,
@@ -232,6 +248,191 @@ describe("apex powershell receipts", () => {
       assert.doesNotMatch(text, /┌|┐|└|┘/);
       assert.equal((text.match(/powershell/g) ?? []).length, 1);
       assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
+    });
+  });
+
+  it("renders a real ToolExecutionComponent even when a stale renderer owns the tool", () => {
+    initTheme("dark");
+    withApexUi("1", () => {
+      installPowerShellReceipts();
+
+      const args = { command: "Get-Date" };
+      const staleCall = () => ({
+        render: () => ["PS> Get-Date (timeout 30s)"],
+        invalidate() {},
+      });
+      const staleResult = () => ({
+        render: () => ["Took 1.4s"],
+        invalidate() {},
+      });
+      const component = new ToolExecutionComponent(
+        "powershell",
+        "call-stale-1",
+        args,
+        { showImages: false },
+        {
+          name: "powershell",
+          renderCall: staleCall,
+          renderResult: staleResult,
+          renderShell: "self",
+        } as any,
+        stubUi() as any,
+        process.cwd(),
+      );
+      component.markExecutionStarted();
+      component.updateResult({
+        content: [{ type: "text", text: "Monday, August 17, 2026 9:41:00 AM" }],
+        details: {
+          exitCode: 0,
+          truncated: false,
+          timedOut: false,
+          aborted: false,
+          executable: "pwsh.exe",
+        },
+        isError: false,
+      });
+
+      const text = component.render(80).join("\n");
+      assert.match(text, /powershell/);
+      assert.match(text, /Get-Date/);
+      assert.match(text, /Monday, August 17/);
+      assert.doesNotMatch(text, /PS>/);
+      assert.doesNotMatch(text, /Took 1\.4s/);
+      assert.doesNotMatch(text, /┌|┐|└|┘/);
+    });
+  });
+
+  it("suppresses stale powershell renderers when Apex is toggled off", () => {
+    withApexUi("1", () => {
+      installPowerShellReceipts();
+      const proto = ToolExecutionComponent.prototype as any;
+      const staleCall = () => ({ render: () => ["STALE-CALL"], invalidate() {} });
+      const staleResult = () => ({
+        render: () => ["STALE-RESULT"],
+        invalidate() {},
+      });
+      const tool = {
+        toolName: POWERSHELL_RECEIPT_TOOL,
+        toolDefinition: {
+          name: "powershell",
+          renderCall: staleCall,
+          renderResult: staleResult,
+          renderShell: "self",
+        },
+      };
+
+      assert.equal(
+        proto.getCallRenderer.call(tool),
+        powershellReceiptRenderers.renderCall,
+      );
+      assert.equal(
+        proto.getResultRenderer.call(tool),
+        powershellReceiptRenderers.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(tool), "self");
+
+      process.env.PI_APEX_UI = "0";
+      assert.equal(proto.getCallRenderer.call(tool), undefined);
+      assert.equal(proto.getResultRenderer.call(tool), undefined);
+      assert.equal(proto.getRenderShell.call(tool), "default");
+      assert.equal(proto.hasRendererDefinition.call(tool), true);
+
+      process.env.PI_APEX_UI = "1";
+      assert.equal(
+        proto.getCallRenderer.call(tool),
+        powershellReceiptRenderers.renderCall,
+      );
+      assert.equal(
+        proto.getResultRenderer.call(tool),
+        powershellReceiptRenderers.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(tool), "self");
+    });
+  });
+
+  it("migrates a genuine v1 wrapper while Apex is disabled without stacking originals", () => {
+    withApexUi("1", () => installPowerShellReceipts());
+
+    const state = getHeadlessReceiptState();
+    const proto = ToolExecutionComponent.prototype as any;
+    const originals = state.originals;
+    const fakeV1Call = function (this: any) {
+      return originals.getCallRenderer?.call(this);
+    };
+    proto.getCallRenderer = fakeV1Call;
+    proto.getResultRenderer = function (this: any) {
+      return originals.getResultRenderer?.call(this);
+    };
+    proto.getRenderShell = function (this: any) {
+      return originals.getRenderShell?.call(this);
+    };
+    proto.hasRendererDefinition = function (this: any) {
+      return originals.hasRendererDefinition?.call(this) ?? false;
+    };
+    state.installed = true;
+    state.version = HEADLESS_WRAPPER_VERSION - 1;
+
+    withApexUi("0", () => installPowerShellReceipts());
+
+    assert.equal(state.version, HEADLESS_WRAPPER_VERSION);
+    assert.notEqual(proto.getCallRenderer, fakeV1Call);
+    assert.equal(state.originals, originals);
+
+    const staleCall = () => ({ render: () => ["PS> stale"], invalidate() {} });
+    const staleResult = () => ({ render: () => ["Took 1.4s"], invalidate() {} });
+    const tool = {
+      toolName: POWERSHELL_RECEIPT_TOOL,
+      toolDefinition: {
+        name: "powershell",
+        renderCall: staleCall,
+        renderResult: staleResult,
+        renderShell: "self",
+      },
+    };
+    withApexUi("0", () => {
+      assert.equal(proto.getCallRenderer.call(tool), undefined);
+      assert.equal(proto.getResultRenderer.call(tool), undefined);
+      assert.equal(proto.getRenderShell.call(tool), "default");
+    });
+  });
+
+  it("renders stock Pi chrome after an installed v2 wrap is disabled", () => {
+    initTheme("dark");
+    withApexUi("1", () => installPowerShellReceipts());
+
+    withApexUi("0", () => {
+      const component = new ToolExecutionComponent(
+        "powershell",
+        "call-disabled-1",
+        { command: "Get-Date" },
+        { showImages: false },
+        {
+          name: "powershell",
+          renderCall: () => ({
+            render: () => ["PS> Get-Date"],
+            invalidate() {},
+          }),
+          renderResult: () => ({
+            render: () => ["Took 1.4s"],
+            invalidate() {},
+          }),
+          renderShell: "self",
+        } as any,
+        stubUi() as any,
+        process.cwd(),
+      );
+      component.markExecutionStarted();
+      component.updateResult({
+        content: [{ type: "text", text: "Monday, August 17, 2026" }],
+        details: { exitCode: 0 },
+        isError: false,
+      });
+
+      const text = component.render(80).join("\n");
+      assert.doesNotMatch(text, /PS>/);
+      assert.doesNotMatch(text, /Took 1\.4s/);
+      assert.doesNotMatch(text, /Apex/i);
+      assert.match(text, /powershell|Get-Date|Monday, August 17/i);
     });
   });
 

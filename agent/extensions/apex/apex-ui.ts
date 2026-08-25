@@ -194,10 +194,15 @@ export default function (pi: ExtensionAPI) {
   // panel stays mounted there as an unstyled plain widget.
   installApexOwnedTools(pi);
 
-  // PI_APEX_UI=0 disables Apex styling, chrome, and custom render hooks. Do not
-  // install any Apex process-wide rendering hooks in diagnostic fallback mode;
-  // the persistent plain todo widget installed above is the sole exception.
-  if (process.env.PI_APEX_UI === "0") return;
+  // PI_APEX_UI=0 disables Apex styling, chrome, and custom render hooks. A
+  // clean disabled startup installs no new presentation wrap. PowerShell still
+  // registers its opt-out policy and may migrate a leftover older wrap so
+  // stock Pi chrome wins after an extension reload. The persistent plain todo
+  // widget installed above is the sole mounted UI exception.
+  if (process.env.PI_APEX_UI === "0") {
+    installPowerShellReceipts();
+    return;
+  }
 
   // Install the process-wide boundary only when Apex presentation is active.
   // It keeps malformed model/extension values from terminating the TUI while
