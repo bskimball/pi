@@ -78,7 +78,7 @@ Task owns specialist discovery, subprocess environment, process-tree reaping, tr
 
 1. `crash-logger/internal/segmenter-safety.ts` installs process-wide lazy JS grapheme segmentation before the first fullscreen paint.
 2. `apex/internal/presentation/render-safety.ts` contains malformed Apex Text/Markdown values and preserves cache identity.
-3. `crash-logger/internal/terminal-restore-watchdog.mjs` restores the terminal after an unclean parent death and records last-phase evidence.
+3. `crash-logger/internal/terminal-restore-watchdog.mjs` restores the terminal after an unclean parent death and records the observed Windows exit code, last phase, a metadata-only runtime event ring, heartbeat age/event-loop lag, memory/resource counters, parent liveness, and bounded metadata from nearby Windows crash/resource events.
 4. Task JSONL records, stderr, activities, errors, status text, result previews, and settled metadata are hard-bounded within `task/`.
 5. Stream deltas do not repaint pinned worker cards; Pi owns scheduling.
 6. Child agents run with Apex disabled; Task's own activity surface remains independently controllable.

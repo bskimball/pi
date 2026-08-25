@@ -16,6 +16,7 @@ import {
   watchdogStatePath,
 } from "../crash-logger/internal/terminal-restore.ts";
 import { lastPhasePath } from "../crash-logger/internal/last-phase.ts";
+import { runtimeSnapshotPath } from "../crash-logger/internal/runtime-snapshot.ts";
 
 const watchdogScript = fileURLToPath(
   new URL("../crash-logger/internal/terminal-restore-watchdog.mjs", import.meta.url),
@@ -57,6 +58,7 @@ function watchdogEnv(
     PI_TERMINAL_WATCHDOG_CHILD: "1",
     PI_TERMINAL_WATCHDOG_STATE_DIR: stateDir,
     PI_TERMINAL_WATCHDOG_LOG_PATH: logPath,
+    PI_TERMINAL_WATCHDOG_POSTMORTEM: "0",
     ...(crashLogPath
       ? { PI_TERMINAL_WATCHDOG_CRASH_LOG_PATH: crashLogPath }
       : {}),
@@ -132,6 +134,41 @@ describe("interactive terminal restore", () => {
       `${new Date().toISOString()} pid=${parent.pid} task_start:pre-spawn\n`,
       "utf8",
     );
+    writeFileSync(
+      runtimeSnapshotPath(parent.pid, 0),
+      JSON.stringify({
+        version: 1,
+        sequence: 7,
+        timestamp: new Date().toISOString(),
+        pid: parent.pid,
+        ppid: process.pid,
+        uptimeMs: 350,
+        cwd: process.cwd(),
+        entrypoint: process.execPath,
+        sessionFile: join(stateDir, "session.jsonl"),
+        schedulerLagMs: 12,
+        memory: {
+          rss: 123,
+          heapTotal: 100,
+          heapUsed: 80,
+          external: 3,
+          arrayBuffers: 2,
+        },
+        systemMemory: { free: 500, total: 1_000 },
+        activeResources: { Timeout: 1 },
+        events: [
+          {
+            at: new Date().toISOString(),
+            event: "input source=interactive textChars=7",
+          },
+          {
+            at: new Date().toISOString(),
+            event: "tool-start name=todo_write call=call-1",
+          },
+        ],
+      }),
+      "utf8",
+    );
     const watchdog = spawn(process.execPath, [watchdogScript, String(parent.pid)], {
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
@@ -153,6 +190,28 @@ describe("interactive terminal restore", () => {
       assert.match(crashLog, /last-phase:/);
       assert.match(lifecycle, /task_start:pre-spawn/);
       assert.match(crashLog, /task_start:pre-spawn/);
+      assert.match(lifecycle, /runtime-snapshot:/);
+      assert.match(crashLog, /runtime-snapshot:/);
+      assert.match(lifecycle, /schedulerLagMs=12/);
+      assert.match(crashLog, /tool-start name=todo_write/);
+      assert.match(lifecycle, /windows-postmortem: disabled/);
+      if (process.platform === "win32") {
+        const windowsExitObservation =
+          /exit-observation: source=windows-process-handle (?:signed=-?\d+ unsigned=\d+ hex=0x[0-9a-f]{8}|unavailable error=.+)/;
+        assert.match(
+          lifecycle,
+          windowsExitObservation,
+        );
+        assert.match(
+          crashLog,
+          windowsExitObservation,
+        );
+      } else {
+        assert.match(lifecycle, /exit-observation: unavailable/);
+      }
+      assert.throws(() =>
+        readFileSync(runtimeSnapshotPath(parent.pid!, 0), "utf8"),
+      );
     } finally {
       parent.kill();
       if (previous === undefined) delete process.env.PI_TERMINAL_WATCHDOG_STATE_DIR;

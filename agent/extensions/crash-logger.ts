@@ -7,6 +7,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeLastPhase } from "./crash-logger/internal/last-phase.ts";
+import { installNativeBoundaryTelemetry } from "./crash-logger/internal/native-boundary.ts";
+import { CrashRuntimeMonitor } from "./crash-logger/internal/runtime-snapshot.ts";
 import { installSegmenterSafety } from "./crash-logger/internal/segmenter-safety.ts";
 import {
   markTerminalWatchdogClean,
@@ -16,10 +18,14 @@ import {
 } from "./crash-logger/internal/terminal-restore.ts";
 
 const INSTALL_KEY = Symbol.for("pi.crashLogger.installed");
-const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
+const RUNTIME_MONITOR_KEY = Symbol.for("pi.crashLogger.runtimeMonitor");
+const state = globalThis as typeof globalThis & {
+  [INSTALL_KEY]?: boolean;
+  [RUNTIME_MONITOR_KEY]?: CrashRuntimeMonitor;
+};
 
 // Module load, not factory time: the first fullscreen paint can happen as
-// soon as extensions are imported. Prototype wrap is idempotent.
+// soon as extensions are imported. Installation is idempotent.
 installSegmenterSafety();
 writeLastPhase("startup");
 
@@ -139,6 +145,14 @@ export default function (pi: ExtensionAPI): void {
   // native ICU cannot abort Node on Windows. This is independent of Apex.
   installSegmenterSafety();
   writeLastPhase("startup");
+  const runtimeMonitor =
+    shouldRestoreInteractiveTerminal() &&
+    process.env.PI_TERMINAL_WATCHDOG !== "0"
+    ? new CrashRuntimeMonitor()
+    : undefined;
+  state[RUNTIME_MONITOR_KEY]?.stop(true);
+  state[RUNTIME_MONITOR_KEY] = runtimeMonitor;
+  installNativeBoundaryTelemetry((event) => runtimeMonitor?.note(event));
   let sessionFile: string | undefined;
   const logLifecycle = (kind: string, event?: unknown) => {
     appendLifecycle(
@@ -154,10 +168,15 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     sessionFile = ctx.sessionManager.getSessionFile();
+    runtimeMonitor?.setSessionFile(sessionFile);
+    runtimeMonitor?.note(`session-start reason=${event.reason}`);
     writeLastPhase(`session_start ${event.reason}`);
     logLifecycle(`session start (${event.reason})`);
   });
   pi.on("session_before_compact", (event) => {
+    runtimeMonitor?.note(
+      `compaction-start reason=${event.reason} tokens=${event.preparation.tokensBefore} messages=${event.preparation.messagesToSummarize.length}`,
+    );
     logLifecycle(`compaction start (${event.reason})`, {
       willRetry: event.willRetry,
       tokensBefore: event.preparation.tokensBefore,
@@ -166,6 +185,9 @@ export default function (pi: ExtensionAPI): void {
     });
   });
   pi.on("session_compact", (event) => {
+    runtimeMonitor?.note(
+      `compaction-complete reason=${event.reason} tokens=${event.compactionEntry.tokensBefore}`,
+    );
     logLifecycle(`compaction complete (${event.reason})`, {
       willRetry: event.willRetry,
       tokensBefore: event.compactionEntry.tokensBefore,
@@ -173,11 +195,65 @@ export default function (pi: ExtensionAPI): void {
     });
   });
   pi.on("session_shutdown", (event) => {
+    runtimeMonitor?.note(`session-shutdown reason=${event.reason}`);
     writeLastPhase(`session_shutdown ${event.reason}`);
     logLifecycle(`session shutdown (${event.reason})`, {
       targetSessionFile: event.targetSessionFile,
     });
   });
+  pi.on("input", (event) => {
+    runtimeMonitor?.note(
+      `input source=${event.source} mode=${event.streamingBehavior ?? "idle"} textChars=${event.text.length} images=${event.images?.length ?? 0}`,
+    );
+  });
+  pi.on("before_agent_start", (event) => {
+    runtimeMonitor?.note(
+      `before-agent-start promptChars=${event.prompt.length} images=${event.images?.length ?? 0}`,
+    );
+  });
+  pi.on("agent_start", () => runtimeMonitor?.note("agent-start"));
+  pi.on("agent_end", (event) =>
+    runtimeMonitor?.note(`agent-end messages=${event.messages.length}`),
+  );
+  pi.on("agent_settled", () => runtimeMonitor?.note("agent-settled"));
+  pi.on("turn_start", (event) =>
+    runtimeMonitor?.note(`turn-start index=${event.turnIndex}`),
+  );
+  pi.on("turn_end", (event) =>
+    runtimeMonitor?.note(
+      `turn-end index=${event.turnIndex} tools=${event.toolResults.length}`,
+    ),
+  );
+  pi.on("before_provider_request", () =>
+    runtimeMonitor?.note("provider-request"),
+  );
+  pi.on("after_provider_response", (event) => {
+    runtimeMonitor?.note(`provider-response status=${event.status}`);
+    writeLastPhase(`provider-response status=${event.status}`);
+  });
+  pi.on("message_start", (event) => {
+    runtimeMonitor?.note(`message-start role=${event.message.role}`);
+    writeLastPhase(`message-start role=${event.message.role}`);
+  });
+  pi.on("message_update", (event) => {
+    const updateType = event.assistantMessageEvent.type;
+    runtimeMonitor?.note(`message-update type=${updateType}`);
+    writeLastPhase(`message-update type=${updateType}`);
+  });
+  pi.on("message_end", (event) => {
+    runtimeMonitor?.note(`message-end role=${event.message.role}`);
+    writeLastPhase(`message-end role=${event.message.role}`);
+  });
+  pi.on("tool_execution_start", (event) =>
+    runtimeMonitor?.note(
+      `tool-start name=${event.toolName} call=${event.toolCallId}`,
+    ),
+  );
+  pi.on("tool_execution_end", (event) =>
+    runtimeMonitor?.note(
+      `tool-end name=${event.toolName} call=${event.toolCallId} error=${event.isError}`,
+    ),
+  );
 
   if (state[INSTALL_KEY]) return;
   state[INSTALL_KEY] = true;
@@ -195,11 +271,16 @@ export default function (pi: ExtensionAPI): void {
     processError("stderr error", error);
   });
   process.on("exit", (code) => {
+    runtimeMonitor?.note(`process-exit code=${code}`);
     writeLastPhase(`exit ${code}`);
     // 129 is Pi's emergencyTerminalExit: the TTY is already gone. Writing
     // restore sequences here re-triggers EIO and can loop the emergency path.
     const restored = code === 129 || restoreInteractiveTerminalSync();
     if (restored) markTerminalWatchdogClean();
+    runtimeMonitor?.stop(true);
+    if (state[RUNTIME_MONITOR_KEY] === runtimeMonitor) {
+      state[RUNTIME_MONITOR_KEY] = undefined;
+    }
     if (code === 0 || code == null) return;
     processError(
       `process exit ${code}`,
