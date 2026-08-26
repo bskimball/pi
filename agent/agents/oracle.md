@@ -39,6 +39,8 @@ State:
 - whether a simpler or safer solution exists
 - what verification is still needed
 
+Recommend a new test only when you can name the specific incorrect behavior it would catch and why types, an existing test, or simply running the code do not already catch it. "Add tests for coverage" is not a finding.
+
 ## Hard constraints
 
 - You may dispatch the read-only scout subagent for codebase retrieval when exploring directly would be inefficient. Do not launch any other subagent.
