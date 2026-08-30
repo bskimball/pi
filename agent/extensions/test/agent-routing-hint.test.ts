@@ -78,11 +78,15 @@ describe("routing hint", () => {
     );
     const advisor = fs.readFileSync(path.resolve("agent/agents/advisor.md"), "utf8");
     const inspector = fs.readFileSync(path.resolve("agent/agents/inspector.md"), "utf8");
+    const oracle = fs.readFileSync(path.resolve("agent/agents/oracle.md"), "utf8");
+    const stevedore = fs.readFileSync(path.resolve("agent/agents/stevedore.md"), "utf8");
 
     assert.match(system, /Keep coherent implementation in the main model even when it is long-running, multi-file, or frontend-heavy/);
     assert.match(system, /machinist only for an independent separable non-visual implementation slice/);
     assert.match(system, /advisor only when the user explicitly asks for it in regular mode/);
     assert.match(system, /lead normally runs lint, format checks, typechecks, tests, and builds directly/);
+    assert.match(system, /diagnostic experiment plan/);
+    assert.match(system, /Do not send Oracle an open-ended brief that combines diagnosis with exhaustive experiment execution/);
     assert.match(system, /Live-page checks go to inspector/);
     assert.match(system, /Live-page checks go to inspector in both modes/);
     assert.match(system, /That pass is one Inspector dispatch/);
@@ -102,5 +106,9 @@ describe("routing hint", () => {
     assert.match(inspector, /Live-page checks route here in regular and orchestrate modes/);
     assert.doesNotMatch(inspector, /only when the user explicitly requests Inspector/);
     assert.doesNotMatch(inspector, /materially helps/);
+    assert.match(oracle, /stop before that mechanical expansion/);
+    assert.match(oracle, /do not execute the matrix yourself/);
+    assert.match(stevedore, /## Diagnostic experiment mode/);
+    assert.match(stevedore, /Do not broaden the experiment/);
   });
 });

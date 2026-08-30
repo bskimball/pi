@@ -131,6 +131,9 @@ describe("strict orchestrator prompt", () => {
       active.systemPrompt,
       /Every implementation diff gets a fresh-eyes Oracle review/,
     );
+    assert.match(active.systemPrompt, /Oracle returns an exact diagnostic experiment plan and stops/);
+    assert.match(active.systemPrompt, /absolute target worktree\/root/);
+    assert.match(active.systemPrompt, /persistent repository fixtures go through a normal writer and Oracle review first/);
     assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
     assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
     assert.match(

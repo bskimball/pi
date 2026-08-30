@@ -48,7 +48,7 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, and diagrams. |
 | `scout` | Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
-| `stevedore` | Fast ops specialist for deploys and CLI chores: lint, format, build, git, and platform CLIs. |
+| `stevedore` | Fast execution specialist for integrated gates, exact diagnostic experiment execution, deploys, git, and platform CLIs. |
 
 Shared norms that apply to every specialist (smallest-correct-change discipline, browser rules, evidence, dirty-worktree safety, etc.) live in [`agent/agents/_shared.md`](agent/agents/_shared.md). Worker-mode semantics are separate: `_shared-sync.md` describes fire-and-forget `task` runs, while `_shared-async.md` describes persistent RPC workers with steering, follow-ups, and UI requests. [`agent/agents/_handoff.md`](agent/agents/_handoff.md) is appended for both modes and requires a non-empty visible final report for each generation. Each agent file also declares its primary model plus a fallback chain. Both task modes retry only clean provider/model availability failures; async workers replace the failed RPC session and replay only before visible output or tool execution, preventing duplicate work.
 
