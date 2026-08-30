@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  incompleteMissionReport,
   missionTelemetry,
   missionWriterConflict,
   readyMissionNodes,
@@ -73,6 +74,23 @@ describe("mission DAG validation", () => {
     );
   });
 
+  it("classifies explicit incomplete acceptance reports as failures", () => {
+    assert.match(
+      incompleteMissionReport("Outcome: Main wiring remains incomplete.\nAcceptance-Status: partial") ?? "",
+      /incomplete acceptance/,
+    );
+    assert.equal(incompleteMissionReport("Acceptance-Status: complete"), undefined);
+    assert.match(
+      incompleteMissionReport("The partial implementation bug is fixed.") ?? "",
+      /missing final/,
+    );
+    assert.match(incompleteMissionReport("Acceptance criteria met.") ?? "", /missing final/);
+    assert.match(
+      incompleteMissionReport("Acceptance-Status: failed\nAdditional prose") ?? "",
+      /missing final/,
+    );
+  });
+
   it("rejects multiple writers sharing one worktree", () => {
     assert.match(
       missionWriterConflict(
@@ -126,8 +144,33 @@ describe("mission DAG validation", () => {
     assert.deepEqual(missionTelemetry(nodes, 0, 200, 2), {
       elapsedMs: 200,
       workerMs: 200,
+      singleActiveMs: 100,
       utilization: 0.5,
       peakConcurrency: 2,
+      noOverlap: false,
     });
+  });
+
+  it("flags multi-node missions that never overlap", () => {
+    const nodes: MissionNodeState[] = [
+      { id: "a", agent: "scout", prompt: "x", status: "succeeded", startedAt: 0, endedAt: 100 },
+      { id: "b", agent: "oracle", prompt: "y", status: "succeeded", startedAt: 100, endedAt: 200 },
+    ];
+    assert.deepEqual(missionTelemetry(nodes, 0, 200, 2), {
+      elapsedMs: 200,
+      workerMs: 200,
+      singleActiveMs: 200,
+      utilization: 0.5,
+      peakConcurrency: 1,
+      noOverlap: true,
+    });
+  });
+
+  it("does not warn when concurrency is one", () => {
+    const nodes: MissionNodeState[] = [
+      { id: "a", agent: "scout", prompt: "x", status: "succeeded", startedAt: 0, endedAt: 100 },
+      { id: "b", agent: "oracle", prompt: "y", status: "succeeded", startedAt: 100, endedAt: 200 },
+    ];
+    assert.equal(missionTelemetry(nodes, 0, 200, 1).noOverlap, false);
   });
 });

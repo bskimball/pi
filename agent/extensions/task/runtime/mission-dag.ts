@@ -19,6 +19,20 @@ export interface MissionNodeInput {
   context?: "fresh" | "fork";
 }
 
+
+export function incompleteMissionReport(report: string): string | undefined {
+  const line = report
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .at(-1);
+  if (!line) return "worker report is missing final Acceptance-Status: complete";
+  const match = /^acceptance-status:\s*(complete|partial|incomplete|failed)$/i.exec(line);
+  if (!match) return "worker report is missing final Acceptance-Status: complete";
+  return match[1].toLowerCase() === "complete"
+    ? undefined
+    : `worker reported incomplete acceptance: ${line.slice(0, 240)}`;
+}
 export interface MissionNodeState extends MissionNodeInput {
   status: MissionNodeStatus;
   startedAt?: number;
@@ -162,8 +176,10 @@ export function missionTelemetry(
 ): {
   elapsedMs: number;
   workerMs: number;
+  singleActiveMs: number;
   utilization: number;
   peakConcurrency: number;
+  noOverlap: boolean;
 } {
   const events: Array<{ at: number; delta: number }> = [];
   let workerMs = 0;
@@ -178,17 +194,31 @@ export function missionTelemetry(
   events.sort((a, b) => a.at - b.at || a.delta - b.delta);
   let active = 0;
   let peakConcurrency = 0;
+  let singleActiveMs = 0;
+  let previousAt = startedAt;
   for (const event of events) {
+    if (active === 1) singleActiveMs += Math.max(0, event.at - previousAt);
     active += event.delta;
     peakConcurrency = Math.max(peakConcurrency, active);
+    previousAt = event.at;
   }
   const elapsedMs = Math.max(0, endedAt - startedAt);
   const capacityMs = elapsedMs * Math.max(1, concurrency);
   return {
     elapsedMs,
     workerMs,
+    singleActiveMs,
     utilization: capacityMs > 0 ? Math.min(1, workerMs / capacityMs) : 0,
     peakConcurrency,
+    noOverlap:
+      concurrency > 1 &&
+      nodes.filter(
+        (node) =>
+          node.startedAt !== undefined &&
+          node.endedAt !== undefined &&
+          node.endedAt > node.startedAt,
+      ).length > 1 &&
+      peakConcurrency <= 1,
   };
 }
 

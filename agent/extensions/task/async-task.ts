@@ -150,6 +150,7 @@ import {
 import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
 import {
   formatMissionDigest,
+  incompleteMissionReport,
   missionTelemetry,
   missionWriterConflict,
   readyMissionNodes,
@@ -170,6 +171,14 @@ const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
 
 const MISSION_MAX_NODES = 24;
+const WRITER_MAX_GENERATIONS = 2;
+const WRITER_AGENTS = new Set([
+  "artisan",
+  "machinist",
+  "scribe",
+  "picasso",
+  "stevedore",
+]);
 
 const MissionNodeSchema = Type.Object({
   id: Type.String({
@@ -318,6 +327,7 @@ interface Worker extends RuntimeEventWorker {
   lastPersistedSidecar?: { lifecycle: WorkerLifecycle; generation: number; pid?: number };
   reportSchema?: string;
   parsedReport: Record<string, unknown> | null;
+  writerFollowUpReservations: number;
   reportStatus: ReportStatus;
   reportError?: string;
 }
@@ -1297,6 +1307,7 @@ export default function (pi: ExtensionAPI) {
       generationStartedAt: params.rebind?.updatedAt ?? Date.now(),
       reportSchema: params.rebind ? undefined : params.reportSchema,
       parsedReport: null,
+      writerFollowUpReservations: 0,
       reportStatus: params.rebind
         ? "none-requested"
         : params.reportSchema?.trim()
@@ -2122,10 +2133,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
           state.error = "worker wait timed out";
           return;
         }
-        const ok = worker.lifecycle === "settled" && !worker.killReason;
+        const incomplete = WRITER_AGENTS.has(worker.agent)
+          ? incompleteMissionReport(snapshot.resultText)
+          : undefined;
+        const ok =
+          worker.lifecycle === "settled" && !worker.killReason && !incomplete;
         const bound = formatSettledResult(snapshot.resultText);
         state.result = bound.text;
-        state.error = snapshot.killReason || snapshot.errorText;
+        state.error = incomplete || snapshot.killReason || snapshot.errorText;
         state.status = ok ? "succeeded" : "failed";
         if (ok) results.set(state.id, bound.text);
         closeWorker(worker, `mission ${state.id} complete`, "sync");
@@ -2196,8 +2211,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
           `mission ${failed ? "completed with failures" : "completed"}`,
           `elapsed_ms: ${telemetry.elapsedMs}`,
           `worker_ms: ${telemetry.workerMs}`,
+          `single_active_ms: ${telemetry.singleActiveMs}`,
           `peak_concurrency: ${telemetry.peakConcurrency}/${requestedConcurrency}`,
           `slot_utilization: ${(telemetry.utilization * 100).toFixed(1)}%`,
+          telemetry.noOverlap
+            ? "warning: multiple positive-duration mission nodes ran without overlap despite concurrency above 1; review dependencies and available capacity"
+            : undefined,
           "",
           digest,
           reportBlock ? `\n${reportBlock}` : undefined,
@@ -2487,7 +2506,7 @@ Modes:
 - follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
 - prompt: Only allowed when the worker is settled; starts a new generation.
 
-Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
+Truthfully reports queueing semantics. Steer is never mid-inference interrupt. Writer agents allow one corrective prompt generation; after generation 2, collect/close and dispatch a narrower fresh slice.`,
     promptSnippet:
       "Send steer/follow_up (or settled prompt) to an async RPC worker.",
     parameters: Type.Object({
@@ -2549,6 +2568,16 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
             true,
             sendDetails("rejected", `worker is ${worker.lifecycle}; prompt needs settled`),
+          );
+        }
+        if (
+          WRITER_AGENTS.has(worker.agent) &&
+          worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
+        ) {
+          return textResult(
+            `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
+            true,
+            sendDetails("rejected", "writer generation limit reached"),
           );
         }
         try {
@@ -2640,6 +2669,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       // follow_up
+      if (
+        WRITER_AGENTS.has(worker.agent) &&
+        worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
+      ) {
+        return textResult(
+          `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
+          true,
+          sendDetails("rejected", "writer generation limit reached"),
+        );
+      }
+      if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations += 1;
       try {
         const response = await worker.client.request(
           { type: "follow_up", message },
@@ -2655,6 +2695,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             30_000,
           );
           if (!fallback.success) {
+            if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
             return textResult(
               `${id} follow_up rejected: ${fallback.error ?? response.error ?? "unknown"}`,
               true,
@@ -2682,6 +2723,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           sendDetails("queued", "delivered after the worker settles"),
         );
       } catch (error) {
+        if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
         const msg = error instanceof Error ? error.message : String(error);
         return textResult(`${id} follow_up failed: ${msg}`, true, sendDetails("failed", msg));
       }
