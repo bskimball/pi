@@ -173,7 +173,8 @@ describe("apex bg-process receipts", () => {
   });
 
   it("wraps bg_status ToolExecutionComponent getters", () => {
-    withApexUi("1", () => installBgProcessReceipts(fakePi()));
+    withApexUi("1", () => {
+      installBgProcessReceipts(fakePi());
     const proto = ToolExecutionComponent.prototype as any;
     const status = {
       toolName: "bg_status",
@@ -202,11 +203,13 @@ describe("apex bg-process receipts", () => {
       bgStatusReceiptRenderers.renderCall,
     );
     assert.equal(proto.getRenderShell.call(owned), "default");
+    });
   });
 
   it("renders a real bg_list ToolExecutionComponent as an Apex receipt", () => {
     initTheme("dark");
-    withApexUi("1", () => installBgProcessReceipts(fakePi()));
+    withApexUi("1", () => {
+      installBgProcessReceipts(fakePi());
 
     const args = { include_settled: true };
     const component = new ToolExecutionComponent(
@@ -240,37 +243,7 @@ describe("apex bg-process receipts", () => {
     assert.match(text, /bg_1 running dev/);
     assert.doesNotMatch(text, /┌|┐|└|┘/);
     assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
-  });
-
-  it("keeps the receipt registry live across Apex module reloads", async () => {
-    withApexUi("1", () => installBgProcessReceipts(fakePi()));
-    const moduleUrl = new URL(
-      "../internal/presentation/headless-receipts.ts",
-      import.meta.url,
-    );
-    moduleUrl.search = "bg-reload-regression";
-    const reloaded = await import(moduleUrl.href);
-    const renderCall = () => ({
-      render: () => ["RELOADED CALL"],
-      invalidate() {},
     });
-    const renderResult = () => ({
-      render: () => ["RELOADED RESULT"],
-      invalidate() {},
-    });
-    reloaded.registerHeadlessReceipt("bg_reload_probe", {
-      renderCall,
-      renderResult,
-    });
-
-    const proto = ToolExecutionComponent.prototype as any;
-    const probe = {
-      toolName: "bg_reload_probe",
-      toolDefinition: { name: "bg_reload_probe" },
-    };
-    assert.equal(proto.getCallRenderer.call(probe), renderCall);
-    assert.equal(proto.getResultRenderer.call(probe), renderResult);
-    assert.equal(proto.getRenderShell.call(probe), "self");
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {

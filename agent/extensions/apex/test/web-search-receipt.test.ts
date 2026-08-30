@@ -112,7 +112,8 @@ describe("apex web-search receipts", () => {
   });
 
   it("wraps fetch_content ToolExecutionComponent getters", () => {
-    withApexUi("1", () => installWebSearchReceipts());
+    withApexUi("1", () => {
+      installWebSearchReceipts();
     const proto = ToolExecutionComponent.prototype as any;
     const fetch = {
       toolName: "fetch_content",
@@ -141,11 +142,13 @@ describe("apex web-search receipts", () => {
       fetchContentReceiptRenderers.renderCall,
     );
     assert.equal(proto.getRenderShell.call(owned), "default");
+    });
   });
 
   it("renders a real fetch_content ToolExecutionComponent as an Apex receipt", () => {
     initTheme("dark");
-    withApexUi("1", () => installWebSearchReceipts());
+    withApexUi("1", () => {
+      installWebSearchReceipts();
 
     const args = { url: "https://example.com/docs" };
     const component = new ToolExecutionComponent(
@@ -176,6 +179,7 @@ describe("apex web-search receipts", () => {
     assert.match(text, /Hello world/);
     assert.doesNotMatch(text, /┌|┐|└|┘/);
     assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
+    });
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {

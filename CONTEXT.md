@@ -22,6 +22,7 @@ agent/extensions/
 ├── bg-process/             # background-process implementation
 ├── continual-memory/       # memory storage implementation
 ├── prompt-commands/        # browser/deploy command implementation
+├── at-path-complete.ts     # scoped @ listing that ignores gitignore
 └── top-level adapters      # stock-rendered independent extensions
 ```
 
@@ -102,6 +103,7 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Todo list and unified edit: Apex-owned (`apex/internal/todo/`, `apex/internal/edit/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todos/agents panel, or stock rendering under `PI_APEX_UI=0`.
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
 - User profile: loader owned directly by `user-profile.ts`.
+- `@` path overlay: standalone `at-path-complete.ts`; lists on-disk children for scoped `@dir/` mentions so gitignored folders (for example `files/`) appear in autocomplete. Bare `@foo` stays with FFF/stock.
 - MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.
 - Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; stock tool rendering for isolated writer worktrees.
 

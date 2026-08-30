@@ -71,6 +71,7 @@ agent/extensions/
 ├── read-guard.ts                          duplicate-image + downscale guard
 ├── user-profile.ts                        private user context injection
 ├── web-search.ts                          Exa search + fetch_content
+├── at-path-complete.ts                    scoped @ listing for gitignored paths
 └── test/                                  cross-extension tests
 ```
 
@@ -113,6 +114,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 - **`mcp-adapter.ts`** — standalone bridge that boots the root `pi-mcp-adapter` dependency on this `ExtensionAPI`. MCP tools use Pi's stock renderer. Do not also add `pi-mcp-adapter` to `agent/settings.json` `packages`; a second package-loaded copy would initialize a duplicate MCP extension.
 - **`read-guard.ts`** — blocks a repeated `read` of the same image path when mtime/size are unchanged; downscales image blocks in any tool result to a 1568px long edge; gives an advisory nudge on very large bash output. No text re-read guard.
 - **`user-profile.ts`** — injects `agent/USER_PROFILE.local.md` (gitignored, capped at 8,000 characters) into the system prompt via `before_agent_start`, if the file exists.
+- **`at-path-complete.ts`** — scoped `@dir/` autocomplete overlay that lists on-disk children, including gitignored folders such as `files/`. Bare `@foo` stays with FFF/stock fuzzy search.
 - **`web-search.ts`** — native Exa web search and page fetching (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
 - **`lsp/`** — see [LSP](#lsp) below.
 

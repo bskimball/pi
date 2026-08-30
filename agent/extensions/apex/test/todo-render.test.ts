@@ -971,7 +971,48 @@ describe("dock tabs and agents pane", () => {
     assert.doesNotMatch(lines[0], /^◆ todos /);
   });
 
-  it("renders live agents as a tree under the agents tab", () => {
+  it("renders a gutterless flat checklist with no diamond or tree rails", () => {
+    const items = Array.from({ length: 24 }, (_, index) => ({
+      content: `Item ${index + 1} with enough text to reach the right edge`,
+      status: index === 12 ? "in_progress" : index < 12 ? "completed" : "pending",
+      note: index === 12 ? "flat checklist identity" : undefined,
+    }));
+    const view = buildTodoList(items, { title: "Ship the dock" });
+
+    for (const width of [40, 60, 80, 120]) {
+      for (const options of [
+        { collapsed: true, toggleHint: "alt+t" },
+        { toggleHint: "alt+t" },
+        { expanded: true },
+        { tabs: { pane: "todos" as const, agentCount: 2, switchHint: "alt+a" } },
+      ]) {
+        const text = renderTodoList(theme, width, view, options).join("\n");
+        assert.ok(!text.includes("\u25c6"), `width ${width}: diamond header glyph`);
+        assert.ok(!text.includes("\u251c\u2500"), `width ${width}: branch rail`);
+        assert.ok(!text.includes("\u2570\u2500"), `width ${width}: last-branch rail`);
+        assert.ok(!text.includes("\u2502"), `width ${width}: continuation gutter`);
+      }
+    }
+
+    // Status glyph is the left anchor; head/tail elision uses the same column.
+    const wide = renderTodoList(theme, 100, view, { expanded: true });
+    assert.match(wide[0], /^todos Ship the dock \(/);
+    assert.match(wide[1], /^ {2}\u22ee \d+ earlier$/);
+    assert.ok(
+      wide.slice(1).every((line) => line.startsWith("  ")),
+      "every row hangs at the flat two-space inset",
+    );
+    assert.ok(
+      wide.some((line) => line.includes("\u22ee") && line.includes("earlier")),
+      "head elision row present",
+    );
+    assert.ok(
+      wide.some((line) => line.includes("\u22ee") && line.includes("more")),
+      "tail elision row present",
+    );
+  });
+
+  it("renders live agents as a flat shared-dock list, never a tree", () => {
     const now = 1_000_000;
     const lines = renderAgentList(
       theme,
@@ -984,15 +1025,34 @@ describe("dock tabs and agents pane", () => {
           createdAt: now - 4 * 60_000,
           lastEventAt: now - 4 * 60_000,
         },
+        {
+          id: "task_2",
+          agent: "artisan",
+          lifecycle: "done",
+          createdAt: now - 9 * 60_000,
+          lastEventAt: now - 60_000,
+        },
       ],
       {
-        tabs: { pane: "agents", agentCount: 1, switchHint: "alt+a" },
+        tabs: { pane: "agents", agentCount: 2, switchHint: "alt+a" },
         now,
       },
     );
-    assert.match(lines[0], /\[agents 1\]/);
-    assert.match(lines.join("\n"), /oracle/);
-    assert.match(lines.join("\n"), /running/);
+    assert.match(lines[0], /\[agents 2\]/);
+    const text = lines.join("\n");
+    assert.match(text, /oracle/);
+    assert.match(text, /running/);
+    assert.match(text, /artisan/);
+    // The agents pane shares the todo dock's flat identity: no receipt-tree
+    // chrome, and body rows hang at the same two-space inset as todo rows.
+    assert.ok(!text.includes("\u25c6"), "diamond header glyph");
+    assert.ok(!text.includes("\u251c\u2500"), "branch rail");
+    assert.ok(!text.includes("\u2570\u2500"), "last-branch rail");
+    assert.ok(!text.includes("\u2502"), "continuation gutter");
+    assert.ok(
+      lines.slice(1).every((line) => line.startsWith("  ")),
+      "every agent row hangs at the flat two-space inset",
+    );
   });
 
   it("mounts the agents pane on a live snapshot even without todos", () => {

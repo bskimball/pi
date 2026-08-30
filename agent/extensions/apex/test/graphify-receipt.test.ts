@@ -131,7 +131,8 @@ describe("apex graphify receipts", () => {
   });
 
   it("wraps graphify ToolExecutionComponent getters and leaves others alone", () => {
-    withApexUi("1", () => installGraphifyReceipts());
+    withApexUi("1", () => {
+      installGraphifyReceipts();
     const proto = ToolExecutionComponent.prototype as any;
 
     const graphify = {
@@ -193,11 +194,13 @@ describe("apex graphify receipts", () => {
     assert.equal(proto.getCallRenderer.call(other), undefined);
     assert.equal(proto.getResultRenderer.call(other), undefined);
     assert.equal(proto.getRenderShell.call(other), "default");
+    });
   });
 
   it("renders a real ToolExecutionComponent as an Apex receipt", () => {
     initTheme("dark");
-    withApexUi("1", () => installGraphifyReceipts());
+    withApexUi("1", () => {
+      installGraphifyReceipts();
 
     const args = { operation: "query", question: "How does auth work?" };
     const component = new ToolExecutionComponent(
@@ -228,6 +231,7 @@ describe("apex graphify receipts", () => {
     assert.doesNotMatch(text, /┌|┐|└|┘/);
     assert.equal((text.match(/graphify/g) ?? []).length, 1);
     assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
+    });
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {

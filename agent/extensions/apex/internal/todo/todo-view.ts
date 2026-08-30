@@ -13,21 +13,33 @@ import {
   safeTruncateToWidth,
   wrapPlainText,
 } from "../presentation/safe-text-layout.ts";
-import { TREE, cleanInline, fitLine } from "../presentation/ui-common.ts";
-import {
-  buildTreeLines,
-  emptyStateLines,
-  metaText,
-  noteRow,
-  type StatusTheme,
-  type TreeRow,
-} from "../presentation/receipt-tree.ts";
+import { cleanInline, fitLine } from "../presentation/ui-common.ts";
+import { metaText, type StatusTheme } from "../presentation/receipt-tree.ts";
 
 /**
  * The whole surface is a pointer to a plan, never the plan's full text, so the
  * output is hard-bounded regardless of how large the underlying list is.
  */
 export const TODO_LIST_MAX_LINES = 18;
+
+/**
+ * Flat checklist geometry. The status glyph is the only left anchor: rows are
+ * inset by one small step so the header still reads as their owner, and every
+ * wrapped title or note hangs at the title column instead of on a rail.
+ */
+const ROW_INSET = "  ";
+/** Cells before the title column: inset + glyph + separator. */
+const TITLE_INDENT = ROW_INSET.length + 2;
+const HANG_INSET = " ".repeat(TITLE_INDENT);
+/**
+ * Elision / status marker for the windowed head/tail rows and the empty agent
+ * pane; occupies the same single cell as a status glyph. U+22EE is East Asian
+ * Width Neutral, so it measures exactly one cell everywhere — unlike `…`
+ * (U+2026, EAW=Ambiguous), which can render double-width and shear the title
+ * column. A vertical ellipsis also reads correctly here: the elided content is
+ * rows above and below, not characters to the right.
+ */
+const MORE_GLYPH = "\u22ee"; // ⋮
 
 /** Rows the list is allowed to spend on items, before/after notes excluded. */
 const ROWS_COLLAPSED = 6;
@@ -309,7 +321,6 @@ export function renderDockTabs(
   tabs: DockTabOptions,
 ): string {
   const left = [
-    theme.fg("dim", TREE.header),
     tabChip(theme, "todos", undefined, tabs.pane === "todos"),
     theme.fg("dim", "/"),
     tabChip(theme, "agents", tabs.agentCount, tabs.pane === "agents"),
@@ -337,7 +348,7 @@ export function renderAgentList(
     options.tabs
       ? renderDockTabs(theme, width, options.tabs)
       : fitLine(
-          `${theme.fg("dim", TREE.header)} ${theme.fg("toolTitle", "agents")}`,
+          theme.fg("toolTitle", "agents"),
           theme.fg("dim", `${items.length} live`),
           width,
         );
@@ -346,31 +357,28 @@ export function renderAgentList(
     return [
       header,
       safeTruncateToWidth(
-        `${theme.fg("dim", TREE.last)} ${theme.fg("muted", "no live agents")}`,
+        `${ROW_INSET}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", "no live agents")}`,
         width,
       ),
     ].slice(0, TODO_LIST_MAX_LINES);
   }
-  const rows: TreeRow[] = items.slice(0, ROWS_COLLAPSED).map((item) => {
+  const rows = items.slice(0, ROWS_COLLAPSED).map((item) => {
     const glyph = AGENT_GLYPHS[item.lifecycle] ?? "\u00b7";
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
     const label = AGENT_LABELS[item.lifecycle] ?? item.lifecycle;
     const title = cleanInline(item.agent, 40) || "agent";
-    return {
-      line: (rail) =>
-        safeTruncateToWidth(
-          [
-            theme.fg("dim", rail),
-            theme.fg(tone, glyph),
-            theme.fg("text", title),
-            theme.fg("muted", label),
-            theme.fg("dim", agentAge(item, now)),
-          ].join(" "),
-          width,
-        ),
-    };
+    return safeTruncateToWidth(
+      ROW_INSET +
+        [
+          theme.fg(tone, glyph),
+          theme.fg("text", title),
+          theme.fg("muted", label),
+          theme.fg("dim", agentAge(item, now)),
+        ].join(" "),
+      width,
+    );
   });
-  return buildTreeLines(theme, width, header, rows).slice(0, TODO_LIST_MAX_LINES);
+  return [safeTruncateToWidth(header, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
 }
 
 /**
@@ -398,42 +406,36 @@ function progressRail(theme: StatusTheme, done: number, total: number, track: nu
   );
 }
 
-/** Cells the tree rail and status glyph take before the title column. */
-const TITLE_INDENT = 5;
-
-/** One item row: `├─ ● Render bounded rows        · blocked on theme`. */
+/** One item row: `  ● Render bounded rows   · blocked on theme`. */
 function todoRow(
   theme: StatusTheme,
   width: number,
   item: TodoItem,
   title: string,
   note: string | undefined,
-): TreeRow {
-  return {
-    line: (rail) => {
-      const cells = [
-        theme.fg("dim", rail),
-        theme.fg(TODO_TONES[item.status], TODO_GLYPHS[item.status]),
-        theme.fg(TITLE_TONES[item.status], title),
-      ];
-      if (note) cells.push(theme.fg("dim", `\u00b7 ${note}`));
-      return safeTruncateToWidth(cells.join(" "), width);
-    },
-  };
+): string {
+  const cells = [
+    theme.fg(TODO_TONES[item.status], TODO_GLYPHS[item.status]),
+    theme.fg(TITLE_TONES[item.status], title),
+  ];
+  if (note) cells.push(theme.fg("dim", `\u00b7 ${note}`));
+  return safeTruncateToWidth(ROW_INSET + cells.join(" "), width);
 }
 
 /**
  * The one todo shape:
  *
- *   ◆ todos  Ship the harness (1 in progress · 3 pending)  ━━━───  2/6
- *   ├─ 2 earlier
- *   ├─ ✓ Read the Observatory conventions
- *   ├─ ● Render bounded rows
- *   │  that keep working past the right edge of a narrow terminal
- *   ╰─ 3 more
+ *   todos  Ship the harness (1 in progress · 3 pending)  ━━━───  2/6
+ *     ⋮ 2 earlier
+ *     ✓ Read the Observatory conventions
+ *     ● Render bounded rows
+ *       that keep working past the right edge of a narrow terminal
+ *     ⋮ 3 more
  *
- * Everything after the tool name gives way left-to-right as the terminal
- * narrows, because `fitLine` clips the left side only.
+ * A flat checklist, not a task tree: the status glyph is the only left anchor,
+ * and wrapped titles and notes hang at the title column. Everything after the
+ * tool name gives way left-to-right as the terminal narrows, because `fitLine`
+ * clips the left side only.
  */
 export function renderTodoList(
   theme: StatusTheme,
@@ -457,20 +459,24 @@ export function renderTodoList(
       return emit([
         header,
         safeTruncateToWidth(
-          `${theme.fg("dim", TREE.last)} ${theme.fg("muted", options.emptyHint || "no todos yet")}`,
+          `${ROW_INSET}${theme.fg("muted", options.emptyHint || "no todos yet")}`,
           inner,
         ),
       ]);
     }
-    return emit(
-      emptyStateLines(
-        theme,
-        inner,
-        "todos",
-        view.title || "no todos yet",
-        options.emptyHint,
-      ),
+    const emptyHeader = fitLine(
+      theme.fg("toolTitle", "todos"),
+      theme.fg("muted", cleanInline(view.title || "no todos yet", 200)),
+      inner,
     );
+    if (!options.emptyHint) return emit([emptyHeader]);
+    return emit([
+      emptyHeader,
+      safeTruncateToWidth(
+        `${ROW_INSET}${theme.fg("dim", cleanInline(options.emptyHint, 200))}`,
+        inner,
+      ),
+    ]);
   }
 
   const expanded = options.expanded === true;
@@ -482,7 +488,6 @@ export function renderTodoList(
     view.dropped ? `${view.dropped} not tracked` : undefined,
   ]);
   const headerLeft = [
-    theme.fg("dim", TREE.header),
     theme.fg("toolTitle", "todos"),
     view.title ? theme.fg("text", view.title) : "",
     meta ? theme.fg("dim", `(${meta})`) : "",
@@ -513,10 +518,15 @@ export function renderTodoList(
 
   const limit = expanded ? ROWS_EXPANDED : ROWS_COLLAPSED;
   const { start, end } = windowFor(view.total, limit, view.anchorIndex);
-  const rows: TreeRow[] = [];
+  const rows: string[] = [];
+  const elision = (text: string): string =>
+    safeTruncateToWidth(
+      `${ROW_INSET}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", text)}`,
+      inner,
+    );
   // Truthful: the skipped head is whatever precedes the window, which is not
   // necessarily completed work.
-  if (start > 0) rows.push(noteRow(theme, inner, `${start} earlier`, "muted"));
+  if (start > 0) rows.push(elision(`${start} earlier`));
   // Only the active item is allowed to spend extra rows, and only when the
   // surface is expanded: that keeps the worst-case height flat.
   const titleWidth = Math.max(8, inner - TITLE_INDENT);
@@ -529,26 +539,31 @@ export function renderTodoList(
     // A wrapped title owns the whole row, so the note moves to the last
     // continuation line rather than splitting the sentence in two.
     const wraps = wrapped.length > 1;
-    const row = todoRow(
-      theme,
-      inner,
-      item,
-      wrapped[0] ?? item.title,
-      wraps ? undefined : item.note,
+    rows.push(
+      todoRow(
+        theme,
+        inner,
+        item,
+        wrapped[0] ?? item.title,
+        wraps ? undefined : item.note,
+      ),
     );
     if (wraps) {
-      row.continuation = [
+      const hangs = [
         ...wrapped.slice(1),
         ...(item.note ? [`\u00b7 ${item.note}`] : []),
       ];
-      row.continuationToken = "muted";
+      for (const line of hangs) {
+        rows.push(
+          safeTruncateToWidth(`${HANG_INSET}${theme.fg("muted", line)}`, inner),
+        );
+      }
     }
-    rows.push(row);
   }
   const after = view.total - end;
-  if (after > 0) rows.push(noteRow(theme, inner, `${after} more`, "muted"));
+  if (after > 0) rows.push(elision(`${after} more`));
 
-  return emit(buildTreeLines(theme, inner, header, rows));
+  return emit([safeTruncateToWidth(header, inner), ...rows]);
 }
 
 export const PLAIN_STATUS_GLYPHS: Record<TodoStatus, string> = {

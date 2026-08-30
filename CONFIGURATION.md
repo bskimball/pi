@@ -527,7 +527,8 @@ reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
 `mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
-`crash-logger.ts`, `continual-memory.ts`, `read-guard.ts`),
+`crash-logger.ts`, `continual-memory.ts`, `read-guard.ts`,
+`at-path-complete.ts`),
 `agent/extensions/apex/`, `agent/extensions/task/`, and
 `agent/extensions/lsp/` (declared directory extensions with private support
 directories: Apex UI, task cards/runtime, and LSP navigation respectively).

@@ -197,7 +197,8 @@ describe("apex lsp receipts", () => {
   });
 
   it("wraps lsp ToolExecutionComponent getters and leaves others alone", () => {
-    withApexUi("1", () => installLspReceipts());
+    withApexUi("1", () => {
+      installLspReceipts();
     const proto = ToolExecutionComponent.prototype as any;
 
     const lsp = {
@@ -259,11 +260,13 @@ describe("apex lsp receipts", () => {
     assert.equal(proto.getCallRenderer.call(other), undefined);
     assert.equal(proto.getResultRenderer.call(other), undefined);
     assert.equal(proto.getRenderShell.call(other), "default");
+    });
   });
 
   it("renders a real ToolExecutionComponent as an Apex receipt", () => {
     initTheme("dark");
-    withApexUi("1", () => installLspReceipts());
+    withApexUi("1", () => {
+      installLspReceipts();
 
     const args = {
       operation: "hover",
@@ -299,6 +302,7 @@ describe("apex lsp receipts", () => {
     assert.doesNotMatch(text, /┌|┐|└|┘/);
     assert.equal((text.match(/lsp/g) ?? []).length, 1);
     assert.ok(lines.every((line) => safeVisibleWidth(line) <= 80));
+    });
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {
