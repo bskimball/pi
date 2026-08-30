@@ -1585,7 +1585,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
       "Use the synchronous task tool when you need one final report before continuing.",
       "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
-      "Always task_close workers when finished; they hold a concurrency slot until closed.",
+      "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
     parameters: Type.Object({
@@ -1635,7 +1635,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       }
       if (!runtime.canStart()) {
         return textResult(
-          `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a worker with task_close first. Persistent workers count against the cap until closed.`,
+          `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a settled worker with task_close to free a slot. If none are settled, task_wait the oldest live one, then task_close it. Persistent workers count against the cap until closed.`,
           true,
         );
       }
@@ -1858,7 +1858,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       }
       if (!runtime.canStart()) {
         return textResult(
-          `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a worker with task_close first.`,
+          `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a settled worker with task_close to free a slot. If none are settled, task_wait the oldest live one, then task_close it.`,
           true,
         );
       }

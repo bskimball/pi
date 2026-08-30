@@ -200,9 +200,9 @@ function updateStatus(ctx: ExtensionContext) {
   } catch {}
 }
 
-// Full Pi subprocesses are expensive on Windows. Three balances the SYSTEM.md
-// guidance (2-3 typical fan-out) against orphan/process pressure when a parent
-// turn dies; larger fan-outs simply queue.
+// Full Pi subprocesses are expensive on Windows. Three is a pressure valve for
+// the sync path (it queues); async live workers are capped separately at 5.
+// Larger sync fan-outs simply queue.
 const MAX_CONCURRENT = 3;
 let running = 0;
 

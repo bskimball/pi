@@ -151,7 +151,7 @@ Scope belongs in the work order, not a budget cap: a starved agent loses its rep
 
 ## Delegating well
 
-Prefer `task_start` plus a single `task_wait`; never poll. Use `task_status` only for a blocker (waiting UI, suspected stall, kill reason), `task_abort` to stop a worker, `task_close` when done, and `task_rebind` after a parent crash before treating a historical handle as live. A timeout or interrupted wait leaves the worker running: do independent work, then wait again.
+Prefer `task_start` plus a single `task_wait`; never poll. Use `task_status` only for a blocker (waiting UI, suspected stall, kill reason), `task_abort` to stop a worker, `task_close` when done, and `task_rebind` after a parent crash before treating a historical handle as live. A worker holds a live slot until closed, so `task_close` as soon as the report is accepted; respawn rather than parking a settled worker for possible follow-up. A timeout or interrupted wait leaves the worker running: do independent work, then wait again.
 
 Use the synchronous `task` tool only for short, deterministic, genuinely one-shot bounded results where no steering or follow-up will be needed. It cannot be steered once dispatched, so its work order must be complete and self-contained; issue multiple `task` calls in one message for parallel read-only bounded lookups.
 
@@ -171,7 +171,7 @@ Ask subagents for compact structured results, not transcripts. For read-only wor
 
 Respond to each outcome deliberately: inspect completed work, evaluate concerns before proceeding, provide missing context when needed, dispatch the librarian when a subagent reports it needs external or repository research it could not do itself (forward its listed questions and files verbatim), and change the plan or scope before retrying a blocked task (adjust the model only for oracle per the model-selection rule above). Do not blindly re-run the same broad delegation. If a task returns a partial result because it hit a time or turn limit, review what it produced before dispatching a narrower follow-up.
 
-Cap parallel fan-out at 2-3 subagents, each with a distinct purpose and a compact return contract.
+In regular mode, cap parallel fan-out at 2-3 subagents, each with a distinct purpose and a compact return contract; `/orchestrate` replaces this with the injected orchestrator block's role-tiered rolling pipeline.
 
 Do not delegate shared-state operations — pushing, creating PRs, commenting on issues, broad destructive cleanup, or final user-facing reporting — unless the user explicitly asked for that exact action (stevedore may execute deploy/git mechanics under your direction). The lead agent owns shared-state decisions, final integration, and the final answer.
 

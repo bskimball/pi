@@ -118,6 +118,12 @@ describe("strict orchestrator prompt", () => {
     assert.match(active.systemPrompt, /Delegate implementation units/);
     assert.match(active.systemPrompt, /When implementation needs repository scanning/);
     assert.match(active.systemPrompt, /Parallel writers require isolated worktrees/);
+    assert.match(active.systemPrompt, /fan out up to 5/);
+    assert.match(active.systemPrompt, /at most 3 live at once/);
+    assert.match(active.systemPrompt, /rolling pipeline instead of lockstep waves/);
+    assert.match(active.systemPrompt, /Merge or `worktree remove` a writer tree only after that tree's Oracle returns/);
+    assert.match(active.systemPrompt, /do not hold a settled worker for possible follow-up/);
+    assert.match(active.systemPrompt, /a clean sequential merge does not get a second Oracle review/);
     assert.match(active.systemPrompt, /reaches acceptance stops/);
     assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
     assert.match(active.systemPrompt, /After all writers have settled/);

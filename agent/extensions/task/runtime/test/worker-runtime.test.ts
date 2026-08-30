@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   LATEST_RESULT_CHARS,
+  MAX_LIVE_WORKERS,
   WorkerRuntime,
+  canStartWorker,
+  countLiveWorkers,
   isModelFallbackError,
   shouldRetryModelFallback,
   splitQualifiedModel,
@@ -126,6 +129,26 @@ describe("WorkerRuntime control plane", () => {
       ...overrides,
     };
   }
+
+  it("counts cap-holding workers until closed, at MAX_LIVE_WORKERS", () => {
+    assert.equal(MAX_LIVE_WORKERS, 5);
+    const cap = (n: number) =>
+      Array.from({ length: n }, () => ({ countsTowardCap: true, closed: false }));
+    assert.equal(canStartWorker(cap(4)), true);
+    assert.equal(canStartWorker(cap(5)), false);
+    const holding = [
+      { countsTowardCap: true, closed: false },
+      { countsTowardCap: true, closed: false },
+      { countsTowardCap: true, closed: false },
+      { countsTowardCap: true, closed: false },
+      { countsTowardCap: true, closed: false },
+    ];
+    holding[4] = { countsTowardCap: true, closed: true };
+    assert.equal(countLiveWorkers(holding), 4);
+    assert.equal(canStartWorker(holding), true);
+    holding[3] = { countsTowardCap: false, closed: false };
+    assert.equal(countLiveWorkers(holding), 3);
+  });
 
   it("owns capacity, ordered pruning, bounded errors, and subscribers", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>({

@@ -141,7 +141,7 @@ Path('graphify-out/.graphify_semantic.json').write_text(json.dumps({'nodes':[],'
 "
 ```
 
-**MANDATORY: You MUST dispatch `machinist` workers here** via the local `task` tool (synchronous, one chunk at a time) or `task_start` (async — then `task_close` when that worker finishes) **before starting the next writer**. Reading files yourself one-by-one is forbidden. Do not use `scout` (read-only; cannot write chunk files). Nested tasks are excluded. Max 3 live workers in this harness; because chunk writers share one worktree, run **at most one writing machinist at a time**.
+**MANDATORY: You MUST dispatch `machinist` workers here** via the local `task` tool (synchronous, one chunk at a time) or `task_start` (async — then `task_close` when that worker finishes) **before starting the next writer**. Reading files yourself one-by-one is forbidden. Do not use `scout` (read-only; cannot write chunk files). Nested tasks are excluded. Max 5 live workers in this harness; because chunk writers share one worktree, run **at most one writing machinist at a time**.
 
 Before dispatching subagents, print a timing estimate:
 - Load `total_words` and file counts from `graphify-out/.graphify_detect.json`

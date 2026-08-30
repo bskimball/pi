@@ -10,7 +10,7 @@ import { ActivityLedger, type ActivityStatus } from "./activity-ledger.ts";
 import { JobRegistry } from "./job-registry.ts";
 import { killProcessTree } from "./process-tree-kill.ts";
 
-export const MAX_LIVE_WORKERS = 3;
+export const MAX_LIVE_WORKERS = 5;
 export const MAX_SETTLED_META = 24;
 export const MODEL_IDLE_MS = 300_000;
 export const TOOL_IDLE_MS = 900_000;
