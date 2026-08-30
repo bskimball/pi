@@ -21,13 +21,13 @@ Pi's main agent delegates bounded units of work to specialist sub-agents through
 
 - **`task`** — synchronous task delegation: spawns a specialist sub-agent, streams activity back into the parent session, and blocks until returning a single final report.
 - **`task_start` / `task_status` / `task_list` / `task_send` / `task_wait` / `task_collect` / `task_abort` / `task_close` / `task_reply`** — asynchronous RPC sub-agent management: starts persistent isolated sessions in the background, steers or sends follow-ups mid-flight, handles UI extension requests, and retrieves or waits for results while keeping the lead context free.
-- **`task_chain` / `mission`** — one-shot sequential and DAG-aware schedulers. `mission` starts ready nodes concurrently, substitutes bounded dependency reports through `{{nodeId}}`, skips failed dependency branches, closes every node worker, and returns wall-clock/worker-time/slot-utilization telemetry.
+- **`task_chain`** — a one-shot sequential scheduler for small mechanical pipelines. Independent work should use separate visible `task` calls in one parallel tool turn.
 
 Each task spawns a separate `pi` process with the specialist's own system prompt, model, thinking level, and tool set.
 
 Use synchronous `task` for one-shot barriers whose report is needed before proceeding. Reserve `task_start` for persistent work that benefits from steering, follow-up generations, or overlap with useful lead work. The async lifecycle is: `task_start` → optional `task_send` → `task_wait` while follow-up remains likely, or **`task_collect` for the final wait + report + close**. `task_wait` timeouts and Esc interruptions detach only the waiter. Worker handles are runtime-local; after a process restart use `task_rebind` before assuming a historical `task_N` is valid. `task_reply` answers a worker's interactive UI dialog request.
 
-Both synchronous and asynchronous tasks use the agent's ordered model fallback chain for clean availability failures. The bounded subprocess cap defaults to 3 and can be configured installation-wide with `PI_TASK_MAX_WORKERS=1..8`; the same value governs synchronous fan-out, async live workers, and mission concurrency.
+Both synchronous and asynchronous tasks use the agent's ordered model fallback chain for clean availability failures. The bounded subprocess cap defaults to 3 and can be configured installation-wide with `PI_TASK_MAX_WORKERS=1..8`; the same value governs synchronous fan-out and async live workers.
 
 `task_send` has two delivery modes with different queueing semantics:
 
@@ -49,8 +49,7 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, and diagrams. |
 | `scout` | Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
-| `stevedore` | Fast ops specialist for deploys and CLI chores: lint, format, build, git, and platform CLIs. |
-| `verifier` | Fast read-only integrated checker for lint, format checks, typecheck, tests, and builds after writers settle. |
+| `stevedore` | Fast integrated verification and shipping specialist for lint, format checks, typecheck, tests, builds, git, deploys, and platform CLIs. |
 
 Shared norms that apply to every specialist (smallest-correct-change discipline, browser rules, evidence, dirty-worktree safety, etc.) live in [`agent/agents/_shared.md`](agent/agents/_shared.md). Worker-mode semantics are separate: `_shared-sync.md` describes fire-and-forget `task` runs, while `_shared-async.md` describes persistent RPC workers with steering, follow-ups, and UI requests. [`agent/agents/_handoff.md`](agent/agents/_handoff.md) is appended for both modes and requires a non-empty visible final report for each generation. Each agent file also declares its primary model plus a fallback chain. Both task modes retry only clean provider/model availability failures; async workers replace the failed RPC session and replay only before visible output or tool execution, preventing duplicate work.
 
@@ -105,7 +104,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 
 ### Extension notes
 
-- **`task/amp-task.ts` & `task/async-task.ts`** — implements `task`, persistent async RPC tools including `task_collect`, and the `task_chain` / `mission` schedulers; see [Sub-agents and Orchestration Tools](#sub-agents-and-orchestration-tools) above. The deep async control plane lives in `task/runtime/worker-runtime.ts`; `async-task.ts` retains RPC transport and Pi tool adapters.
+- **`task/amp-task.ts` & `task/async-task.ts`** — implements `task`, persistent async RPC tools including `task_collect`, and the `task_chain` scheduler; see [Sub-agents and Orchestration Tools](#sub-agents-and-orchestration-tools) above. The deep async control plane lives in `task/runtime/worker-runtime.ts`; `async-task.ts` retains RPC transport and Pi tool adapters.
 - **`apex/apex-ui.ts`** — see [Apex is the UI](#apex-is-the-ui) and [The shark / Observatory](#the-shark--observatory).
 - **`bg-process.ts`** — `bg_start`/`bg_status`/`bg_list`/`bg_kill` for dev servers and watchers; support code in `bg-process/internal/`.
 - **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
@@ -152,7 +151,7 @@ Switches the current session between the default inline-capable lead and a **str
 /orchestrate          # toggle the current mode
 ```
 
-Strict mode routes implementation to specialists, broad discovery to Scout, and routine post-implementation browser verification to Inspector. It instructs the lead to make writer slices acceptance-sized: one cohesive outcome and one component/package boundary. A proposed writer order spanning 3+ components, 3+ ordered units, or discovery through broad verification must be decomposed before dispatch. Known multi-slice dependency graphs use `mission`; independent writers use isolated worktrees and scoped patch integration. A persistent writer may receive at most one corrective prompt generation before the remaining work is narrowed and respawned; the task runtime enforces this for writer agents across both prompt and queued follow-up paths. Mission writer reports end with `Acceptance-Status: complete|partial|incomplete|failed`; any non-complete status fails the node. Mission receipts surface single-active worker time, useful peak concurrency, utilization, and a warning when multiple positive-duration nodes run without overlap despite concurrency above one. Strict mode also requires fresh-eyes review and applies the normal delivery gates without inline exemptions. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
+Strict mode routes implementation to specialists, broad discovery to Scout, and routine post-implementation browser verification to Inspector. It instructs the lead to make writer slices acceptance-sized: one cohesive outcome and one component/package boundary. A proposed writer order spanning 3+ components, 3+ ordered units, or discovery through broad verification must be decomposed before dispatch. Independent slices run as separate visible parallel `task` calls in the same assistant turn, or separate visible `task_start` workers when steering is useful; dependent slices are dispatched visibly only after prerequisites return. Strict mode does not use `task_chain` or another aggregate scheduler. Parallel writers use isolated worktrees and scoped patch integration. A persistent writer may receive at most one corrective prompt generation before the remaining work is narrowed and respawned; the task runtime enforces this for writer agents across both prompt and queued follow-up paths. Strict mode also requires fresh-eyes review and applies the normal delivery gates without inline exemptions. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
 
 ### `/browser`
 

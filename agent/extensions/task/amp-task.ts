@@ -1,4 +1,4 @@
-// amp-task: Apex Missions task tool and subagent execution.
+// amp-task: synchronous task tool and subagent execution.
 //
 // One `task` tool. Each task spawns a separate `pi --mode json -p` process with
 // the agent's system prompt from ~/.pi/agent/agents/*.md. Child lifetime remains

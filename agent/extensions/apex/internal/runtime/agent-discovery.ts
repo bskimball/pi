@@ -128,8 +128,8 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
     text: "independent separable non-visual implementation slices to machinist",
   },
   {
-    agents: ["verifier"],
-    text: "read-only integrated lint, typecheck, test, and build gates to verifier",
+    agents: ["stevedore"],
+    text: "integrated lint, typecheck, test, build, git, and shipping work to stevedore",
   },
 ];
 
