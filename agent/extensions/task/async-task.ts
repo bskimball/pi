@@ -1,7 +1,7 @@
 // async-task: session-backed bidirectional RPC sub-agents.
 //
 // Tools: task_start, task_rebind, task_status, task_list, task_send, task_wait,
-//        task_abort, task_close, task_reply, task_chain.
+//        task_collect, task_abort, task_close, task_reply, task_chain, mission.
 // Additive to the existing synchronous `task` tool in amp-task.ts.
 // Plain bounded tool results only — no custom TUI renderers or render timers.
 
@@ -148,6 +148,16 @@ import {
   type ReportStatus,
 } from "./runtime/report-schema.ts";
 import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
+import {
+  formatMissionDigest,
+  missionTelemetry,
+  missionWriterConflict,
+  readyMissionNodes,
+  skipBlockedMissionNodes,
+  substituteMissionResults,
+  validateMissionNodes,
+  type MissionNodeState,
+} from "./runtime/mission-dag.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -159,12 +169,43 @@ const STATUS_LINE_CAP = 40;
 const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
 
+const MISSION_MAX_NODES = 24;
+
+const MissionNodeSchema = Type.Object({
+  id: Type.String({
+    description: "Unique node id used by dependencies and {{id}} result substitution.",
+  }),
+  agent: Type.String({ description: "Configured specialist agent name." }),
+  prompt: Type.String({
+    description: "Self-contained work order; may contain {{dependencyId}} placeholders.",
+  }),
+  dependsOn: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Node ids that must succeed before this node starts.",
+    }),
+  ),
+  cwd: Type.Optional(
+    Type.String({ description: "Working directory for this node." }),
+  ),
+  model: Type.Optional(
+    Type.String({
+      description: "Omit except for a sanctioned capability-raising Oracle override.",
+    }),
+  ),
+  reportSchema: Type.Optional(
+    Type.String({ description: "Optional bounded report JSON Schema subset." }),
+  ),
+  context: Type.Optional(
+    Type.Union([Type.Literal("fresh"), Type.Literal("fork")]),
+  ),
+});
+
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
-  "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
+  "Use task_collect for the final bounded report and cleanup; task_wait/task_send when follow-up remains likely.";
 /** Result preview budget in the settlement notice payload. */
 const NOTICE_RESULT_CAP = 400;
 
@@ -177,10 +218,12 @@ const EXCLUDED_CHILD_TOOLS = [
   "task_list",
   "task_send",
   "task_wait",
+  "task_collect",
   "task_abort",
   "task_close",
   "task_reply",
   "task_chain",
+  "mission",
   "subagent",
   "wait_for_subagents",
   "wait",
@@ -1940,6 +1983,234 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
   });
 
   pi.registerTool({
+    name: "mission",
+    label: "Mission",
+    description:
+      `Execute an explicit dependency graph of 1-${MISSION_MAX_NODES} specialist nodes. Ready nodes run concurrently up to the bounded mission concurrency. A failed node skips its dependent branch. Each node is a one-shot fresh worker that is closed after settlement. Use {{nodeId}} in a dependent prompt to insert that node's bounded report.`,
+    promptSnippet:
+      "DAG-aware one-shot specialist scheduler with dependency substitution, branch skipping, cleanup, and timing telemetry.",
+    parameters: Type.Object({
+      nodes: Type.Array(MissionNodeSchema, {
+        minItems: 1,
+        maxItems: MISSION_MAX_NODES,
+        description: "Explicit acyclic mission graph.",
+      }),
+      concurrency: Type.Optional(
+        Type.Number({
+          description: `Maximum concurrently running nodes (default ${MAX_LIVE_WORKERS}, hard maximum ${MAX_LIVE_WORKERS}).`,
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
+      const inputs = params.nodes ?? [];
+      const validation = validateMissionNodes(inputs);
+      if (validation) return textResult(validation, true);
+      if (inputs.length > MISSION_MAX_NODES) {
+        return textResult(`mission supports at most ${MISSION_MAX_NODES} nodes.`, true);
+      }
+      for (const input of inputs) {
+        if (!agents.get(input.agent)) {
+          return textResult(
+            `Unknown agent "${input.agent}" at node "${input.id}". Available: ${[...agents.keys()].join(", ")}`,
+            true,
+          );
+        }
+        const cwd = resolveCwd(input.cwd, ctx.cwd);
+        const cwdError = validateCwd(cwd);
+        if (cwdError) return textResult(`${input.id}: ${cwdError}`, true);
+        if (input.reportSchema) {
+          const parsed = parseReportSchema(input.reportSchema);
+          if (parsed.error) {
+            return textResult(
+              `Invalid reportSchema at node "${input.id}": ${parsed.error}`,
+              true,
+            );
+          }
+        }
+      }
+      const writerConflict = missionWriterConflict(
+        inputs,
+        (agent) =>
+          ["artisan", "machinist", "scribe", "picasso", "stevedore"].includes(
+            agent,
+          ),
+        (cwd) => resolveCwd(cwd, ctx.cwd),
+      );
+      if (writerConflict) return textResult(writerConflict, true);
+      const requestedConcurrency = params.concurrency ?? MAX_LIVE_WORKERS;
+      if (
+        !Number.isInteger(requestedConcurrency) ||
+        requestedConcurrency < 1 ||
+        requestedConcurrency > MAX_LIVE_WORKERS
+      ) {
+        return textResult(
+          `concurrency must be an integer from 1 to ${MAX_LIVE_WORKERS}.`,
+          true,
+        );
+      }
+      const states: MissionNodeState[] = inputs.map((input) => ({
+        ...input,
+        status: "pending",
+      }));
+      const inputById = new Map(inputs.map((input) => [input.id, input]));
+      const results = new Map<string, string>();
+      const running = new Map<string, Promise<void>>();
+      const startedAt = Date.now();
+      let aborted = false;
+
+      const runNode = async (state: MissionNodeState): Promise<void> => {
+        const input = inputById.get(state.id)!;
+        const def = agents.get(input.agent)!;
+        const prompt = substituteMissionResults(
+          input.prompt,
+          input.dependsOn ?? [],
+          results,
+        );
+        const cwd = resolveCwd(input.cwd, ctx.cwd);
+        let forkSessionFile: string | undefined;
+        if (input.context === "fork") {
+          try {
+            forkSessionFile = ctx.sessionManager?.getSessionFile?.();
+          } catch {
+            forkSessionFile = undefined;
+          }
+          if (!forkSessionFile) {
+            state.status = "failed";
+            state.error = "fork context requested but parent session file is unavailable";
+            state.startedAt = Date.now();
+            state.endedAt = state.startedAt;
+            return;
+          }
+        }
+        state.status = "running";
+        state.startedAt = Date.now();
+        writeLastPhase(`mission:spawn node=${state.id}`);
+        const { worker, error } = await spawnWorker(def, {
+          prompt,
+          cwd,
+          model: input.model,
+          reportSchema: input.reportSchema,
+          forkSessionFile,
+          lastPhaseTag: `mission:spawn node=${state.id}`,
+        });
+        if (error || !worker) {
+          state.status = "failed";
+          state.error = error ?? "spawn failed";
+          state.endedAt = Date.now();
+          return;
+        }
+        const snapshot = await waitWorkerGeneration(
+          worker,
+          worker.generation,
+          worker.timeoutMs,
+          signal,
+        );
+        state.endedAt = Date.now();
+        state.turns = worker.turns;
+        if (snapshot === "interrupted") {
+          closeWorker(worker, `mission ${state.id} interrupted`, "sync");
+          state.status = "failed";
+          state.error = "mission interrupted";
+          aborted = true;
+          return;
+        }
+        if (snapshot === "timeout") {
+          closeWorker(worker, `mission ${state.id} timeout`, "sync");
+          state.status = "failed";
+          state.error = "worker wait timed out";
+          return;
+        }
+        const ok = worker.lifecycle === "settled" && !worker.killReason;
+        const bound = formatSettledResult(snapshot.resultText);
+        state.result = bound.text;
+        state.error = snapshot.killReason || snapshot.errorText;
+        state.status = ok ? "succeeded" : "failed";
+        if (ok) results.set(state.id, bound.text);
+        closeWorker(worker, `mission ${state.id} complete`, "sync");
+      };
+
+      while (states.some((state) => state.status === "pending") || running.size) {
+        if (signal?.aborted) aborted = true;
+        skipBlockedMissionNodes(states);
+        if (!aborted) {
+          const available = Math.min(
+            requestedConcurrency - running.size,
+            Math.max(0, MAX_LIVE_WORKERS - liveCount()),
+          );
+          for (const state of readyMissionNodes(states).slice(0, available)) {
+            const promise = runNode(state).finally(() => running.delete(state.id));
+            running.set(state.id, promise);
+          }
+        }
+        if (aborted) {
+          for (const state of states) {
+            if (state.status === "pending") {
+              state.status = "skipped";
+              state.error = "mission aborted";
+              state.endedAt = Date.now();
+            }
+          }
+        }
+        if (!running.size) {
+          if (!states.some((state) => state.status === "pending")) break;
+          return textResult(
+            "mission stalled because async worker capacity is held by persistent workers; collect or close them before retrying.",
+            true,
+            { nodes: states },
+          );
+        }
+        await Promise.race(running.values());
+      }
+
+      const endedAt = Date.now();
+      const telemetry = missionTelemetry(
+        states,
+        startedAt,
+        endedAt,
+        requestedConcurrency,
+      );
+      const failed = states.some((state) => state.status !== "succeeded");
+      const reports = states
+        .filter((state) => state.result)
+        .map((state) => `--- ${state.id} ---\n${state.result}`)
+        .join("\n\n");
+      const digest = formatMissionDigest(states);
+      const reportBlock = boundText(
+        reports,
+        SETTLED_RESULT_CHARS,
+        Number.POSITIVE_INFINITY,
+      ).text;
+      const detailNodes = states.map((state) => ({
+        id: state.id,
+        agent: state.agent,
+        status: state.status,
+        startedAt: state.startedAt,
+        endedAt: state.endedAt,
+        turns: state.turns,
+        error: state.error,
+      }));
+      return textResult(
+        [
+          `mission ${failed ? "completed with failures" : "completed"}`,
+          `elapsed_ms: ${telemetry.elapsedMs}`,
+          `worker_ms: ${telemetry.workerMs}`,
+          `peak_concurrency: ${telemetry.peakConcurrency}/${requestedConcurrency}`,
+          `slot_utilization: ${(telemetry.utilization * 100).toFixed(1)}%`,
+          "",
+          digest,
+          reportBlock ? `\n${reportBlock}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        failed,
+        { nodes: detailNodes, telemetry },
+      );
+    },
+  });
+
+  pi.registerTool({
     name: "task_rebind",
     label: "Task Rebind",
     description:
@@ -2748,6 +3019,104 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         return renderWorkerCard(view, theme, options.expanded, waiting);
       },
       }),
+  });
+
+  pi.registerTool({
+    name: "task_collect",
+    label: "Task Collect",
+    description:
+      `Wait for an async worker's current generation, return its full bounded report, then close and reap it. Use this for the final collection when no follow-up generation is expected. Timeout or parent interruption leaves the worker running and open.`,
+    promptSnippet:
+      "Final async collection: wait for settlement, return report, close worker, release slot.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Worker id from task_start." }),
+      timeoutSec: Type.Optional(
+        Type.Number({
+          description: `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). Timeout leaves the worker running.`,
+        }),
+      ),
+      generation: Type.Optional(
+        Type.Number({
+          description: "Specific current generation to collect (defaults to current).",
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
+      const id = params.id?.trim();
+      if (!id) return textResult("id is required.", true);
+      const worker = workerByHandle(id);
+      if (!worker) return textResult(`Unknown worker "${id}".`, true);
+      if (worker.closed || worker.lifecycle === "closed") {
+        return textResult(`${id} is already closed.`, true);
+      }
+      const targetGen = params.generation ?? worker.generation;
+      if (targetGen !== worker.generation) {
+        return textResult(
+          `${id} is currently generation ${worker.generation}; generation ${targetGen} is not retained.`,
+          true,
+        );
+      }
+      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
+      const startedAt = Date.now();
+      const settled =
+        worker.lifecycle === "settled" || worker.lifecycle === "failed"
+          ? generationSnapshot(worker)
+          : await waitWorkerGeneration(
+              worker,
+              targetGen,
+              Math.max(0, timeoutSec) * 1000,
+              signal,
+            );
+      if (settled === "interrupted") {
+        return textResult(
+          `${id} collection interrupted; worker continues and remains open.`,
+          false,
+          { worker: workerView(worker), collected: false },
+        );
+      }
+      if (settled === "timeout") {
+        return textResult(
+          `${id} collection timed out after ${timeoutSec}s; worker continues and remains open.`,
+          false,
+          { worker: workerView(worker), collected: false },
+        );
+      }
+      const lifecycle = worker.lifecycle;
+      const reportStatus = worker.reportStatus;
+      const parsedReport = worker.parsedReport;
+      const bound = formatSettledResult(settled.resultText);
+      const reapPid = worker.pid ?? worker.client?.pid;
+      const closeMessage = closeWorker(worker, "task_collect", "sync");
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      return textResult(
+        [
+          `${id} collected and closed (generation ${settled.generation}).`,
+          `lifecycle: ${lifecycle}`,
+          `turns: ${settled.turns}`,
+          `elapsed_ms: ${elapsedMs}`,
+          reportStatusLine(reportStatus, parsedReport),
+          settled.killReason ? `kill_reason: ${settled.killReason}` : undefined,
+          settled.errorText ? `error: ${settled.errorText}` : undefined,
+          `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
+          `cleanup: ${closeMessage}${reapPid != null ? "; process tree reaped" : ""}`,
+          "",
+          "--- result ---",
+          bound.text || "(empty)",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        lifecycle === "failed",
+        {
+          worker: workerView(worker),
+          collected: true,
+          reportStatus,
+          parsedReport,
+          elapsedMs,
+        },
+      );
+    },
   });
 
   pi.registerTool({

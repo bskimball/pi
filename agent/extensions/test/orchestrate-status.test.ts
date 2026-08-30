@@ -115,35 +115,22 @@ describe("strict orchestrator prompt", () => {
     };
     assert.ok(active.systemPrompt.startsWith("base prompt"));
     assert.ok(active.systemPrompt.endsWith(ORCHESTRATE_SYSTEM_BLOCK));
-    assert.match(active.systemPrompt, /Delegate implementation units/);
-    assert.match(active.systemPrompt, /When implementation needs repository scanning/);
-    assert.match(active.systemPrompt, /Parallel writers require isolated worktrees/);
-    assert.match(active.systemPrompt, /reaches acceptance stops/);
-    assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
-    assert.match(active.systemPrompt, /After all writers have settled/);
-    assert.match(
-      active.systemPrompt,
-      /Every implementation diff gets a fresh-eyes Oracle review/,
-    );
-    assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
-    assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
-    assert.match(
-      active.systemPrompt,
-      /Never run integrated gates inside Artisan\/Machinist/,
-    );
-    assert.match(active.systemPrompt, /UI and interaction slices are proven on the live page through Inspector/);
-    assert.match(active.systemPrompt, /writer-local checks and a passing Stevedore gate are not that proof/);
-    assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
-    assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
-    assert.match(active.systemPrompt, /security-sensitive architecture, migrations/);
-    assert.match(active.systemPrompt, /destructive data changes, public API architecture/);
-    assert.match(active.systemPrompt, /other consequential approach choices/);
-    assert.match(active.systemPrompt, /specialists return conflicting findings/);
-    assert.match(active.systemPrompt, /do not implement code inline in this mode/);
+    assert.match(active.systemPrompt, /specialists implement every code/);
+    assert.match(active.systemPrompt, /Skip it when you can already name the exact target files/);
+    assert.match(active.systemPrompt, /Parallel writers require isolated worktrees and safe patch integration/);
+    assert.match(active.systemPrompt, /Use `task_start` only when persistence/);
+    assert.match(active.systemPrompt, /Use synchronous `task` for one-shot barriers/);
+    assert.match(active.systemPrompt, /Scout discovery, Verifier\/Stevedore integrated checks/);
+    assert.match(active.systemPrompt, /Inspector and Verifier may run concurrently/);
+    assert.match(active.systemPrompt, /Oracle reviews the verified final diff/);
+    assert.match(active.systemPrompt, /Use `mission` for an explicit dependency graph/);
+    assert.match(active.systemPrompt, /Every implementation diff still requires Oracle review/);
+    assert.match(active.systemPrompt, /UI behavior still requires one Inspector pass/);
+    assert.match(active.systemPrompt, /through Verifier or Stevedore verification-only mode/);
+    assert.match(active.systemPrompt, /Advisor remains required for consequential choices/);
+    assert.match(active.systemPrompt, /This mode overrides inline implementation/);
     assert.doesNotMatch(active.systemPrompt, /tiny integration fixes/);
-    assert.match(active.systemPrompt, /one `task_wait` \(default 600s\) per worker/);
-    assert.match(active.systemPrompt, /Do not poll with `task_status`\/`task_wait` loops/);
-    assert.match(active.systemPrompt, /Keep returned evidence compact/);
+    assert.doesNotMatch(active.systemPrompt, /Prefer `task_start`/);
 
     await state.orchestrate("off");
     assert.equal(await state.beforeAgentStart(), undefined);

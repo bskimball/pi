@@ -200,10 +200,20 @@ function updateStatus(ctx: ExtensionContext) {
   } catch {}
 }
 
-// Full Pi subprocesses are expensive on Windows. Three balances the SYSTEM.md
-// guidance (2-3 typical fan-out) against orphan/process pressure when a parent
-// turn dies; larger fan-outs simply queue.
-const MAX_CONCURRENT = 3;
+// Full Pi subprocesses are expensive on Windows. The shared bounded setting
+// defaults to three; larger fan-outs queue rather than oversubscribing.
+const DEFAULT_MAX_CONCURRENT = 3;
+const MAX_CONFIGURED_CONCURRENT = 8;
+export function configuredSyncTaskLimit(
+  raw = process.env.PI_TASK_MAX_WORKERS,
+): number {
+  if (!raw?.trim()) return DEFAULT_MAX_CONCURRENT;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= MAX_CONFIGURED_CONCURRENT
+    ? value
+    : DEFAULT_MAX_CONCURRENT;
+}
+const MAX_CONCURRENT = configuredSyncTaskLimit();
 let running = 0;
 
 interface SlotWaiter {

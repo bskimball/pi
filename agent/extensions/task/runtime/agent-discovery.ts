@@ -127,6 +127,10 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
     agents: ["machinist"],
     text: "independent separable non-visual implementation slices to machinist",
   },
+  {
+    agents: ["verifier"],
+    text: "read-only integrated lint, typecheck, test, and build gates to verifier",
+  },
 ];
 
 export function routingHint(agents: Map<string, AgentDef>): string {
