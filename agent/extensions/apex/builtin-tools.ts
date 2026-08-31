@@ -1,14 +1,12 @@
-// builtin-tools: Apex adapters for Pi's built-in read/bash/write tools, plus
-// the Apex-owned `edit` and todo tools. Execution delegates to Pi's definitions
-// (read/bash/write) or to Apex-private modules (edit/todo); optional receipt
-// slots are attached through the presentation gate.
+// builtin-tools: Apex adapters for Pi's built-in bash/write tools, plus the
+// Apex-owned todo tools. pi-better-edit owns read/edit; optional receipt slots
+// are attached through the presentation gate.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   createBashToolDefinition,
-  createReadToolDefinition,
   createWriteToolDefinition,
   type ExtensionAPI,
   type ToolDefinition,
@@ -28,7 +26,6 @@ import {
   resultDiff,
 } from "./internal/presentation/edit-diff.ts";
 import { cleanInline, type ToolRenderContext } from "./internal/presentation/ui-common.ts";
-import { installEditTool } from "./internal/edit/edit-tool.ts";
 import { installTodoTools } from "./internal/todo/todo-tools.ts";
 
 type BuiltinName = "read" | "bash" | "write";
@@ -229,21 +226,16 @@ function registerBuiltin(
 }
 
 export function installBuiltinTools(pi: ExtensionAPI): void {
-  registerBuiltin(pi, "read", createReadToolDefinition);
   registerBuiltin(pi, "bash", createBashToolDefinition);
   registerBuiltin(pi, "write", createWriteToolDefinition);
 }
 
 /**
- * Tools Apex owns outright rather than re-skinning: the unified row-edit `edit`
- * tool and the session todo dock (tools, above-editor panel, alt+t / `/todos`,
- * alt+a / `/agents`). These must be installed even under PI_APEX_UI=0 — the
- * gate strips their styling and custom render hooks, not their behavior — so
- * apex-ui calls this before the presentation opt-out. The dock keeps an
- * unstyled plain todo widget mounted in that mode; styled chrome and the
- * alt+t / alt+a / `/todos` / `/agents` triggers drop out.
+ * The session todo dock (tools, above-editor panel, alt+t / `/todos`, alt+a /
+ * `/agents`) must be installed even under PI_APEX_UI=0. The dock keeps an
+ * unstyled plain todo widget mounted in that mode; styled chrome and triggers
+ * drop out. pi-better-edit owns read/edit registration.
  */
 export function installApexOwnedTools(pi: ExtensionAPI): void {
-  installEditTool(pi);
   installTodoTools(pi);
 }

@@ -541,8 +541,8 @@ stability rules) — that file documents *how these extensions are built*,
 complementary to this file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
-`agent/extensions/` is used. `agent/settings.json` `packages` is empty — the
-third-party MCP dependency used here is composed locally instead:
+`agent/extensions/` is used. `agent/settings.json` package-loads `pi-fff` and
+`pi-better-edit`; the third-party MCP dependency is composed locally instead:
 `mcp-adapter.ts` boots `pi-mcp-adapter` (see the mcp.json section above for
 why). (`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in
 `tuiMode: "fullscreen"`.)

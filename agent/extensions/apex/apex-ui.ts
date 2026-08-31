@@ -188,10 +188,9 @@ function applyRandomWorkingIndicator(
 }
 
 export default function (pi: ExtensionAPI) {
-  // Tools Apex owns outright (`edit`, `todo_write`/`todo_read` and the todo
-  // panel) register before the presentation opt-out: PI_APEX_UI=0 removes the
-  // custom receipts and styled chrome, never the tools themselves. The todo
-  // panel stays mounted there as an unstyled plain widget.
+  // Apex-owned todo tools and panel register before the presentation opt-out:
+  // PI_APEX_UI=0 removes custom receipts and styled chrome, never the tools.
+  // pi-better-edit owns read/edit registration.
   installApexOwnedTools(pi);
 
   // PI_APEX_UI=0 disables Apex styling, chrome, and custom render hooks. A
