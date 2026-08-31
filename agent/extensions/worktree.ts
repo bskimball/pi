@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { Type } from "typebox";
@@ -9,7 +9,7 @@ export const WORKTREE_TOOL_NAME = "worktree";
 export const GIT_TIMEOUT_MS = 30_000;
 const OUTPUT_MAX_CHARS = 50_000;
 const OUTPUT_MAX_LINES = 80;
-const OPERATIONS = ["add", "list", "remove"] as const;
+const OPERATIONS = ["add", "list", "remove", "export", "apply"] as const;
 
 type Worktree = { path: string; head?: string; branch?: string };
 
@@ -53,6 +53,89 @@ function git(cwd: string, args: string[]) {
   return { ok: !result.error && result.status === 0, stdout, stderr, message: result.error?.message ?? boundText([stdout, stderr].filter(Boolean).join("\n")) };
 }
 
+function gitWithInput(cwd: string, args: string[], input: string) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: GIT_TIMEOUT_MS,
+    windowsHide: true,
+    shell: false,
+    input,
+  });
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  return { ok: !result.error && result.status === 0, stdout, stderr, message: result.error?.message ?? boundText([stdout, stderr].filter(Boolean).join("\n")) };
+}
+
+export function patchPaths(patchText: string): string[] | undefined {
+  const files = new Set<string>();
+  for (const line of patchText.split(/\r?\n/)) {
+    const diff = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (diff) {
+      files.add(diff[1]);
+      files.add(diff[2]);
+      continue;
+    }
+    const traditional = /^(?:---|\+\+\+) (?:[ab]\/)?(.+?)(?:\t.*)?$/.exec(line);
+    if (traditional && traditional[1] !== "/dev/null") files.add(traditional[1]);
+  }
+  return files.size ? [...files] : undefined;
+}
+
+function normalizeAssignedPaths(root: string, raw: unknown): { paths?: string[]; error?: string } {
+  if (!Array.isArray(raw) || raw.length < 1) return { error: "paths must contain at least one repository-relative path." };
+  const paths: string[] = [];
+  for (const value of raw) {
+    const candidate = String(value).trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!candidate || candidate === "." || isAbsolute(candidate)) return { error: `invalid assigned path: ${String(value)}` };
+    if (!isPathInside(root, resolve(root, candidate))) return { error: `assigned path escapes repository: ${candidate}` };
+    paths.push(candidate.replace(/\/$/, ""));
+  }
+  return { paths: [...new Set(paths)] };
+}
+
+function pathIsAssigned(file: string, paths: readonly string[]): boolean {
+  const normalized = file.replace(/\\/g, "/");
+  return paths.some((assigned) => normalized === assigned || normalized.startsWith(`${assigned}/`));
+}
+
+function changedFiles(cwd: string): { files?: string[]; error?: string } {
+  const result = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (!result.ok) return { error: result.message || "git status failed" };
+  const files: string[] = [];
+  const entries = result.stdout.split("\0").filter(Boolean);
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const status = entry.slice(0, 2);
+    const file = entry.slice(3);
+    if (status.includes("R") || status.includes("C")) {
+      const target = entries[++i];
+      if (target) files.push(file, target);
+    } else files.push(file);
+  }
+  return { files: [...new Set(files)] };
+}
+
+function exportPatch(cwd: string, paths: readonly string[]): { patch?: string; files?: string[]; error?: string } {
+  const changed = changedFiles(cwd);
+  if (changed.error || !changed.files) return { error: changed.error };
+  const outside = changed.files.filter((file) => !pathIsAssigned(file, paths));
+  if (outside.length) return { error: `refusing export; changed files outside assigned paths:\n${outside.join("\n")}` };
+  if (!changed.files.length) return { error: "worktree has no changes to export." };
+  const tracked = git(cwd, ["diff", "--binary", "HEAD", "--", ...paths]);
+  if (!tracked.ok) return { error: tracked.message || "git diff failed" };
+  const chunks = [tracked.stdout];
+  for (const file of changed.files) {
+    if (git(cwd, ["ls-files", "--error-unmatch", "--", file]).ok) continue;
+    const absolute = resolve(cwd, file);
+    if (!existsSync(absolute) || statSync(absolute).isDirectory()) continue;
+    const untracked = git(cwd, ["diff", "--binary", "--no-index", "--", "/dev/null", file]);
+    if (untracked.ok || untracked.stdout) chunks.push(untracked.stdout);
+    else return { error: untracked.message || `failed to export untracked file ${file}` };
+  }
+  return { patch: chunks.filter(Boolean).join("\n"), files: changed.files };
+}
+
 function repositoryRoot(cwd: string): string | undefined {
   const result = git(cwd, ["rev-parse", "--show-toplevel"]);
   return result.ok ? result.stdout.trim() : undefined;
@@ -75,12 +158,13 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: WORKTREE_TOOL_NAME,
     label: "Worktree",
-    description: "Create, list, or remove local Git worktrees. Never commits or pushes.",
+    description: "Create, list, remove, export scoped patches from, or apply scoped patches to local Git worktrees. Never commits or pushes.",
     parameters: Type.Object({
-      operation: Type.Union(OPERATIONS.map((value) => Type.Literal(value)), { description: "add | list | remove" }),
-      path: Type.Optional(Type.String({ description: "Worktree path for add or remove." })),
+      operation: Type.Union(OPERATIONS.map((value) => Type.Literal(value)), { description: "add | list | remove | export | apply" }),
+      path: Type.Optional(Type.String({ description: "Worktree path for add, remove, or export; patch file path for apply." })),
       branch: Type.Optional(Type.String({ description: "Branch name for add." })),
       force: Type.Optional(Type.Boolean({ description: "Use only with remove." })),
+      paths: Type.Optional(Type.Array(Type.String(), { description: "Repository-relative paths assigned to this patch." })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const root = repositoryRoot(ctx?.cwd ?? process.cwd());
@@ -108,6 +192,46 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
           : ["worktree", "add", "-b", branch, target]);
         if (!result.ok) return textResult(`git worktree add failed: ${result.message || "unknown error"}`, true);
         return textResult(`path: ${target}\nbranch: ${branch}\nPass task_start cwd="${target}" for a writing worker.`);
+      }
+      if (operation === "export") {
+        if (!params.path?.trim()) return textResult("export requires the source worktree path.", true);
+        const source = resolve(params.path);
+        const worktrees = listed();
+        if (!worktrees?.some((worktree) => resolve(worktree.path) === source)) return textResult("export source must be a listed worktree.", true);
+        const assigned = normalizeAssignedPaths(source, params.paths);
+        if (assigned.error || !assigned.paths) return textResult(assigned.error ?? "invalid paths", true);
+        const exported = exportPatch(source, assigned.paths);
+        if (exported.error || !exported.patch) return textResult(exported.error ?? "patch export failed", true);
+        const gitDirResult = git(root, ["rev-parse", "--git-dir"]);
+        if (!gitDirResult.ok) return textResult("could not resolve the repository git directory.", true);
+        const gitDir = resolve(root, gitDirResult.stdout.trim());
+        const patchDir = resolve(gitDir, "pi-patches");
+        mkdirSync(patchDir, { recursive: true });
+        const patchPath = resolve(patchDir, `patch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.patch`);
+        writeFileSync(patchPath, exported.patch, "utf8");
+        return textResult(`patch: ${patchPath}\nfiles:\n${exported.files?.join("\n") ?? ""}\nApply with worktree operation="apply" path="${patchPath}" and the same paths.`);
+      }
+      if (operation === "apply") {
+        if (!params.path?.trim()) return textResult("apply requires a patch file path.", true);
+        const patchPath = resolve(params.path);
+        if (!existsSync(patchPath) || !statSync(patchPath).isFile()) return textResult(`patch file not found: ${patchPath}`, true);
+        const gitDirResult = git(root, ["rev-parse", "--git-dir"]);
+        if (!gitDirResult.ok) return textResult("could not resolve the repository git directory.", true);
+        const patchJail = resolve(root, gitDirResult.stdout.trim(), "pi-patches");
+        if (!isPathInside(patchJail, patchPath)) return textResult("patch file must come from this repository's git pi-patches directory.", true);
+        const assigned = normalizeAssignedPaths(root, params.paths);
+        if (assigned.error || !assigned.paths) return textResult(assigned.error ?? "invalid paths", true);
+        const patchText = readFileSync(patchPath, "utf8");
+        const patchFiles = patchPaths(patchText);
+        if (!patchFiles) return textResult("refusing apply; patch contains no recognized file paths.", true);
+        const outside = patchFiles.filter((file) => !pathIsAssigned(file, assigned.paths!));
+        if (outside.length) return textResult(`refusing apply; patch contains files outside assigned paths:\n${outside.join("\n")}`, true);
+        const check = gitWithInput(root, ["apply", "--check", "--binary", "-"], patchText);
+        if (!check.ok) return textResult(`git apply --check failed; no files changed:\n${check.message || "unknown conflict"}`, true);
+        const applied = gitWithInput(root, ["apply", "--binary", "-"], patchText);
+        if (!applied.ok) return textResult(`git apply failed:\n${applied.message || "unknown error"}`, true);
+        try { unlinkSync(patchPath); } catch { /* best-effort cleanup */ }
+        return textResult(`Applied scoped patch to ${root}.\nfiles:\n${patchFiles.join("\n")}`);
       }
       if (!params.path?.trim()) return textResult("remove requires path.", true);
       const target = resolve(params.path);

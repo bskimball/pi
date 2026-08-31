@@ -64,7 +64,7 @@ export function durationText(theme: TaskCardTheme, ms: number): string {
 
 /**
  * Build shared activity rows. Completed history is tail-clipped while running
- * tools remain visible, so Mission and Worker cards cannot diverge on overlap,
+ * tools remain visible, so synchronous Task and async Worker cards cannot diverge on overlap,
  * limits, duration alignment, or hidden-history signaling.
  */
 export function activityRows(

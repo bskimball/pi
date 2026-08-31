@@ -10,7 +10,21 @@ import { ActivityLedger, type ActivityStatus } from "./activity-ledger.ts";
 import { JobRegistry } from "./job-registry.ts";
 import { killProcessTree } from "./process-tree-kill.ts";
 
-export const MAX_LIVE_WORKERS = 5;
+export const DEFAULT_MAX_LIVE_WORKERS = 3;
+export const TASK_CONCURRENCY_ENV = "PI_TASK_MAX_WORKERS";
+export const MAX_CONFIGURED_WORKERS = 8;
+
+export function configuredWorkerLimit(
+  raw = process.env[TASK_CONCURRENCY_ENV],
+): number {
+  if (!raw?.trim()) return DEFAULT_MAX_LIVE_WORKERS;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= MAX_CONFIGURED_WORKERS
+    ? value
+    : DEFAULT_MAX_LIVE_WORKERS;
+}
+
+export const MAX_LIVE_WORKERS = configuredWorkerLimit();
 export const MAX_SETTLED_META = 24;
 export const MODEL_IDLE_MS = 300_000;
 export const TOOL_IDLE_MS = 900_000;

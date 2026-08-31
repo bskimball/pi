@@ -1,7 +1,7 @@
 // async-task: session-backed bidirectional RPC sub-agents.
 //
 // Tools: task_start, task_rebind, task_status, task_list, task_send, task_wait,
-//        task_abort, task_close, task_reply, task_chain.
+//        task_collect, task_abort, task_close, task_reply, task_chain.
 // Additive to the existing synchronous `task` tool in amp-task.ts.
 // Plain bounded tool results only — no custom TUI renderers or render timers.
 
@@ -161,12 +161,21 @@ const STATUS_LINE_CAP = 40;
 const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
 
+const WRITER_MAX_GENERATIONS = 2;
+const WRITER_AGENTS = new Set([
+  "artisan",
+  "machinist",
+  "scribe",
+  "picasso",
+  "stevedore",
+]);
+
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
-  "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
+  "Use task_collect for the final bounded report and cleanup; task_wait/task_send when follow-up remains likely.";
 /** Result preview budget in the settlement notice payload. */
 const NOTICE_RESULT_CAP = 400;
 
@@ -179,6 +188,7 @@ const EXCLUDED_CHILD_TOOLS = [
   "task_list",
   "task_send",
   "task_wait",
+  "task_collect",
   "task_abort",
   "task_close",
   "task_reply",
@@ -277,6 +287,7 @@ interface Worker extends RuntimeEventWorker {
   lastPersistedSidecar?: { lifecycle: WorkerLifecycle; generation: number; pid?: number };
   reportSchema?: string;
   parsedReport: Record<string, unknown> | null;
+  writerFollowUpReservations: number;
   reportStatus: ReportStatus;
   reportError?: string;
 }
@@ -1256,6 +1267,7 @@ export default function (pi: ExtensionAPI) {
       generationStartedAt: params.rebind?.updatedAt ?? Date.now(),
       reportSchema: params.rebind ? undefined : params.reportSchema,
       parsedReport: null,
+      writerFollowUpReservations: 0,
       reportStatus: params.rebind
         ? "none-requested"
         : params.reportSchema?.trim()
@@ -2237,7 +2249,7 @@ Modes:
 - follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
 - prompt: Only allowed when the worker is settled; starts a new generation.
 
-Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
+Truthfully reports queueing semantics. Steer is never mid-inference interrupt. Writer agents allow one corrective prompt generation; after generation 2, collect/close and dispatch a narrower fresh slice.`,
     promptSnippet:
       "Send steer/follow_up (or settled prompt) to an async RPC worker.",
     parameters: Type.Object({
@@ -2299,6 +2311,16 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
             true,
             sendDetails("rejected", `worker is ${worker.lifecycle}; prompt needs settled`),
+          );
+        }
+        if (
+          WRITER_AGENTS.has(worker.agent) &&
+          worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
+        ) {
+          return textResult(
+            `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
+            true,
+            sendDetails("rejected", "writer generation limit reached"),
           );
         }
         try {
@@ -2390,6 +2412,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       // follow_up
+      if (
+        WRITER_AGENTS.has(worker.agent) &&
+        worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
+      ) {
+        return textResult(
+          `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
+          true,
+          sendDetails("rejected", "writer generation limit reached"),
+        );
+      }
+      if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations += 1;
       try {
         const response = await worker.client.request(
           { type: "follow_up", message },
@@ -2405,6 +2438,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             30_000,
           );
           if (!fallback.success) {
+            if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
             return textResult(
               `${id} follow_up rejected: ${fallback.error ?? response.error ?? "unknown"}`,
               true,
@@ -2432,6 +2466,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           sendDetails("queued", "delivered after the worker settles"),
         );
       } catch (error) {
+        if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
         const msg = error instanceof Error ? error.message : String(error);
         return textResult(`${id} follow_up failed: ${msg}`, true, sendDetails("failed", msg));
       }
@@ -2769,6 +2804,104 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         return renderWorkerCard(view, theme, options.expanded, waiting);
       },
       }),
+  });
+
+  pi.registerTool({
+    name: "task_collect",
+    label: "Task Collect",
+    description:
+      `Wait for an async worker's current generation, return its full bounded report, then close and reap it. Use this for the final collection when no follow-up generation is expected. Timeout or parent interruption leaves the worker running and open.`,
+    promptSnippet:
+      "Final async collection: wait for settlement, return report, close worker, release slot.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Worker id from task_start." }),
+      timeoutSec: Type.Optional(
+        Type.Number({
+          description: `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). Timeout leaves the worker running.`,
+        }),
+      ),
+      generation: Type.Optional(
+        Type.Number({
+          description: "Specific current generation to collect (defaults to current).",
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      syncFleetWidget(ctx);
+      const id = params.id?.trim();
+      if (!id) return textResult("id is required.", true);
+      const worker = workerByHandle(id);
+      if (!worker) return textResult(`Unknown worker "${id}".`, true);
+      if (worker.closed || worker.lifecycle === "closed") {
+        return textResult(`${id} is already closed.`, true);
+      }
+      const targetGen = params.generation ?? worker.generation;
+      if (targetGen !== worker.generation) {
+        return textResult(
+          `${id} is currently generation ${worker.generation}; generation ${targetGen} is not retained.`,
+          true,
+        );
+      }
+      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
+      const startedAt = Date.now();
+      const settled =
+        worker.lifecycle === "settled" || worker.lifecycle === "failed"
+          ? generationSnapshot(worker)
+          : await waitWorkerGeneration(
+              worker,
+              targetGen,
+              Math.max(0, timeoutSec) * 1000,
+              signal,
+            );
+      if (settled === "interrupted") {
+        return textResult(
+          `${id} collection interrupted; worker continues and remains open.`,
+          false,
+          { worker: workerView(worker), collected: false },
+        );
+      }
+      if (settled === "timeout") {
+        return textResult(
+          `${id} collection timed out after ${timeoutSec}s; worker continues and remains open.`,
+          false,
+          { worker: workerView(worker), collected: false },
+        );
+      }
+      const lifecycle = worker.lifecycle;
+      const reportStatus = worker.reportStatus;
+      const parsedReport = worker.parsedReport;
+      const bound = formatSettledResult(settled.resultText);
+      const reapPid = worker.pid ?? worker.client?.pid;
+      const closeMessage = closeWorker(worker, "task_collect", "sync");
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      return textResult(
+        [
+          `${id} collected and closed (generation ${settled.generation}).`,
+          `lifecycle: ${lifecycle}`,
+          `turns: ${settled.turns}`,
+          `elapsed_ms: ${elapsedMs}`,
+          reportStatusLine(reportStatus, parsedReport),
+          settled.killReason ? `kill_reason: ${settled.killReason}` : undefined,
+          settled.errorText ? `error: ${settled.errorText}` : undefined,
+          `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
+          `cleanup: ${closeMessage}${reapPid != null ? "; process tree reaped" : ""}`,
+          "",
+          "--- result ---",
+          bound.text || "(empty)",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        lifecycle === "failed",
+        {
+          worker: workerView(worker),
+          collected: true,
+          reportStatus,
+          parsedReport,
+          elapsedMs,
+        },
+      );
+    },
   });
 
   pi.registerTool({

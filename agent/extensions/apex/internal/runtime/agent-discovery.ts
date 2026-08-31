@@ -127,6 +127,10 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
     agents: ["machinist"],
     text: "independent separable non-visual implementation slices to machinist",
   },
+  {
+    agents: ["stevedore"],
+    text: "integrated lint, typecheck, test, build, git, and shipping work to stevedore",
+  },
 ];
 
 export function routingHint(agents: Map<string, AgentDef>): string {

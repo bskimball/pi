@@ -1,4 +1,4 @@
-// amp-task: Apex Missions task tool and subagent execution.
+// amp-task: synchronous task tool and subagent execution.
 //
 // One `task` tool. Each task spawns a separate `pi --mode json -p` process with
 // the agent's system prompt from ~/.pi/agent/agents/*.md. Child lifetime remains
@@ -200,10 +200,20 @@ function updateStatus(ctx: ExtensionContext) {
   } catch {}
 }
 
-// Full Pi subprocesses are expensive on Windows. Three is a pressure valve for
-// the sync path (it queues); async live workers are capped separately at 5.
-// Larger sync fan-outs simply queue.
-const MAX_CONCURRENT = 3;
+// Full Pi subprocesses are expensive on Windows. The shared bounded setting
+// defaults to three; larger fan-outs queue rather than oversubscribing.
+const DEFAULT_MAX_CONCURRENT = 3;
+const MAX_CONFIGURED_CONCURRENT = 8;
+export function configuredSyncTaskLimit(
+  raw = process.env.PI_TASK_MAX_WORKERS,
+): number {
+  if (!raw?.trim()) return DEFAULT_MAX_CONCURRENT;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= MAX_CONFIGURED_CONCURRENT
+    ? value
+    : DEFAULT_MAX_CONCURRENT;
+}
+const MAX_CONCURRENT = configuredSyncTaskLimit();
 let running = 0;
 
 interface SlotWaiter {

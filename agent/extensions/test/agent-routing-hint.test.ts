@@ -46,7 +46,7 @@ describe("routing hint", () => {
   it("describes the real catalog without naming an agent that does not exist", () => {
     const agents = discoverAgents();
     const description = agentParamDescription(agents);
-    for (const name of ["artisan", "inspector", "scribe", "machinist"]) {
+    for (const name of ["artisan", "inspector", "scribe", "machinist", "stevedore"]) {
       assert.ok(agents.has(name), `expected ${name} in the shipped catalog`);
       assert.ok(description.includes(name));
     }

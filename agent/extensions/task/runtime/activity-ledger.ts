@@ -1,7 +1,7 @@
-// activity-ledger: shared tool-activity bookkeeping for Missions and Workers.
+// activity-ledger: shared tool-activity bookkeeping for Tasks and Workers.
 //
 // Pure state machine. Call sites supply tool names/summaries from JSON-line or
-// RPC events; idle/kill policy lives elsewhere (worker-runtime / mission execute).
+// RPC events; idle/kill policy lives elsewhere in each owning task runtime.
 
 export type ActivityStatus = "running" | "completed" | "error";
 

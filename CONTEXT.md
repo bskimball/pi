@@ -70,8 +70,8 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 |--|---------------------------|------------------------------|
 | Tool interface | `task` | `task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`, `task_chain` |
 | Child | `pi --mode json -p` subprocess | session-backed RPC worker |
-| Runtime | local mission host | `task/runtime/worker-runtime.ts` control plane |
-| Presentation | bounded Task-owned mission card | bounded Task-owned worker activity |
+| Runtime | local subprocess host | `task/runtime/worker-runtime.ts` control plane |
+| Presentation | bounded Task-owned activity card | bounded Task-owned worker activity |
 
 Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
