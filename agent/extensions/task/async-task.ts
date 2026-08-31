@@ -141,6 +141,7 @@ import {
   type WorkerStatusSnapshot,
 } from "./runtime/worker-status.ts";
 import {
+  defaultReportSchemaForAgent,
   evaluateSettledReport,
   parseReportSchema,
   reportInstruction,
@@ -148,6 +149,7 @@ import {
   type ReportStatus,
 } from "./runtime/report-schema.ts";
 import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
+import { findDuplicateTask } from "./runtime/task-start-policy.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -1585,7 +1587,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
       "Use the synchronous task tool when you need one final report before continuing.",
       "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
-      "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
+      "Close accepted read-only workers immediately. Keep an implementation writer open through its first required Oracle review so one correction can use task_send mode=prompt; then close it.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
     parameters: Type.Object({
@@ -1633,17 +1635,32 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
+      const cwd = resolveCwd(params.cwd, ctx.cwd);
+      const cwdError = validateCwd(cwd);
+      if (cwdError) return textResult(cwdError, true);
+
+      const duplicate = findDuplicateTask(
+        workers.values(),
+        params.agent,
+        cwd,
+        params.prompt,
+      );
+      if (duplicate) {
+        return textResult(
+          `Duplicate task_start rejected: ${duplicate.id} is already live for agent "${params.agent}" in "${cwd}" with the same normalized work order. Use task_wait, task_send, or task_close on the existing worker.`,
+          true,
+          { duplicateOf: duplicate.id },
+        );
+      }
       if (!runtime.canStart()) {
         return textResult(
           `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a settled worker with task_close to free a slot. If none are settled, task_wait the oldest live one, then task_close it. Persistent workers count against the cap until closed.`,
           true,
         );
       }
-      const cwd = resolveCwd(params.cwd, ctx.cwd);
-      const cwdError = validateCwd(cwd);
-      if (cwdError) return textResult(cwdError, true);
 
-      let reportSchema = params.reportSchema?.trim() || undefined;
+      const callerReportSchema = params.reportSchema?.trim() || undefined;
+      let reportSchema = callerReportSchema ?? defaultReportSchemaForAgent(params.agent);
       if (reportSchema) {
         const parsed = parseReportSchema(reportSchema);
         if (parsed.error) {
@@ -1685,7 +1702,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         `model: ${worker.model ?? "default"}`,
         `generation: ${worker.generation}`,
         contextNote,
-        reportSchema ? "reportSchema: requested" : undefined,
+        callerReportSchema
+          ? "reportSchema: requested"
+          : reportSchema
+            ? "reportSchema: default"
+            : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
         `After useful independent work, one task_wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}s). task_status is for blockers, not polling.`,

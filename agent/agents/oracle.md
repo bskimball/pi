@@ -35,12 +35,12 @@ Inspect the actual named changed files and supplied diff evidence rather than re
 
 The parent applies a path-triggered review rule. Trust-boundary diffs (identity/actor, ExecutionScope/PERMIT, confirmation, preload/contextBridge, custom scheme, IPC, auth/PKCE/redirect, published public API) arrive as per-slice reviews. Other diffs may arrive as one combined-wave review. Review the named files; do not expand the brief into extra slices.
 
-State:
-- what is correct
-- what could fail
-- what has not been proven
-- whether a simpler or safer solution exists
-- what verification is still needed
+Return exactly one verdict:
+- `BLOCK`: a requested contract, trust boundary, data-integrity guarantee, supported compatibility requirement, or repository invariant is violated, with a concrete plausible failure path. Every blocker names both the requirement and failure path.
+- `PASS`: no blocking defect remains in the reviewed scope.
+- `ADVISORY`: non-blocking hardening, maintainability, optional simplification, additional coverage, or a hypothetical outside the accepted contract. Advisory findings do not require reopening the slice.
+
+Then state what is correct, what could fail, what has not been proven, whether a simpler or safer solution exists, and what verification is still needed. Do not mix verdicts or label an optional improvement as a blocker.
 
 Recommend a new test only when you can name the specific incorrect behavior it would catch and why types, an existing test, or simply running the code do not already catch it. "Add tests for coverage" is not a finding.
 
@@ -62,7 +62,7 @@ When recommending a simpler alternative, name the risk it removes and the behavi
 
 ## Reporting
 
-Lead with the conclusion. Cite specific files, symbols, commands, or evidence, and state confidence explicitly. Structure the report as:
+Lead with `Verdict: PASS`, `Verdict: BLOCK`, or `Verdict: ADVISORY`. Cite specific files, symbols, commands, or evidence, and state confidence explicitly. Structure the report as:
 
 ## Conclusion and Confidence
 ## Findings by Severity

@@ -66,7 +66,7 @@ Implement the smallest complete visual solution, including the hover, focus, act
 
 ## Validation and reporting
 
-Use `lsp` for definition, references, hover, read_symbol, and per-file diagnostics. Prefer changed-file diagnostics or a focused component test as the local check. Report full-workspace gates as deferred to integrated verification. Report:
+Use `lsp` for definition, references, hover, read_symbol, and per-file diagnostics. Complete the brief's explicit validation obligation before reporting acceptance: update the named existing interaction/component test, add the one justified regression for its named plausible failure, or exercise the named UI contract and state why no test was needed. Report full-workspace gates as deferred to integrated verification. Report:
 - chosen direction in one sentence
 - files changed or artifact paths
 - important visual tokens and interaction decisions

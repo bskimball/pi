@@ -14,6 +14,66 @@ export interface ReportSchema {
   required?: unknown;
 }
 
+const IMPLEMENTATION_AGENTS = new Set(["artisan", "machinist", "scribe"]);
+const REVIEW_AGENTS = new Set(["oracle"]);
+
+export const DEFAULT_IMPLEMENTATION_REPORT_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    outcome: {
+      type: "string",
+      enum: ["completed", "blocked", "partial", "no_change"],
+    },
+    acceptanceMet: { type: "boolean" },
+    filesChanged: { type: "string" },
+    validation: { type: "string" },
+    blockers: { type: "string" },
+    recommendedNextStep: { type: "string" },
+  },
+  required: [
+    "outcome",
+    "acceptanceMet",
+    "filesChanged",
+    "validation",
+    "blockers",
+    "recommendedNextStep",
+  ],
+});
+
+export const DEFAULT_REVIEW_REPORT_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["PASS", "BLOCK", "ADVISORY"] },
+    materialFindingCount: { type: "number" },
+    findings: { type: "string" },
+    requiredCorrection: { type: "string" },
+  },
+  required: [
+    "verdict",
+    "materialFindingCount",
+    "findings",
+    "requiredCorrection",
+  ],
+});
+
+export const DEFAULT_INSPECTION_REPORT_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["PASS", "FAIL", "BLOCKED"] },
+    findings: { type: "string" },
+    evidence: { type: "string" },
+    blocker: { type: "string" },
+  },
+  required: ["verdict", "findings", "evidence", "blocker"],
+});
+
+export function defaultReportSchemaForAgent(agent: string): string | undefined {
+  if (IMPLEMENTATION_AGENTS.has(agent)) return DEFAULT_IMPLEMENTATION_REPORT_SCHEMA;
+  if (REVIEW_AGENTS.has(agent)) return DEFAULT_REVIEW_REPORT_SCHEMA;
+  if (agent === "inspector") return DEFAULT_INSPECTION_REPORT_SCHEMA;
+  return undefined;
+}
+
 export interface ReportValidation {
   status: ReportStatus;
   parsed: Record<string, unknown> | null;

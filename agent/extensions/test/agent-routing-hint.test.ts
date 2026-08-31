@@ -91,6 +91,14 @@ describe("routing hint", () => {
     assert.match(system, /lead normally runs lint, format checks, typechecks, tests, and builds directly/);
     assert.match(system, /If you delegate multiple truly independent units, you SHOULD dispatch them in parallel/);
     assert.match(system, /MUST NOT serialize truly independent delegated units merely to keep one specialist in flight/);
+    assert.match(system, /Default to one active writer for a feature vertical or shared runtime contract/);
+    assert.match(system, /close one milestone before opening the next/);
+    assert.match(system, /"Continue" resumes and finishes the current open milestone/);
+    assert.match(system, /Every implementation brief must state one validation obligation/);
+    assert.match(system, /One correction cycle/);
+    assert.match(system, /task_send mode=prompt/);
+    assert.match(system, /Never start a third writer attempt automatically/);
+    assert.match(system, /`ADVISORY` means non-blocking hardening/);
     assert.match(system, /injected mode card — Regular or Orchestrate, never both/);
     assert.match(promptCommands, /Specialist-first, not never-inline/);
     assert.match(promptCommands, /control-plane work/);
@@ -112,6 +120,8 @@ describe("routing hint", () => {
     assert.doesNotMatch(system, /inspector only when the user explicitly requests it/);
     assert.doesNotMatch(system, /drive browser checks yourself/);
     assert.match(asyncTask, /Multi-file, long-running, or frontend work may remain inline in regular mode/);
+    assert.match(asyncTask, /Duplicate task_start rejected/);
+    assert.match(asyncTask, /defaultReportSchemaForAgent/);
     assert.doesNotMatch(asyncTask, /delegates all multi-file implementation/);
     assert.match(advisor, /In regular mode, only when the user explicitly requests advisor consultation/);
     assert.match(inspector, /Live-page checks route here in regular and orchestrate modes/);

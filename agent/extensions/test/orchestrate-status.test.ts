@@ -137,7 +137,9 @@ describe("mode cards", () => {
     assert.match(active.systemPrompt, /at most 3 live at once/);
     assert.match(active.systemPrompt, /rolling pipeline instead of lockstep waves/);
     assert.match(active.systemPrompt, /Merge or `worktree remove` a writer tree only after that tree's Oracle returns/);
-    assert.match(active.systemPrompt, /do not hold a settled worker for possible follow-up/);
+    assert.match(active.systemPrompt, /Keep a reviewed implementation writer open through its first Oracle verdict/);
+    assert.match(active.systemPrompt, /send one bounded corrective generation to that same writer/);
+    assert.match(active.systemPrompt, /do not dispatch a third writer attempt automatically/);
     assert.match(active.systemPrompt, /A clean sequential merge does not get a second Oracle review/);
     assert.match(active.systemPrompt, /reaches acceptance stops/);
     assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
@@ -164,6 +166,13 @@ describe("mode cards", () => {
     assert.match(active.systemPrompt, /writer-local checks and a passing Stevedore gate are not that proof/);
     assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
     assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
+    assert.match(active.systemPrompt, /Default to one active writer for a feature vertical or shared runtime contract/);
+    assert.match(active.systemPrompt, /one writer owns shared types, schemas, migrations, and IPC contracts/);
+    assert.match(active.systemPrompt, /Oracle returns exactly one verdict/);
+    assert.match(active.systemPrompt, /Advisory findings do not reopen a slice/);
+    assert.match(active.systemPrompt, /Do not open a subsequent stage, ADR, or capability/);
+    assert.match(active.systemPrompt, /A bare `continue` resumes and closes the current milestone/);
+    assert.match(active.systemPrompt, /Every writer brief names its slice-local verification obligation/);
     assert.match(active.systemPrompt, /does not by itself trigger a consult/);
     assert.match(active.systemPrompt, /specialists return conflicting findings/);
     assert.doesNotMatch(active.systemPrompt, /do not implement code inline in this mode/);

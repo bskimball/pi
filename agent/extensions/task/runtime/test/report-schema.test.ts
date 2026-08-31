@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  DEFAULT_INSPECTION_REPORT_SCHEMA,
+  DEFAULT_IMPLEMENTATION_REPORT_SCHEMA,
+  DEFAULT_REVIEW_REPORT_SCHEMA,
+  defaultReportSchemaForAgent,
   evaluateSettledReport,
   extractLastReportFence,
   parseReportSchema,
@@ -102,5 +106,55 @@ describe("report-schema", () => {
       }),
     );
     assert.match(parsed.error ?? "", /enum must be an array of strings/);
+  });
+
+  it("selects structured defaults for writers and reviewers", () => {
+    assert.equal(
+      defaultReportSchemaForAgent("machinist"),
+      DEFAULT_IMPLEMENTATION_REPORT_SCHEMA,
+    );
+    assert.equal(defaultReportSchemaForAgent("artisan"), DEFAULT_IMPLEMENTATION_REPORT_SCHEMA);
+    assert.equal(defaultReportSchemaForAgent("scribe"), DEFAULT_IMPLEMENTATION_REPORT_SCHEMA);
+    assert.equal(defaultReportSchemaForAgent("oracle"), DEFAULT_REVIEW_REPORT_SCHEMA);
+    assert.equal(defaultReportSchemaForAgent("inspector"), DEFAULT_INSPECTION_REPORT_SCHEMA);
+    assert.equal(defaultReportSchemaForAgent("scout"), undefined);
+  });
+
+  it("validates the default implementation report contract", () => {
+    const result = evaluateSettledReport(
+      '```report\n{"outcome":"completed","acceptanceMet":true,"filesChanged":"a.ts","validation":"focused test passed","blockers":"none","recommendedNextStep":"review"}\n```',
+      DEFAULT_IMPLEMENTATION_REPORT_SCHEMA,
+    );
+    assert.equal(result.status, "ok");
+    assert.equal(result.parsed?.acceptanceMet, true);
+  });
+
+  it("validates the default review verdict contract", () => {
+    const result = evaluateSettledReport(
+      '```report\n{"verdict":"ADVISORY","materialFindingCount":0,"findings":"optional simplification","requiredCorrection":"none"}\n```',
+      DEFAULT_REVIEW_REPORT_SCHEMA,
+    );
+    assert.equal(result.status, "ok");
+    assert.equal(result.parsed?.verdict, "ADVISORY");
+  });
+
+  it("rejects an unclassified review verdict", () => {
+    const result = evaluateSettledReport(
+      '```report\n{"verdict":"FAIL","materialFindingCount":1,"findings":"broken","requiredCorrection":"fix"}\n```',
+      DEFAULT_REVIEW_REPORT_SCHEMA,
+    );
+    assert.equal(result.status, "invalid");
+    assert.match(result.error ?? "", /enum/);
+  });
+
+  it("accepts Inspector failure and blocked verdicts", () => {
+    for (const verdict of ["FAIL", "BLOCKED"]) {
+      const result = evaluateSettledReport(
+        `\`\`\`report\n{"verdict":"${verdict}","findings":"changed path did not pass","evidence":"browser observation","blocker":"CDP unavailable or UI regression"}\n\`\`\``,
+        DEFAULT_INSPECTION_REPORT_SCHEMA,
+      );
+      assert.equal(result.status, "ok");
+      assert.equal(result.parsed?.verdict, verdict);
+    }
   });
 });
