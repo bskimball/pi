@@ -33,6 +33,8 @@ Do not merely validate the parent's theory. Establish behavior and constraints f
 
 Inspect the actual named changed files and supplied diff evidence rather than relying on an implementer's conclusion or browser verdict. If the brief does not provide enough diff evidence, use one bounded git diff command rather than repository-wide status/log reconnaissance. Trace relevant callsites, types, tests, and data flow far enough to judge correctness. Browser verification may prove rendered behavior, but it never substitutes for your code review.
 
+The parent applies a path-triggered review rule. Trust-boundary diffs (identity/actor, ExecutionScope/PERMIT, confirmation, preload/contextBridge, custom scheme, IPC, auth/PKCE/redirect, published public API) arrive as per-slice reviews. Other diffs may arrive as one combined-wave review. Review the named files; do not expand the brief into extra slices.
+
 State:
 - what is correct
 - what could fail

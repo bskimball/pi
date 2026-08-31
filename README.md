@@ -10,7 +10,7 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
-- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky, delegation-only mode; `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
+- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, and MCP scripting.
 - **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
@@ -142,15 +142,15 @@ Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](a
 
 ### `/orchestrate`
 
-Switches the current session between the default inline-capable lead and a **strict orchestrator** that delegates all detailed work to sub-agents. With orchestration on, the lead still decomposes the request, writes work orders, integrates results, verifies the outcome, and answers the user, but it does not edit files or perform broad implementation work itself.
+Switches the current session between Regular mode (inline-by-default) and a **strict orchestrator** that is specialist-first for substantial slices. Exactly one mode card is injected per turn — Regular or Orchestrate, never both. With orchestration on, the lead still decomposes the request, writes work orders, integrates results, verifies the outcome, and answers the user. Control-plane work stays inline: status, continue, launch/stop the app, a single known-path edit, and glue after a returned slice. Substantial implementation still goes to specialists.
 
 ```text
-/orchestrate on       # enable strict delegation
-/orchestrate off      # restore the normal inline allowance
+/orchestrate on       # enable specialist-first orchestration
+/orchestrate off      # restore Regular-mode inline-by-default
 /orchestrate          # toggle the current mode
 ```
 
-Strict mode routes implementation to Machinist or Artisan, broad discovery to Scout, and routine post-implementation browser verification to Inspector. It also requires fresh-eyes review and applies the normal delivery gates without inline exemptions. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
+Strict mode routes substantial implementation to Machinist or Artisan, broad discovery to Scout, and routine post-implementation browser verification to Inspector. Truly independent slices can launch in parallel (isolated writer worktrees, at most 3 live writers). Path-triggered Oracle review still applies. If the session is sticky-on and the turn is control-plane, the lead should offer `/orchestrate off` once rather than forcing a specialist pipeline. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
 
 ### `/browser`
 

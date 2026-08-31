@@ -72,6 +72,10 @@ describe("routing hint", () => {
 
   it("protects the regular-mode inline and specialist thresholds", () => {
     const system = fs.readFileSync(path.resolve("agent/SYSTEM.md"), "utf8");
+    const promptCommands = fs.readFileSync(
+      path.resolve("agent/extensions/prompt-commands.ts"),
+      "utf8",
+    );
     const asyncTask = fs.readFileSync(
       path.resolve("agent/extensions/task/async-task.ts"),
       "utf8",
@@ -81,16 +85,23 @@ describe("routing hint", () => {
     const oracle = fs.readFileSync(path.resolve("agent/agents/oracle.md"), "utf8");
     const stevedore = fs.readFileSync(path.resolve("agent/agents/stevedore.md"), "utf8");
 
-    assert.match(system, /Keep coherent implementation in the main model even when it is long-running, multi-file, or frontend-heavy/);
-    assert.match(system, /machinist only for an independent separable non-visual implementation slice/);
-    assert.match(system, /advisor only when the user explicitly asks for it in regular mode/);
+    assert.match(promptCommands, /Keep coherent implementation in the main model even when it is long-running, multi-file, or frontend-heavy/);
+    assert.match(system, /Use \*\*machinist\*\* only for an independent separable non-visual implementation slice/);
+    assert.match(promptCommands, /advisor only when the user explicitly asks for it in regular mode/);
     assert.match(system, /lead normally runs lint, format checks, typechecks, tests, and builds directly/);
+    assert.match(system, /If you delegate multiple truly independent units, you SHOULD dispatch them in parallel/);
+    assert.match(system, /MUST NOT serialize truly independent delegated units merely to keep one specialist in flight/);
+    assert.match(system, /injected mode card — Regular or Orchestrate, never both/);
+    assert.match(promptCommands, /Specialist-first, not never-inline/);
+    assert.match(promptCommands, /control-plane work/);
+    assert.match(promptCommands, /If you dispatch multiple subagents, you SHOULD use that fan-out for truly independent units in parallel/);
+    assert.match(promptCommands, /When multiple writer slices are already truly independent, you SHOULD launch them in parallel up to that cap/);
     assert.match(system, /diagnostic experiment plan/);
     assert.match(system, /Do not send Oracle an open-ended brief that combines diagnosis with exhaustive experiment execution/);
     assert.match(system, /Live-page checks go to inspector/);
     assert.match(system, /Live-page checks go to inspector in both modes/);
     assert.match(system, /That pass is one Inspector dispatch/);
-    assert.match(system, /The lead implements; Inspector and Oracle verify/);
+    assert.match(system, /Implementation is done by the lead or by specialists per the injected mode card; Inspector and Oracle verify/);
     assert.match(system, /The implementer does not close review/);
     assert.match(system, /Oracle reviews the actual diff/);
     assert.match(system, /regardless of diff size/);
@@ -104,6 +115,8 @@ describe("routing hint", () => {
     assert.doesNotMatch(asyncTask, /delegates all multi-file implementation/);
     assert.match(advisor, /In regular mode, only when the user explicitly requests advisor consultation/);
     assert.match(inspector, /Live-page checks route here in regular and orchestrate modes/);
+    assert.match(inspector, /Do not use 29300 for that pass/);
+    assert.match(inspector, /Named project endpoint/);
     assert.doesNotMatch(inspector, /only when the user explicitly requests Inspector/);
     assert.doesNotMatch(inspector, /materially helps/);
     assert.match(oracle, /stop before that mechanical expansion/);
