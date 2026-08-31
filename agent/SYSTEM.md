@@ -153,7 +153,7 @@ Scope belongs in the work order, not a budget cap: a starved agent loses its rep
 
 ## Delegating well
 
-Prefer `task_start` plus a single `task_wait`; never poll. Use `task_status` only for a blocker (waiting UI, suspected stall, kill reason), `task_abort` to stop a worker, `task_close` when done, and `task_rebind` after a parent crash before treating a historical handle as live. A worker holds a live slot until closed, so `task_close` as soon as the report is accepted; respawn rather than parking a settled worker for possible follow-up. A timeout or interrupted wait leaves the worker running: do independent work, then wait again.
+Prefer `task_start` plus a single `task_wait` (default 600s; 900s machinist/artisan; 1200s oracle/stevedore/inspector); never poll. Use `task_status` only for a blocker (waiting UI, suspected stall, kill reason), `task_abort` to stop a worker, `task_close` when done, and `task_rebind` after a parent crash before treating a historical handle as live. A worker holds a live slot until closed, so `task_close` as soon as the report is accepted; respawn rather than parking a settled worker for possible follow-up. A timeout or interrupted wait leaves the worker running: same-generation re-wait is blocked for 60s after a timeout unless `timeoutSec` is longer than the last wait, so do independent lead work, advance another slice, wait a different worker, or pass a longer `timeoutSec` to reconnect.
 
 Use the synchronous `task` tool only for short, deterministic, genuinely one-shot bounded results where no steering or follow-up will be needed. It cannot be steered once dispatched, so its work order must be complete and self-contained; issue multiple `task` calls in one message for parallel read-only bounded lookups.
 

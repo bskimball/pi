@@ -7,8 +7,9 @@ import {
   formatAge,
 } from "./text-bounds.ts";
 import { isLiveLifecycle, type WorkerLifecycle } from "./worker-runtime.ts";
+import { WAIT_DEFAULT_TIMEOUT_SEC } from "./wait-policy.ts";
 
-export const WAIT_DEFAULT_TIMEOUT_SEC = 600;
+export { WAIT_DEFAULT_TIMEOUT_SEC };
 export const SETTLED_RESULT_CHARS = 12_000;
 export const SETTLED_RESULT_LINES = 120;
 

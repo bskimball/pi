@@ -131,7 +131,12 @@ import {
   type StatusKind,
 } from "./presentation/status-view.ts";
 import { noticeComponent, type NoticeRow } from "./presentation/notice-view.ts";
-import { waitForSnapshot } from "./runtime/wait-policy.ts";
+import {
+  evaluateRewait,
+  formatRewaitRejected,
+  resolveWaitTimeoutSec,
+  waitForSnapshot,
+} from "./runtime/wait-policy.ts";
 import {
   WAIT_DEFAULT_TIMEOUT_SEC,
   SETTLED_RESULT_CHARS,
@@ -277,6 +282,9 @@ interface Worker extends RuntimeEventWorker {
   parsedReport: Record<string, unknown> | null;
   reportStatus: ReportStatus;
   reportError?: string;
+  lastWaitTimeoutAt?: number;
+  lastWaitTimeoutSec?: number;
+  lastWaitGeneration?: number;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1584,7 +1592,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     promptGuidelines: [
       "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
       "Use the synchronous task tool when you need one final report before continuing.",
-      "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
+      "After task_start, do useful independent work, then one task_wait. Default wait is 600s, 900s for machinist/artisan, 1200s for oracle/stevedore/inspector. A timeout heartbeat is not a poll cue: do independent work before waiting the same generation again.",
       "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
@@ -1688,7 +1696,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         reportSchema ? "reportSchema: requested" : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
-        `After useful independent work, one task_wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}s). task_status is for blockers, not polling.`,
+        `After useful independent work, one task_wait (default ${resolveWaitTimeoutSec({ agent: worker.agent })}s for ${worker.agent}). task_status is for blockers, not polling.`,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
@@ -2469,15 +2477,15 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     name: "task_wait",
     label: "Task Wait",
     description:
-      `Wait until the worker's current generation settles (agent_settled). Default timeout ${WAIT_DEFAULT_TIMEOUT_SEC}s. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
+      `Wait until the worker's current generation settles (agent_settled). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
     promptSnippet:
-      "Wait for an async RPC worker generation to settle; default 600s; timeout returns a compact heartbeat, not a poll cue.",
+      "Wait for an async RPC worker generation to settle; agent-aware default; timeout is a heartbeat, not a poll cue.",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start." }),
       timeoutSec: Type.Optional(
         Type.Number({
           description:
-            `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). On timeout, returns a compact heartbeat without killing.`,
+            "Max seconds to wait (default 600s, or the agent wait default). On timeout, returns a compact heartbeat without killing. During the 60s post-timeout cooldown, same-generation re-wait requires a longer timeoutSec.",
         }),
       ),
       generation: Type.Optional(
@@ -2511,28 +2519,10 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           { worker: workerView(worker), waiting: false },
         );
       }
-      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
-      const timeoutMs = Math.max(0, timeoutSec) * 1000;
-
-      const notifyLive = () => {
-        if (worker.hasPinnedSurface) return;
-        const text = formatWorkerWaitStatus(worker);
-        onUpdate?.({
-          content: [{ type: "text", text }],
-          details: { worker: workerView(worker), waiting: true },
-        });
-      };
-      if (!worker.hasPinnedSurface) {
-        worker.subscribers = worker.subscribers || new Set();
-        worker.subscribers.add(notifyLive);
-        notifyLive();
-      }
-
       const alreadySettled =
         (worker.lifecycle === "settled" || worker.lifecycle === "failed") &&
         worker.generation === targetGen;
       if (alreadySettled) {
-        worker.subscribers?.delete(notifyLive);
         const bound = formatSettledResult(
           worker.latestResult || worker.latestAssistantText,
         );
@@ -2556,6 +2546,47 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             reportStatus: worker.reportStatus,
           },
         );
+      }
+      const rewait = evaluateRewait({
+        generation: targetGen,
+        lastWaitTimeoutAt: worker.lastWaitTimeoutAt,
+        lastWaitTimeoutSec: worker.lastWaitTimeoutSec,
+        lastWaitGeneration: worker.lastWaitGeneration,
+        explicitTimeoutSec: params.timeoutSec,
+      });
+      if (!rewait.allow) {
+        return textResult(
+          [
+            formatRewaitRejected({
+              id,
+              remainingSec: rewait.remainingSec,
+              lastTimeoutSec: rewait.lastTimeoutSec,
+            }),
+            "",
+            formatWorkerWaitStatus(worker),
+          ].join("\n"),
+          true,
+          { worker: workerView(worker), waiting: false },
+        );
+      }
+      const timeoutSec = resolveWaitTimeoutSec({
+        explicitTimeoutSec: params.timeoutSec,
+        agent: worker.agent,
+      });
+      const timeoutMs = Math.max(0, timeoutSec) * 1000;
+
+      const notifyLive = () => {
+        if (worker.hasPinnedSurface) return;
+        const text = formatWorkerWaitStatus(worker);
+        onUpdate?.({
+          content: [{ type: "text", text }],
+          details: { worker: workerView(worker), waiting: true },
+        });
+      };
+      if (!worker.hasPinnedSurface) {
+        worker.subscribers = worker.subscribers || new Set();
+        worker.subscribers.add(notifyLive);
+        notifyLive();
       }
 
       const snapshot = await waitWorkerGeneration(
@@ -2584,6 +2615,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       if (snapshot === "timeout") {
+        worker.lastWaitTimeoutAt = Date.now();
+        worker.lastWaitTimeoutSec = timeoutSec;
+        worker.lastWaitGeneration = targetGen;
         let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
         try {
           contextUsage = ctx.getContextUsage();
@@ -2599,7 +2633,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           ...textResult(
             [
               `${id} wait timed out after ${timeoutSec}s (generation ${targetGen} still ${worker.lifecycle}).`,
-              "Worker was NOT killed.",
+              "Worker was NOT killed. Timeout is not a poll cue and does not abort the worker.",
+              "Do independent lead work, start another independent slice, or wait a different live worker before re-waiting this generation.",
+              "Same-generation re-wait is blocked for 60s unless timeoutSec is longer than this wait.",
               contextCheckpointNote(contextUsage, reserveTokens),
               "",
               formatWorkerWaitStatus(worker),
@@ -2708,7 +2744,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           // cannot express. Render them as receipts rather than detached alert
           // text so a routine wait timeout does not look like a warning.
           if (isTimeout && !isError) {
-            const timeout = finiteNumber(context.args?.timeoutSec) ?? WAIT_DEFAULT_TIMEOUT_SEC;
+            const timeout =
+              finiteNumber(context.args?.timeoutSec) ??
+              resolveWaitTimeoutSec({ agent: view?.agent ?? pinned?.agent });
             return new WidthText((width) => [
               receiptHeader(theme, width, {
                 tool: "task_wait",
