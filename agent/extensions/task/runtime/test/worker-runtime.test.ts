@@ -134,8 +134,8 @@ describe("WorkerRuntime control plane", () => {
     assert.equal(MAX_LIVE_WORKERS, 3);
     const cap = (n: number) =>
       Array.from({ length: n }, () => ({ countsTowardCap: true, closed: false }));
-    assert.equal(canStartWorker(cap(4)), true);
-    assert.equal(canStartWorker(cap(5)), false);
+    assert.equal(canStartWorker(cap(2)), true);
+    assert.equal(canStartWorker(cap(3)), false);
     const holding = [
       { countsTowardCap: true, closed: false },
       { countsTowardCap: true, closed: false },
