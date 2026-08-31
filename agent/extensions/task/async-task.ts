@@ -1,7 +1,7 @@
 // async-task: session-backed bidirectional RPC sub-agents.
 //
 // Tools: task_start, task_rebind, task_status, task_list, task_send, task_wait,
-//        task_collect, task_abort, task_close, task_reply, task_chain.
+//        task_abort, task_close, task_reply, task_chain.
 // Additive to the existing synchronous `task` tool in amp-task.ts.
 // Plain bounded tool results only — no custom TUI renderers or render timers.
 
@@ -131,7 +131,12 @@ import {
   type StatusKind,
 } from "./presentation/status-view.ts";
 import { noticeComponent, type NoticeRow } from "./presentation/notice-view.ts";
-import { waitForSnapshot } from "./runtime/wait-policy.ts";
+import {
+  evaluateRewait,
+  formatRewaitRejected,
+  resolveWaitTimeoutSec,
+  waitForSnapshot,
+} from "./runtime/wait-policy.ts";
 import {
   WAIT_DEFAULT_TIMEOUT_SEC,
   SETTLED_RESULT_CHARS,
@@ -141,7 +146,6 @@ import {
   type WorkerStatusSnapshot,
 } from "./runtime/worker-status.ts";
 import {
-  defaultReportSchemaForAgent,
   evaluateSettledReport,
   parseReportSchema,
   reportInstruction,
@@ -149,7 +153,6 @@ import {
   type ReportStatus,
 } from "./runtime/report-schema.ts";
 import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
-import { findDuplicateTask } from "./runtime/task-start-policy.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -161,21 +164,12 @@ const STATUS_LINE_CAP = 40;
 const DEFAULT_TIMEOUT_SEC = 1800;
 const DEFAULT_MAX_TURNS = 30;
 
-const WRITER_MAX_GENERATIONS = 2;
-const WRITER_AGENTS = new Set([
-  "artisan",
-  "machinist",
-  "scribe",
-  "picasso",
-  "stevedore",
-]);
-
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
-  "Use task_collect for the final bounded report and cleanup; task_wait/task_send when follow-up remains likely.";
+  "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
 /** Result preview budget in the settlement notice payload. */
 const NOTICE_RESULT_CAP = 400;
 
@@ -188,7 +182,6 @@ const EXCLUDED_CHILD_TOOLS = [
   "task_list",
   "task_send",
   "task_wait",
-  "task_collect",
   "task_abort",
   "task_close",
   "task_reply",
@@ -287,9 +280,11 @@ interface Worker extends RuntimeEventWorker {
   lastPersistedSidecar?: { lifecycle: WorkerLifecycle; generation: number; pid?: number };
   reportSchema?: string;
   parsedReport: Record<string, unknown> | null;
-  writerFollowUpReservations: number;
   reportStatus: ReportStatus;
   reportError?: string;
+  lastWaitTimeoutAt?: number;
+  lastWaitTimeoutSec?: number;
+  lastWaitGeneration?: number;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1267,7 +1262,6 @@ export default function (pi: ExtensionAPI) {
       generationStartedAt: params.rebind?.updatedAt ?? Date.now(),
       reportSchema: params.rebind ? undefined : params.reportSchema,
       parsedReport: null,
-      writerFollowUpReservations: 0,
       reportStatus: params.rebind
         ? "none-requested"
         : params.reportSchema?.trim()
@@ -1598,8 +1592,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     promptGuidelines: [
       "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
       "Use the synchronous task tool when you need one final report before continuing.",
-      "After task_start, do useful independent work, then one task_wait (default 600s). Do not call task_status immediately after start or a wait timeout.",
-      "Close accepted read-only workers immediately. Keep an implementation writer open through its first required Oracle review so one correction can use task_send mode=prompt; then close it.",
+      "After task_start, do useful independent work, then one task_wait. Default wait is 600s, 900s for machinist/artisan, 1200s for oracle/stevedore/inspector. A timeout heartbeat is not a poll cue: do independent work before waiting the same generation again.",
+      "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
     parameters: Type.Object({
@@ -1647,32 +1641,17 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
-      const cwd = resolveCwd(params.cwd, ctx.cwd);
-      const cwdError = validateCwd(cwd);
-      if (cwdError) return textResult(cwdError, true);
-
-      const duplicate = findDuplicateTask(
-        workers.values(),
-        params.agent,
-        cwd,
-        params.prompt,
-      );
-      if (duplicate) {
-        return textResult(
-          `Duplicate task_start rejected: ${duplicate.id} is already live for agent "${params.agent}" in "${cwd}" with the same normalized work order. Use task_wait, task_send, or task_close on the existing worker.`,
-          true,
-          { duplicateOf: duplicate.id },
-        );
-      }
       if (!runtime.canStart()) {
         return textResult(
           `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a settled worker with task_close to free a slot. If none are settled, task_wait the oldest live one, then task_close it. Persistent workers count against the cap until closed.`,
           true,
         );
       }
+      const cwd = resolveCwd(params.cwd, ctx.cwd);
+      const cwdError = validateCwd(cwd);
+      if (cwdError) return textResult(cwdError, true);
 
-      const callerReportSchema = params.reportSchema?.trim() || undefined;
-      let reportSchema = callerReportSchema ?? defaultReportSchemaForAgent(params.agent);
+      let reportSchema = params.reportSchema?.trim() || undefined;
       if (reportSchema) {
         const parsed = parseReportSchema(reportSchema);
         if (parsed.error) {
@@ -1714,14 +1693,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         `model: ${worker.model ?? "default"}`,
         `generation: ${worker.generation}`,
         contextNote,
-        callerReportSchema
-          ? "reportSchema: requested"
-          : reportSchema
-            ? "reportSchema: default"
-            : undefined,
+        reportSchema ? "reportSchema: requested" : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
-        `After useful independent work, one task_wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}s). task_status is for blockers, not polling.`,
+        `After useful independent work, one task_wait (default ${resolveWaitTimeoutSec({ agent: worker.agent })}s for ${worker.agent}). task_status is for blockers, not polling.`,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
@@ -2249,7 +2224,7 @@ Modes:
 - follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
 - prompt: Only allowed when the worker is settled; starts a new generation.
 
-Truthfully reports queueing semantics. Steer is never mid-inference interrupt. Writer agents allow one corrective prompt generation; after generation 2, collect/close and dispatch a narrower fresh slice.`,
+Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     promptSnippet:
       "Send steer/follow_up (or settled prompt) to an async RPC worker.",
     parameters: Type.Object({
@@ -2311,16 +2286,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
             true,
             sendDetails("rejected", `worker is ${worker.lifecycle}; prompt needs settled`),
-          );
-        }
-        if (
-          WRITER_AGENTS.has(worker.agent) &&
-          worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
-        ) {
-          return textResult(
-            `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
-            true,
-            sendDetails("rejected", "writer generation limit reached"),
           );
         }
         try {
@@ -2412,17 +2377,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
       }
 
       // follow_up
-      if (
-        WRITER_AGENTS.has(worker.agent) &&
-        worker.generation + worker.writerFollowUpReservations >= WRITER_MAX_GENERATIONS
-      ) {
-        return textResult(
-          `${id} has reached the ${WRITER_MAX_GENERATIONS}-generation writer limit. Collect and close it, then dispatch a narrower fresh slice with the remaining acceptance criteria.`,
-          true,
-          sendDetails("rejected", "writer generation limit reached"),
-        );
-      }
-      if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations += 1;
       try {
         const response = await worker.client.request(
           { type: "follow_up", message },
@@ -2438,7 +2392,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
             30_000,
           );
           if (!fallback.success) {
-            if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
             return textResult(
               `${id} follow_up rejected: ${fallback.error ?? response.error ?? "unknown"}`,
               true,
@@ -2466,7 +2419,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
           sendDetails("queued", "delivered after the worker settles"),
         );
       } catch (error) {
-        if (WRITER_AGENTS.has(worker.agent)) worker.writerFollowUpReservations -= 1;
         const msg = error instanceof Error ? error.message : String(error);
         return textResult(`${id} follow_up failed: ${msg}`, true, sendDetails("failed", msg));
       }
@@ -2525,15 +2477,15 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
     name: "task_wait",
     label: "Task Wait",
     description:
-      `Wait until the worker's current generation settles (agent_settled). Default timeout ${WAIT_DEFAULT_TIMEOUT_SEC}s. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
+      `Wait until the worker's current generation settles (agent_settled). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
     promptSnippet:
-      "Wait for an async RPC worker generation to settle; default 600s; timeout returns a compact heartbeat, not a poll cue.",
+      "Wait for an async RPC worker generation to settle; agent-aware default; timeout is a heartbeat, not a poll cue.",
     parameters: Type.Object({
       id: Type.String({ description: "Worker id from task_start." }),
       timeoutSec: Type.Optional(
         Type.Number({
           description:
-            `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). On timeout, returns a compact heartbeat without killing.`,
+            "Max seconds to wait (default 600s, or the agent wait default). On timeout, returns a compact heartbeat without killing. During the 60s post-timeout cooldown, same-generation re-wait requires a longer timeoutSec.",
         }),
       ),
       generation: Type.Optional(
@@ -2567,28 +2519,10 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
           { worker: workerView(worker), waiting: false },
         );
       }
-      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
-      const timeoutMs = Math.max(0, timeoutSec) * 1000;
-
-      const notifyLive = () => {
-        if (worker.hasPinnedSurface) return;
-        const text = formatWorkerWaitStatus(worker);
-        onUpdate?.({
-          content: [{ type: "text", text }],
-          details: { worker: workerView(worker), waiting: true },
-        });
-      };
-      if (!worker.hasPinnedSurface) {
-        worker.subscribers = worker.subscribers || new Set();
-        worker.subscribers.add(notifyLive);
-        notifyLive();
-      }
-
       const alreadySettled =
         (worker.lifecycle === "settled" || worker.lifecycle === "failed") &&
         worker.generation === targetGen;
       if (alreadySettled) {
-        worker.subscribers?.delete(notifyLive);
         const bound = formatSettledResult(
           worker.latestResult || worker.latestAssistantText,
         );
@@ -2612,6 +2546,47 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
             reportStatus: worker.reportStatus,
           },
         );
+      }
+      const rewait = evaluateRewait({
+        generation: targetGen,
+        lastWaitTimeoutAt: worker.lastWaitTimeoutAt,
+        lastWaitTimeoutSec: worker.lastWaitTimeoutSec,
+        lastWaitGeneration: worker.lastWaitGeneration,
+        explicitTimeoutSec: params.timeoutSec,
+      });
+      if (!rewait.allow) {
+        return textResult(
+          [
+            formatRewaitRejected({
+              id,
+              remainingSec: rewait.remainingSec,
+              lastTimeoutSec: rewait.lastTimeoutSec,
+            }),
+            "",
+            formatWorkerWaitStatus(worker),
+          ].join("\n"),
+          true,
+          { worker: workerView(worker), waiting: false },
+        );
+      }
+      const timeoutSec = resolveWaitTimeoutSec({
+        explicitTimeoutSec: params.timeoutSec,
+        agent: worker.agent,
+      });
+      const timeoutMs = Math.max(0, timeoutSec) * 1000;
+
+      const notifyLive = () => {
+        if (worker.hasPinnedSurface) return;
+        const text = formatWorkerWaitStatus(worker);
+        onUpdate?.({
+          content: [{ type: "text", text }],
+          details: { worker: workerView(worker), waiting: true },
+        });
+      };
+      if (!worker.hasPinnedSurface) {
+        worker.subscribers = worker.subscribers || new Set();
+        worker.subscribers.add(notifyLive);
+        notifyLive();
       }
 
       const snapshot = await waitWorkerGeneration(
@@ -2640,6 +2615,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
       }
 
       if (snapshot === "timeout") {
+        worker.lastWaitTimeoutAt = Date.now();
+        worker.lastWaitTimeoutSec = timeoutSec;
+        worker.lastWaitGeneration = targetGen;
         let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
         try {
           contextUsage = ctx.getContextUsage();
@@ -2655,7 +2633,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
           ...textResult(
             [
               `${id} wait timed out after ${timeoutSec}s (generation ${targetGen} still ${worker.lifecycle}).`,
-              "Worker was NOT killed.",
+              "Worker was NOT killed. Timeout is not a poll cue and does not abort the worker.",
+              "Do independent lead work, start another independent slice, or wait a different live worker before re-waiting this generation.",
+              "Same-generation re-wait is blocked for 60s unless timeoutSec is longer than this wait.",
               contextCheckpointNote(contextUsage, reserveTokens),
               "",
               formatWorkerWaitStatus(worker),
@@ -2764,7 +2744,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
           // cannot express. Render them as receipts rather than detached alert
           // text so a routine wait timeout does not look like a warning.
           if (isTimeout && !isError) {
-            const timeout = finiteNumber(context.args?.timeoutSec) ?? WAIT_DEFAULT_TIMEOUT_SEC;
+            const timeout =
+              finiteNumber(context.args?.timeoutSec) ??
+              resolveWaitTimeoutSec({ agent: view?.agent ?? pinned?.agent });
             return new WidthText((width) => [
               receiptHeader(theme, width, {
                 tool: "task_wait",
@@ -2804,104 +2786,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt. W
         return renderWorkerCard(view, theme, options.expanded, waiting);
       },
       }),
-  });
-
-  pi.registerTool({
-    name: "task_collect",
-    label: "Task Collect",
-    description:
-      `Wait for an async worker's current generation, return its full bounded report, then close and reap it. Use this for the final collection when no follow-up generation is expected. Timeout or parent interruption leaves the worker running and open.`,
-    promptSnippet:
-      "Final async collection: wait for settlement, return report, close worker, release slot.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Worker id from task_start." }),
-      timeoutSec: Type.Optional(
-        Type.Number({
-          description: `Max seconds to wait (default ${WAIT_DEFAULT_TIMEOUT_SEC}). Timeout leaves the worker running.`,
-        }),
-      ),
-      generation: Type.Optional(
-        Type.Number({
-          description: "Specific current generation to collect (defaults to current).",
-        }),
-      ),
-    }),
-    executionMode: "sequential",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      syncFleetWidget(ctx);
-      const id = params.id?.trim();
-      if (!id) return textResult("id is required.", true);
-      const worker = workerByHandle(id);
-      if (!worker) return textResult(`Unknown worker "${id}".`, true);
-      if (worker.closed || worker.lifecycle === "closed") {
-        return textResult(`${id} is already closed.`, true);
-      }
-      const targetGen = params.generation ?? worker.generation;
-      if (targetGen !== worker.generation) {
-        return textResult(
-          `${id} is currently generation ${worker.generation}; generation ${targetGen} is not retained.`,
-          true,
-        );
-      }
-      const timeoutSec = params.timeoutSec ?? WAIT_DEFAULT_TIMEOUT_SEC;
-      const startedAt = Date.now();
-      const settled =
-        worker.lifecycle === "settled" || worker.lifecycle === "failed"
-          ? generationSnapshot(worker)
-          : await waitWorkerGeneration(
-              worker,
-              targetGen,
-              Math.max(0, timeoutSec) * 1000,
-              signal,
-            );
-      if (settled === "interrupted") {
-        return textResult(
-          `${id} collection interrupted; worker continues and remains open.`,
-          false,
-          { worker: workerView(worker), collected: false },
-        );
-      }
-      if (settled === "timeout") {
-        return textResult(
-          `${id} collection timed out after ${timeoutSec}s; worker continues and remains open.`,
-          false,
-          { worker: workerView(worker), collected: false },
-        );
-      }
-      const lifecycle = worker.lifecycle;
-      const reportStatus = worker.reportStatus;
-      const parsedReport = worker.parsedReport;
-      const bound = formatSettledResult(settled.resultText);
-      const reapPid = worker.pid ?? worker.client?.pid;
-      const closeMessage = closeWorker(worker, "task_collect", "sync");
-      const elapsedMs = Math.max(0, Date.now() - startedAt);
-      return textResult(
-        [
-          `${id} collected and closed (generation ${settled.generation}).`,
-          `lifecycle: ${lifecycle}`,
-          `turns: ${settled.turns}`,
-          `elapsed_ms: ${elapsedMs}`,
-          reportStatusLine(reportStatus, parsedReport),
-          settled.killReason ? `kill_reason: ${settled.killReason}` : undefined,
-          settled.errorText ? `error: ${settled.errorText}` : undefined,
-          `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
-          `cleanup: ${closeMessage}${reapPid != null ? "; process tree reaped" : ""}`,
-          "",
-          "--- result ---",
-          bound.text || "(empty)",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        lifecycle === "failed",
-        {
-          worker: workerView(worker),
-          collected: true,
-          reportStatus,
-          parsedReport,
-          elapsedMs,
-        },
-      );
-    },
   });
 
   pi.registerTool({

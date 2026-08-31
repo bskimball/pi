@@ -177,8 +177,11 @@ describe("mode cards", () => {
     assert.match(active.systemPrompt, /specialists return conflicting findings/);
     assert.doesNotMatch(active.systemPrompt, /do not implement code inline in this mode/);
     assert.doesNotMatch(active.systemPrompt, /tiny integration fixes/);
-    assert.match(active.systemPrompt, /one `task_wait` \(default 600s\) per worker/);
+    assert.match(active.systemPrompt, /one `task_wait` per worker/);
+    assert.match(active.systemPrompt, /900s machinist\/artisan; 1200s oracle\/stevedore\/inspector/);
     assert.match(active.systemPrompt, /Do not poll with `task_status`\/`task_wait` loops/);
+    assert.match(active.systemPrompt, /Timeout is not a poll cue and does not kill the worker/);
+    assert.match(active.systemPrompt, /blocked for 60s unless `timeoutSec` is longer than the last wait/);
     assert.match(active.systemPrompt, /Keep returned evidence compact/);
 
     await state.orchestrate("off");
