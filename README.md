@@ -10,7 +10,7 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
-- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky, delegation-only mode; `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`.
+- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky, delegation-only mode; `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, and MCP scripting.
 - **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
@@ -136,7 +136,7 @@ A single on-demand `lsp` tool for semantic navigation (`definition`, `references
 
 `/browser`, `/deploy`, and `/orchestrate` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, and sticky session-mode switching, respectively — that plain prompt-template expansion can't do. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
 
-Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
+Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md), [`/simplify`](agent/prompts/simplify.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
 `agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
 

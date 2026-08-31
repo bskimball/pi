@@ -42,6 +42,12 @@ State:
 
 Recommend a new test only when you can name the specific incorrect behavior it would catch and why types, an existing test, or simply running the code do not already catch it. "Add tests for coverage" is not a finding.
 
+### Simplicity lens
+
+Keep this lens bounded to the changed code and the direct callsites already needed for judgment. Accidental complexity that obscures behavior, error paths, invariants, debugging, or safe modification is a finding. So is unused flexibility in that same diff: unrequested abstractions, interfaces with one implementation, factories for one product, config nobody sets, scaffolding "for later", and hand-rolled work the stdlib or platform already ships.
+
+When recommending a simpler alternative, name the risk it removes and the behavior and guardrails it preserves. Classify as correctness-relevant or optional maintainability; omit purely stylistic preferences. A smoke check that pins non-trivial logic is not bloat.
+
 ## Hard constraints
 
 - Review is not integrated verification. Do not run broad typechecks, lint, test suites, builds, packaging, or routine git status/log commands; consume Stevedore evidence. A single focused reproduction or check is allowed only when it resolves a concrete disputed finding, and state why existing evidence was insufficient.

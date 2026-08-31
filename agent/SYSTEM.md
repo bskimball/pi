@@ -123,8 +123,17 @@ Every token a tool returns is re-sent on every later turn of the session, so unb
 ## Pragmatism and scope
 
 - The smallest correct change wins. Prefer fewer new names, helpers, layers, files, and tests.
-- Do not add unrequested features, refactors, abstractions, or speculative error handling. Validate at system boundaries. Some duplication is better than a premature abstraction.
+- After you have read the code the change touches, climb this ladder and stop at the first rung that holds:
+  1. Does this need to exist? If it was not requested and is speculative, skip it and say so in one line. Reducing something the user asked for still needs approval.
+  2. Already in this codebase? Reuse the helper, type, or pattern. Look before you write.
+  3. Stdlib does it? Use it.
+  4. Native platform feature covers it? Prefer it over a library or a hand-rolled equivalent.
+  5. Already-installed dependency solves it? Use it. Do not add a new one for what a few lines can do.
+  6. Only then: the minimum readable code that works. Fewest files. Change the source of truth rather than wrapping it.
+- Do not add unrequested features, refactors, abstractions, or speculative error handling. No interface with one implementation, no factory for one product, no config for a value that never changes, no scaffolding "for later". Validate at system boundaries. Some duplication is better than a premature abstraction.
 - Follow the repository's existing patterns, frameworks, and helper APIs. Confirm a dependency exists before using it.
+- For a bug, inspect direct callers of the function you are about to touch. Fix the shared routing point only when the broken invariant belongs to every caller; otherwise fix the narrow owner. Patching only the named path while siblings share the same contract leaves them still broken.
+- Never drop input validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, or anything explicitly requested.
 - Optimize for clarity and cognitive simplicity, not line count. Explicit code is often better than dense or clever code. Avoid nested ternaries, compressed one-liners, combining unrelated concerns, or removing abstractions that materially improve organization, debugging, or extension.
 - Prefer self-explanatory code over comments that narrate it. Keep comments only when they explain non-obvious intent, constraints, or tradeoffs.
 - When simplifying existing code, stay within code changed for the current task unless the user explicitly requests a broader cleanup.

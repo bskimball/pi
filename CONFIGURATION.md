@@ -448,8 +448,10 @@ default.
 | `${@:N:L}` | `L` args starting at N |
 
 The filename (minus `.md`) becomes the `/name` command. This repo currently
-has one prompt template, `agent/prompts/brainstorm.md`
-(`argument-hint: "[topic]"`, uses `${@:-the current task}`); `/browser` and
+has two prompt templates: `agent/prompts/brainstorm.md`
+(`argument-hint: "[topic]"`, uses `${@:-the current task}`) and
+`agent/prompts/simplify.md` (`argument-hint: "[path or current diff]"`, uses
+`${@:-the current uncommitted diff}`); `/browser` and
 `/deploy` are **not** prompt templates — they are native commands registered
 in code by `agent/extensions/prompt-commands.ts` via `pi.registerCommand()`
 because they need executable pre-steps (git snapshotting, a deterministic

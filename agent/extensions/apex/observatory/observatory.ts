@@ -84,6 +84,7 @@ const PREFERRED = [
   "deploy",
   "plan",
   "review",
+  "simplify",
   "explore",
   "explain",
   "research",
