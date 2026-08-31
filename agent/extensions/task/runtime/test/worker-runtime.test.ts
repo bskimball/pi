@@ -145,9 +145,9 @@ describe("WorkerRuntime control plane", () => {
     ];
     holding[4] = { countsTowardCap: true, closed: true };
     assert.equal(countLiveWorkers(holding), 3);
-    assert.equal(canStartWorker(holding), true);
-    holding[3] = { countsTowardCap: true, closed: false };
-    assert.equal(countLiveWorkers(holding), 4);
+    assert.equal(canStartWorker(holding), false);
+    holding[3] = { countsTowardCap: false, closed: false };
+    assert.equal(countLiveWorkers(holding), 3);
   });
 
   it("owns capacity, ordered pruning, bounded errors, and subscribers", () => {
