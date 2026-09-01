@@ -21,6 +21,7 @@ import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts
 import { installPowerShellReceipts } from "./internal/presentation/powershell-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
+import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
@@ -216,6 +217,7 @@ export default function (pi: ExtensionAPI) {
   installMemoryReceipts();
   installPowerShellReceipts();
   installWebSearchReceipts();
+  installWorktreeReceipts();
   installBgProcessReceipts(pi);
 
   // Regenerate the sequence for every run so retries and subsequent turns do
