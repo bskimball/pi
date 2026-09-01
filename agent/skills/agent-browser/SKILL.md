@@ -1,13 +1,15 @@
 ---
 name: agent-browser
-description: Browser automation for click, fill, login, and screenshot on a live page through the dedicated authenticated debug Chrome on classic CDP port 29300. This is the same pathway as /browser. Public-page lookup uses web_search and fetch_content instead. Never launch or select another browser/profile.
+description: Live-page interaction instructions for the dedicated authenticated debug Chrome. For natural-language requests involving clicks, forms, login state, screenshots, or browser inspection, call browser_attach first and then follow the returned custom prompt. Public-page lookup uses web_search and fetch_content instead.
 ---
 
 # Dedicated Browser Automation
 
 This Pi installation has one supported browser target: the dedicated authenticated debug Chrome on classic CDP port **29300**, using profile `~/.pi/browser/chrome-profile`.
 
-The `/browser` command performs the preferred deterministic connect step before handing browser work to the agent. When browser work arrives as a natural-language request instead, reproduce that same pathway with the helper below. Slash commands are user-facing pathways; do not emit `/browser` as text and assume it will execute. If the current prompt already contains a successful `[Connect step]`, do not connect again; use its result and continue with interaction.
+For a natural-language browser request, call `browser_attach` before any `agent-browser` command. The tool runs the same deterministic attach and custom browser-prompt pathway as `/browser`. If the current prompt or tool result already contains a successful `[Connect step]`, the browser is attached; continue with interaction instead of attaching again.
+
+The `/browser` command is the user-facing shortcut for the same pathway. Slash commands are not model-callable, so use `browser_attach` rather than emitting `/browser` as text.
 
 ## Connect first
 
@@ -43,10 +45,10 @@ Expected mode is `classic` on port `29300`. If classic HTTP discovery is unavail
 
 ## Interaction workflow
 
-1. If no successful `[Connect step]` is present, connect and inspect tabs with the helper; otherwise use the supplied connection result.
+1. For a natural-language browser request, call `browser_attach` unless a successful `[Connect step]` is already present.
 2. Run `agent-browser --cdp 29300 snapshot -i` to obtain element refs.
 3. Interact with refs using commands that retain `--cdp 29300`.
 4. Re-snapshot after navigation or meaningful DOM changes.
 5. Ask before destructive or externally consequential actions such as logout, deletion, purchase, message send, or irreversible submit.
 
-Use the upstream `agent-browser` command set as needed, but the dedicated-target rules above override generic examples that omit `--cdp 29300` or create a separate browser session.
+Use the upstream `agent-browser` command set only after the attach step. The dedicated-target rules above override generic examples that omit `--cdp 29300` or create a separate browser session.

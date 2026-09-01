@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Type } from "typebox";
 import {
   getAgentDir,
   stripFrontmatter,
@@ -455,19 +456,22 @@ function buildDeployPrompt(args: string, snapshot: string): string {
   ].join("\n");
 }
 
-export async function runBrowserCommand(
+type BrowserAttachResult =
+  | { ok: true; prompt: string; skillLoaded: boolean }
+  | { ok: false; message: string };
+
+async function attachBrowser(
   pi: ExtensionAPI,
   args: string,
-  ctx: ExtensionContext,
-): Promise<void> {
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<BrowserAttachResult> {
   const helperPath = resolveBrowserConnectHelper();
   if (!existsSync(helperPath)) {
-    notify(
-      ctx,
-      "Browser helper is missing from the agent bin directory.",
-      "error",
-    );
-    return;
+    return {
+      ok: false,
+      message: "Browser helper is missing from the agent bin directory.",
+    };
   }
 
   const extraArgs = args.trim() ? [args.trim()] : [];
@@ -478,37 +482,87 @@ export async function runBrowserCommand(
       process.execPath,
       [helperPath, "connect", ...extraArgs],
       {
-        cwd: ctx.cwd,
+        cwd,
         timeout: BROWSER_CONNECT_TIMEOUT_MS,
-        signal: ctx.signal,
+        signal,
       },
     );
   } catch (error) {
     const message = redactPersonalPaths(
       error instanceof Error ? error.message : String(error),
     );
-    notify(ctx, `Browser connect failed: ${message}`, "error");
-    return;
+    return { ok: false, message: `Browser connect failed: ${message}` };
   }
+
   const durationMs = Date.now() - started;
   const connectBlock = buildConnectBlock(result, durationMs);
-
   if (result.code !== 0 || result.killed) {
     const stderr = boundText(
       redactPersonalPaths(result.stderr),
       800,
       12,
     ).text;
-    notify(
-      ctx,
-      `Browser connect failed (exit ${result.code}${result.killed ? ", killed" : ""}).${stderr ? ` ${stderr}` : ""}`,
-      "error",
-    );
-    return;
+    return {
+      ok: false,
+      message: `Browser connect failed (exit ${result.code}${result.killed ? ", killed" : ""}).${stderr ? ` ${stderr}` : ""}`,
+    };
   }
 
   const skill = loadSkillBody(pi, "agent-browser");
-  if (!skill) {
+  const skillBlock = skill
+    ? wrapSkill("agent-browser", skill.body)
+    : undefined;
+  return {
+    ok: true,
+    prompt: buildBrowserPrompt(args, connectBlock, skillBlock),
+    skillLoaded: skill !== undefined,
+  };
+}
+
+export function registerBrowserAttachTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "browser_attach",
+    label: "Browser Attach",
+    description:
+      "Attach to the dedicated authenticated debug Chrome and return the custom browser handoff prompt. Use this FIRST for natural-language requests that require live-page interaction, clicks, form filling, login state, screenshots, or browser inspection. Do not invoke agent-browser directly before this tool. A prompt that already contains a successful [Connect step] is already attached.",
+    promptSnippet:
+      "For live-page browser work, call browser_attach first; then follow its returned custom browser prompt.",
+    parameters: Type.Object({
+      task: Type.Optional(Type.String({
+        description: "The browser task or HTTP(S) URL from the user.",
+      })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const task = typeof params.task === "string" ? params.task : "";
+      const attached = await attachBrowser(
+        pi,
+        task,
+        ctx?.cwd ?? process.cwd(),
+        signal,
+      );
+      return {
+        content: [{
+          type: "text" as const,
+          text: attached.ok ? attached.prompt : attached.message,
+        }],
+        details: {},
+        isError: !attached.ok,
+      };
+    },
+  });
+}
+
+export async function runBrowserCommand(
+  pi: ExtensionAPI,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const attached = await attachBrowser(pi, args, ctx.cwd, ctx.signal);
+  if (!attached.ok) {
+    notify(ctx, attached.message, "error");
+    return;
+  }
+  if (!attached.skillLoaded) {
     notify(
       ctx,
       "agent-browser skill not found; continuing without skill injection.",
@@ -516,15 +570,11 @@ export async function runBrowserCommand(
     );
   }
 
-  const skillBlock = skill
-    ? wrapSkill("agent-browser", skill.body)
-    : undefined;
-  const prompt = buildBrowserPrompt(args, connectBlock, skillBlock);
   handOffHidden(
     pi,
     ctx,
     "browser-handoff",
-    prompt,
+    attached.prompt,
     "Browser prompt queued as follow-up.",
   );
   notify(ctx, "Browser attached; handed off to agent.", "info");

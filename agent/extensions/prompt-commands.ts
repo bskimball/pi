@@ -7,6 +7,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  registerBrowserAttachTool,
   runBrowserCommand,
   runDeployCommand,
 } from "./prompt-commands/featured-commands.ts";
@@ -88,6 +89,7 @@ function syncOrchestrateStatus(ctx: ExtensionContext, enabled: boolean): void {
 }
 
 export default function (pi: ExtensionAPI): void {
+  registerBrowserAttachTool(pi);
   let orchestrateMode = false;
   const footerPatchReady = Promise.resolve(false);
 
