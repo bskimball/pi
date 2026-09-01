@@ -1,6 +1,6 @@
 // builtin-tools: Apex adapters for Pi's built-in bash/write tools, plus the
-// Apex-owned todo tools. pi-better-edit owns read/edit; optional receipt slots
-// are attached through the presentation gate.
+// Apex-owned todo tools. pi-better-edit owns read/edit execute; Apex skins
+// those tools through the headless receipt wrap in better-edit-receipt.ts.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -234,7 +234,7 @@ export function installBuiltinTools(pi: ExtensionAPI): void {
  * The session todo dock (tools, above-editor panel, alt+t / `/todos`, alt+a /
  * `/agents`) must be installed even under PI_APEX_UI=0. The dock keeps an
  * unstyled plain todo widget mounted in that mode; styled chrome and triggers
- * drop out. pi-better-edit owns read/edit registration.
+ * drop out. pi-better-edit owns read/edit execute; Apex attaches receipts.
  */
 export function installApexOwnedTools(pi: ExtensionAPI): void {
   installTodoTools(pi);

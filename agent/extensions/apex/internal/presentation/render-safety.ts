@@ -5,9 +5,11 @@
 // and image protocol sequences), but coerce invalid line/text values and contain
 // failures in the text renderers that consume model and extension payloads.
 
+import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
 import { writeLastPhase } from "../runtime/last-phase.ts";
 import { installSegmenterSafety } from "../runtime/segmenter-safety.ts";
+import { safeTruncateToWidth } from "./safe-text-layout.ts";
 import { reportRenderFailure } from "./tool-receipt.ts";
 
 // Native Intl.Segmenter can terminate Node on Windows while pi-tui breaks very
@@ -16,11 +18,16 @@ import { reportRenderFailure } from "./tool-receipt.ts";
 // that pathological segmenter path. U+200B is consumed as a break point by the
 // TUI and does not change model-facing/session content.
 export const SAFE_UNBROKEN_RUN_CHARS = 256;
+/** Hard cap for Text/Markdown payloads. Ctrl+O expand-all must not dump
+ * unbounded tool output into the compositor. */
+export const SAFE_TEXT_MAX_CHARS = 16_384;
+export const SAFE_RENDER_MAX_LINES = 240;
 const BREAK_OPPORTUNITY = "\u200b";
 
 const INSTALL_KEY = Symbol.for("pi.apex.renderSafety.installed");
 const HOST_WRAP_KEY = Symbol.for("pi.apex.renderSafety.hostWrapped");
 const HOST_DO_RENDER_KEY = Symbol.for("pi.apex.renderSafety.hostDoRenderWrapped");
+const TOOL_RENDER_KEY = Symbol.for("pi.apex.renderSafety.toolRenderWrapped");
 const HOST_PAINTERS_KEY = Symbol.for("pi.apex.renderSafety.hostPainters");
 const PHASE_STATE_KEY = Symbol.for("pi.apex.renderSafety.phaseState");
 const GUARDED_TEXT = Symbol.for("pi.apex.renderSafety.guardedText");
@@ -114,7 +121,7 @@ export function normalizeRenderedLines(value: unknown): string[] {
         break;
       }
     }
-    if (clean) return value as string[];
+    if (clean) return boundRenderedRows(value as string[]);
   }
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
   const lines: string[] = [];
@@ -126,7 +133,53 @@ export function normalizeRenderedLines(value: unknown): string[] {
     }
     lines.push(...text.replace(/\r\n?/g, "\n").split("\n"));
   }
-  return lines;
+  return boundRenderedRows(lines);
+}
+
+function boundRenderedRows(rows: string[]): string[] {
+  const limited =
+    rows.length <= SAFE_RENDER_MAX_LINES
+      ? rows
+      : [
+          ...rows.slice(0, SAFE_RENDER_MAX_LINES),
+          `... ${rows.length - SAFE_RENDER_MAX_LINES} more lines truncated for display`,
+        ];
+  let charTruncated = false;
+  const out: string[] = [];
+  for (const row of limited) {
+    if (row.length <= SAFE_TEXT_MAX_CHARS) {
+      out.push(row);
+      continue;
+    }
+    charTruncated = true;
+    const candidate =
+      row.length > SAFE_TEXT_MAX_CHARS + 256
+        ? row.slice(0, SAFE_TEXT_MAX_CHARS + 256)
+        : row;
+    out.push(safeTruncateToWidth(candidate, SAFE_TEXT_MAX_CHARS));
+  }
+  if (charTruncated) {
+    const last = out.at(-1) ?? "";
+    if (last.endsWith("more lines truncated for display")) {
+      out[out.length - 1] = last.replace(
+        /truncated for display$/,
+        "and output truncated for display",
+      );
+    } else if (last !== "... output truncated for display") {
+      if (out.length < SAFE_RENDER_MAX_LINES + 1) {
+        out.push("... output truncated for display");
+      } else {
+        out[out.length - 1] = "... output truncated for display";
+      }
+    }
+  }
+  return out;
+}
+
+function boundDisplayText(value: unknown): string {
+  const text = safeString(value);
+  if (text.length <= SAFE_TEXT_MAX_CHARS) return text;
+  return `${text.slice(0, SAFE_TEXT_MAX_CHARS)}\n... output truncated for display`;
 }
 
 interface TextLikePrototype {
@@ -200,7 +253,7 @@ export function guardUnbrokenRuns(value: unknown): string {
 
 function applyGuardedText(instance: TextLikeInstance, value: unknown): boolean {
   if (typeof value === "string" && instance[GUARDED_TEXT] === value) return false;
-  const raw = safeString(value);
+  const raw = boundDisplayText(value);
   const guarded = guardUnbrokenRuns(raw);
   instance[RAW_TEXT] = raw;
   instance[GUARDED_TEXT] = guarded;
@@ -304,6 +357,27 @@ function wrapHostDoRender(Host: { prototype: object }): void {
   proto[HOST_DO_RENDER_KEY] = true;
 }
 
+function wrapToolExecutionRender(): void {
+  const proto = ToolExecutionComponent.prototype as unknown as {
+    render?: (width: number) => unknown;
+    [key: symbol]: boolean | undefined;
+  };
+  if (proto[TOOL_RENDER_KEY]) return;
+  const found = findOwnMethod(proto, "render");
+  if (!found) return;
+  const original = found.method as (this: unknown, width: number) => unknown;
+  (found.target as { render: (width: number) => string[] }).render =
+    function renderSafeTool(this: unknown, width: number): string[] {
+      try {
+        return normalizeRenderedLines(original.call(this, width));
+      } catch (error) {
+        reportRenderFailure("tool-execution", error);
+        return ["[tool output unavailable]"];
+      }
+    };
+  proto[TOOL_RENDER_KEY] = true;
+}
+
 function installTextBoundary(): void {
   const prototype = Text.prototype as unknown as TextLikePrototype;
   const originalSetText = prototype.setText;
@@ -311,14 +385,15 @@ function installTextBoundary(): void {
 
   prototype.setText = function setSafeText(value: string): void {
     const instance = this as unknown as TextLikeInstance;
+    const raw = boundDisplayText(value);
     if (
       instance.text === instance[GUARDED_TEXT] &&
-      (value === instance[RAW_TEXT] || value === instance[GUARDED_TEXT])
+      (raw === instance[RAW_TEXT] || raw === instance[GUARDED_TEXT])
     ) {
       return;
     }
-    const guarded = guardUnbrokenRuns(value);
-    instance[RAW_TEXT] = value;
+    const guarded = guardUnbrokenRuns(raw);
+    instance[RAW_TEXT] = raw;
     instance[GUARDED_TEXT] = guarded;
     originalSetText.call(this, guarded);
   };
@@ -342,14 +417,15 @@ function installMarkdownBoundary(): void {
 
   prototype.setText = function setSafeMarkdown(value: string): void {
     const instance = this as unknown as TextLikeInstance;
+    const raw = boundDisplayText(value);
     if (
       instance.text === instance[GUARDED_TEXT] &&
-      (value === instance[RAW_TEXT] || value === instance[GUARDED_TEXT])
+      (raw === instance[RAW_TEXT] || raw === instance[GUARDED_TEXT])
     ) {
       return;
     }
-    const guarded = guardUnbrokenRuns(value);
-    instance[RAW_TEXT] = value;
+    const guarded = guardUnbrokenRuns(raw);
+    instance[RAW_TEXT] = raw;
     instance[GUARDED_TEXT] = guarded;
     originalSetText.call(this, guarded);
   };
@@ -373,6 +449,7 @@ export function installRenderSafety(): void {
   wrapHostPainter(TuiMainScreen);
   wrapHostDoRender(TuiAltScreen);
   wrapHostDoRender(TuiMainScreen);
+  wrapToolExecutionRender();
   if (state[INSTALL_KEY]) return;
   installTextBoundary();
   installMarkdownBoundary();

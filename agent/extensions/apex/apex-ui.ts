@@ -14,6 +14,7 @@ import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
 import { installBgProcessReceipts } from "./internal/presentation/bg-process-receipt.ts";
+import { installBetterEditReceipts } from "./internal/presentation/better-edit-receipt.ts";
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
@@ -191,7 +192,7 @@ function applyRandomWorkingIndicator(
 export default function (pi: ExtensionAPI) {
   // Apex-owned todo tools and panel register before the presentation opt-out:
   // PI_APEX_UI=0 removes custom receipts and styled chrome, never the tools.
-  // pi-better-edit owns read/edit registration.
+  // pi-better-edit owns read/edit execute; Apex skins their receipts below.
   installApexOwnedTools(pi);
 
   // PI_APEX_UI=0 disables Apex styling, chrome, and custom render hooks. A
@@ -212,6 +213,7 @@ export default function (pi: ExtensionAPI) {
   // receipts here because first registration wins the whole tool and Apex
   // cannot import those extensions. Settlement notices use a message renderer.
   installFffReceipts();
+  installBetterEditReceipts();
   installGraphifyReceipts();
   installLspReceipts();
   installMemoryReceipts();
