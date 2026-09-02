@@ -110,100 +110,20 @@ describe("mode cards", () => {
     const previousSubagent = process.env.PI_SUBAGENT;
     delete process.env.PI_SUBAGENT;
     try {
-    const state = loadExtension();
-    const regular = (await state.beforeAgentStart()) as { systemPrompt: string };
-    assert.ok(regular.systemPrompt.startsWith("base prompt"));
-    assert.ok(regular.systemPrompt.endsWith(REGULAR_SYSTEM_BLOCK));
-    assert.doesNotMatch(regular.systemPrompt, /Strict orchestrator mode \(active\)/);
-    assert.match(regular.systemPrompt, /Keep coherent implementation in the main model even when it is long-running, multi-file, or frontend-heavy/);
-    assert.match(regular.systemPrompt, /advisor only when the user explicitly asks for it in regular mode/);
-    assert.match(regular.systemPrompt, /lead normally runs lint, format checks, typechecks, tests, and builds directly/);
-    assert.match(regular.systemPrompt, /Handle ordinary frontend implementation and visual fixes inline/);
-    assert.match(regular.systemPrompt, /If you dispatch multiple subagents, you SHOULD use that fan-out for truly independent units in parallel/);
+      const state = loadExtension();
+      const regular = (await state.beforeAgentStart()) as { systemPrompt: string };
+      assert.equal(regular.systemPrompt, `base prompt${REGULAR_SYSTEM_BLOCK}`);
 
-    await state.orchestrate("on");
-    const active = (await state.beforeAgentStart()) as {
-      systemPrompt: string;
-    };
-    assert.ok(active.systemPrompt.startsWith("base prompt"));
-    assert.ok(active.systemPrompt.endsWith(ORCHESTRATE_SYSTEM_BLOCK));
-    assert.doesNotMatch(active.systemPrompt, /Regular mode \(active\)/);
-    assert.match(active.systemPrompt, /Delegate implementation units/);
-    assert.match(active.systemPrompt, /Specialist-first, not never-inline/);
-    assert.match(active.systemPrompt, /control-plane work/);
-    assert.match(active.systemPrompt, /act yourself or dispatch ONE worker/);
-    assert.match(active.systemPrompt, /offer `\/orchestrate off` once/);
-    assert.match(active.systemPrompt, /When implementation needs repository scanning/);
-    assert.match(active.systemPrompt, /Parallel writers require isolated worktrees/);
-    assert.match(active.systemPrompt, /fan out up to 5/);
-    assert.match(active.systemPrompt, /When multiple writer slices are already truly independent, you SHOULD launch them in parallel up to that cap/);
-    assert.match(active.systemPrompt, /at most 3 live at once/);
-    assert.match(active.systemPrompt, /rolling pipeline instead of lockstep waves/);
-    assert.match(active.systemPrompt, /Merge or `worktree remove` a writer tree only after that tree's Oracle returns/);
-    assert.match(active.systemPrompt, /Keep a reviewed implementation writer open through its first Oracle verdict/);
-    assert.match(active.systemPrompt, /send one bounded corrective generation to that same writer/);
-    assert.match(active.systemPrompt, /do not dispatch a third writer attempt automatically/);
-    assert.match(active.systemPrompt, /A clean sequential merge does not get a second Oracle review/);
-    assert.match(active.systemPrompt, /reaches acceptance stops/);
-    assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
-    assert.match(active.systemPrompt, /Premium-context containment/);
-    assert.match(active.systemPrompt, /Artisan and Advisor are premium-context specialists/);
-    assert.match(active.systemPrompt, /bounded creative judgment or strategic decisions/);
-    assert.match(active.systemPrompt, /single visually cohesive slice/);
-    assert.match(active.systemPrompt, /settled-design, known-path ordinary UI implementation inline/);
-    assert.match(active.systemPrompt, /Never combine audit\/discovery, feature behavior/);
-    assert.match(active.systemPrompt, /Separate design judgment from implementation/);
-    assert.match(active.systemPrompt, /Supply premium specialists with exact bounded paths or regions/);
-    assert.match(active.systemPrompt, /Fail-closed premium cooldown/);
-    assert.match(active.systemPrompt, /rate_limit/);
-    assert.match(active.systemPrompt, /model_cooldown/);
-    assert.match(active.systemPrompt, /Do not resume that generation or immediately respawn the same premium role/);
-    assert.match(active.systemPrompt, /Never retry merely to obtain a report/);
-    assert.match(active.systemPrompt, /After all writers have settled/);
-    assert.match(
-      active.systemPrompt,
-      /gets a fresh-eyes Oracle review/,
-    );
-    assert.match(active.systemPrompt, /Path-triggered/);
-    assert.match(active.systemPrompt, /user-visible behavior/);
-    assert.match(active.systemPrompt, /one Oracle after the integrated tree exists, before the Stevedore verification-only pass/);
-    assert.match(active.systemPrompt, /if any non-triggering implementation diffs remain unreviewed, dispatch one combined Oracle/);
-    assert.match(active.systemPrompt, /small local known-path edit/);
-    assert.match(active.systemPrompt, /Oracle returns an exact diagnostic experiment plan and stops/);
-    assert.match(active.systemPrompt, /absolute target worktree\/root/);
-    assert.match(active.systemPrompt, /persistent repository fixtures go through a normal writer and Oracle review first/);
-    assert.match(active.systemPrompt, /fresh Stevedore verification-only pass/);
-    assert.match(active.systemPrompt, /Run another combined pass only after those fixes settle/);
-    assert.match(
-      active.systemPrompt,
-      /Never run integrated gates inside Artisan\/Machinist/,
-    );
-    assert.match(active.systemPrompt, /UI and interaction slices are proven on the live page through Inspector/);
-    assert.match(active.systemPrompt, /writer-local checks and a passing Stevedore gate are not that proof/);
-    assert.match(active.systemPrompt, /Route live browser and screenshot checks to Inspector/);
-    assert.match(active.systemPrompt, /use Artisan only when verification requires design judgment/);
-    assert.match(active.systemPrompt, /Default to one active writer for a feature vertical or shared runtime contract/);
-    assert.match(active.systemPrompt, /one writer owns shared types, schemas, migrations, and IPC contracts/);
-    assert.match(active.systemPrompt, /Oracle returns exactly one verdict/);
-    assert.match(active.systemPrompt, /Advisory findings do not reopen a slice/);
-    assert.match(active.systemPrompt, /Do not open a subsequent stage, ADR, or capability/);
-    assert.match(active.systemPrompt, /A bare `continue` resumes and closes the current milestone/);
-    assert.match(active.systemPrompt, /Every writer brief names its slice-local verification obligation/);
-    assert.match(active.systemPrompt, /does not by itself trigger a consult/);
-    assert.match(active.systemPrompt, /specialists return conflicting findings/);
-    assert.doesNotMatch(active.systemPrompt, /do not implement code inline in this mode/);
-    assert.doesNotMatch(active.systemPrompt, /tiny integration fixes/);
-    assert.match(active.systemPrompt, /one `task_wait` per worker/);
-    assert.match(active.systemPrompt, /900s machinist\/artisan; 1200s oracle\/stevedore\/inspector/);
-    assert.match(active.systemPrompt, /Do not poll with `task_status`\/`task_wait` loops/);
-    assert.match(active.systemPrompt, /Timeout is not a poll cue and does not kill the worker/);
-    assert.match(active.systemPrompt, /blocked for 60s unless `timeoutSec` is longer than the last wait/);
-    assert.match(active.systemPrompt, /Keep returned evidence compact/);
+      await state.orchestrate("on");
+      const active = (await state.beforeAgentStart()) as {
+        systemPrompt: string;
+      };
+      assert.equal(active.systemPrompt, `base prompt${ORCHESTRATE_SYSTEM_BLOCK}`);
 
-    await state.orchestrate("off");
-    const restored = (await state.beforeAgentStart()) as { systemPrompt: string };
-    assert.ok(restored.systemPrompt.endsWith(REGULAR_SYSTEM_BLOCK));
-    assert.doesNotMatch(restored.systemPrompt, /Strict orchestrator mode \(active\)/);
+      await state.orchestrate("off");
+      const restored = (await state.beforeAgentStart()) as { systemPrompt: string };
+      assert.ok(restored.systemPrompt.endsWith(REGULAR_SYSTEM_BLOCK));
+      assert.doesNotMatch(restored.systemPrompt, /Strict orchestrator mode \(active\)/);
     } finally {
       if (previousSubagent === undefined) delete process.env.PI_SUBAGENT;
       else process.env.PI_SUBAGENT = previousSubagent;

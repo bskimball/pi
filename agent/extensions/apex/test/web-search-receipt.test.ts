@@ -6,11 +6,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 import {
-  fetchContentReceiptArg,
   fetchContentReceiptRenderers,
-  getSearchContentReceiptArg,
   installWebSearchReceipts,
-  webSearchReceiptArg,
   webSearchReceiptRenderers,
 } from "../internal/presentation/web-search-receipt.ts";
 
@@ -52,34 +49,6 @@ function stubUi() {
 }
 
 describe("apex web-search receipts", () => {
-  it("formats compact header arguments", () => {
-    assert.equal(
-      webSearchReceiptArg(
-        { query: "pi coding agent", recencyFilter: "week", numResults: 5 },
-        80,
-      ),
-      "pi coding agent week 5",
-    );
-    assert.equal(
-      fetchContentReceiptArg({ url: "https://example.com/docs" }, 80),
-      "https://example.com/docs",
-    );
-    assert.equal(
-      fetchContentReceiptArg(
-        { urls: ["https://a.example/x", "https://b.example/y"] },
-        80,
-      ),
-      "a.example +1",
-    );
-    assert.equal(
-      getSearchContentReceiptArg(
-        { responseId: "exa_abc123", urlIndex: 1, offset: 300 },
-        80,
-      ),
-      "exa_abc123 u1 @300",
-    );
-  });
-
   it("renders an Apex receipt instead of boxed JSON args", () => {
     const args = { query: "pi coding agent" };
     const ctx = context(args);

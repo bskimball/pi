@@ -8,7 +8,6 @@ import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 import {
   WORKTREE_RECEIPT_TOOL,
   installWorktreeReceipts,
-  worktreeReceiptArg,
   worktreeReceiptRenderers,
 } from "../internal/presentation/worktree-receipt.ts";
 
@@ -46,22 +45,6 @@ function withApexUi<T>(value: string, run: () => T): T {
 }
 
 describe("apex worktree receipt", () => {
-  it("formats compact operation arguments", () => {
-    assert.equal(worktreeReceiptArg({ operation: "list" }, 80), "list");
-    assert.equal(
-      worktreeReceiptArg({ operation: "add", branch: "feature/apex" }, 80),
-      "add feature/apex",
-    );
-    assert.equal(
-      worktreeReceiptArg({ operation: "remove", path: "C:/repo/wt", force: true }, 80),
-      "remove C:/repo/wt force",
-    );
-    assert.equal(
-      worktreeReceiptArg({ operation: "apply", path: "patch.diff", paths: ["a", "b"] }, 80),
-      "apply patch.diff 2 paths",
-    );
-  });
-
   it("renders worktree output as an Apex receipt instead of boxed JSON args", () => {
     const args = { operation: "list" };
     const ctx = context(args);

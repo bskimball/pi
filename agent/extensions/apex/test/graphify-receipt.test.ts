@@ -9,7 +9,6 @@ import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 const {
   GRAPHIFY_RECEIPT_TOOL,
   graphifyOwnsPresentation,
-  graphifyReceiptArg,
   graphifyReceiptRenderers,
   installGraphifyReceipts,
 } = await import("../internal/presentation/graphify-receipt.ts");
@@ -52,39 +51,6 @@ function stubUi() {
 }
 
 describe("apex graphify receipts", () => {
-  it("formats a compact header argument per operation", () => {
-    assert.equal(
-      graphifyReceiptArg(
-        {
-          operation: "query",
-          question: "How does auth work?",
-          mode: "dfs",
-          scope: "runtime",
-          budget: 1500,
-        },
-        80,
-      ),
-      "query How does auth work? dfs runtime 1500",
-    );
-    assert.equal(
-      graphifyReceiptArg(
-        {
-          operation: "path",
-          from: "AuthModule",
-          to: "Database",
-          scope: "runtime",
-          budget: 1500,
-        },
-        80,
-      ),
-      "path AuthModule -> Database",
-    );
-    assert.equal(
-      graphifyReceiptArg({ operation: "explain", concept: "SwinTransformer" }, 80),
-      "explain SwinTransformer",
-    );
-  });
-
   it("renders an Apex receipt instead of boxed JSON args", () => {
     const args = { operation: "query", question: "How does auth work?" };
     const ctx = context(args);

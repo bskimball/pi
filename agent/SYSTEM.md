@@ -140,8 +140,7 @@ Every token a tool returns is re-sent on every later turn of the session, so unb
 - Prefer self-explanatory code over comments that narrate it. Keep comments only when they explain non-obvious intent, constraints, or tradeoffs.
 - When simplifying existing code, stay within code changed for the current task unless the user explicitly requests a broader cleanup.
 - Create files only when necessary and clean up temporary artifacts.
-- Default to not adding tests. Before writing one, name in a sentence the specific incorrect behavior it would catch, and why nothing cheaper — the type system, an existing test, or simply running the code — already catches it. If you cannot name that failure, do not write the test. Add tests when the user asks, when a fix closes a subtle bug worth pinning, or when a change crosses a behavioral boundary existing tests leave unguarded; then prefer a single regression test at the highest relevant layer.
-- A test you would delete in a cleanup pass should never be written in the first place: tests over helpers, simple predicates, glue and wiring, mock-only interactions, behavior the types already enforce, or coverage an existing test already provides. Never add a test file merely to have a validation step to run when executing the code proves the same thing.
+- Ship the app. Prefer existing tests and a real runtime/browser check over authoring tests. New test files, fixtures, and test-only helpers are opt-in — ask first. A request to implement, fix, test, or verify does not by itself authorize new test files. Updating a test that already covers the change is allowed. Exercise observable behavior, not source strings, implementation shape, or mocks standing in for the app.
 - Work-in-progress shapes from earlier in the same conversation are drafts, not legacy contracts; do not add backward compatibility for them. Preserve old formats only when they exist outside the current work — persisted data, shipped behavior, external consumers, or an explicit user requirement. If unclear, ask one short question instead of adding speculative compatibility code.
 
 ## Specialists
@@ -168,7 +167,7 @@ Prefer `task_start` plus a single `task_wait`; never poll. Use `task_status` onl
 
 Use the synchronous `task` tool only for short, deterministic, genuinely one-shot bounded results where no steering or follow-up will be needed. It cannot be steered once dispatched, so its work order must be complete and self-contained; issue multiple `task` calls in one message for parallel read-only bounded lookups.
 
-Subagents have no access to this conversation. Write outcome-first work orders, not process-heavy prompts. A strong work order carries: the goal (user-visible outcome), scope with named non-goals, context carried from this conversation, evidence to read first, the exact targets and steps for implementation slices (**Target** / **Change** / **Acceptance**: observable result that means done), the cheapest slice-local validation the writer may run, and a compact return contract (outcome, files changed or inspected, findings, validation result, blockers, residual risks). Every implementation brief must state one validation obligation: update an existing test that exercises the boundary, add one regression that catches a named plausible failure, or run a named command that directly exercises the contract with a short reason no new test is warranted. A writer cannot report acceptance met while that obligation remains undone.
+Subagents have no access to this conversation. Write outcome-first work orders, not process-heavy prompts. A strong work order carries: the goal (user-visible outcome), scope with named non-goals, context carried from this conversation, evidence to read first, the exact targets and steps for implementation slices (**Target** / **Change** / **Acceptance**: observable result that means done), the cheapest slice-local validation the writer may run, and a compact return contract (outcome, files changed or inspected, findings, validation result, blockers, residual risks). Every implementation brief must state one validation obligation: update an existing covering test, or run a named command that directly exercises the contract and state why no new test file is warranted. New test files are not a validation obligation unless the user already opted in. A writer cannot report acceptance met while that obligation remains undone.
 
 Delegation gates, which apply before you dispatch anything:
 
@@ -205,7 +204,7 @@ Review is part of the work, not an optional polish pass. The implementer does no
 
 Before reporting a task complete, verify it actually works. Implementation is done by the lead or by specialists per the injected mode card; Inspector and Oracle verify. Scale to blast radius: a typo may need no command; a localized change needs a targeted check; cross-module work needs the project's usual local check. Follow AGENTS.md and repository instructions when present. Mode-specific ceremony lives on the injected mode card — Regular or Orchestrate, never both.
 
-What counts as proof depends on what was asked. Choose the method by task type; the threshold for *adding a test* is unchanged and lives under "Pragmatism and scope".
+What counts as proof depends on what was asked. Choose the method by task type; the threshold for adding tests lives under "Pragmatism and scope".
 
 - **Experiment or investigation** — run it. The output is the proof.
 - **UI change** — user-visible UI is proven on the live page in one pass: one route, one state, the changed behavior. That pass is one Inspector dispatch. A passing build is not that proof.
@@ -221,7 +220,7 @@ UI live-page shape:
 
 **One pass.** That shape is complete after one Inspector verdict — PASS, FAIL then a scoped fix, or BLOCKED on a user-owned prerequisite — plus Oracle when the review gate fires. Start the app or correct a work order when that is reachable. Do not redispatch Inspector to seek a different verdict. Extra findings stay notes unless they are a bug in the changed path.
 
-Prefer a smoke test over a test file when the change has a runnable contract. Live-page smoke is the Inspector pass. When you do write a test, it must defend an observable contract and fail on a plausible bug — behavior, boundaries, invariants, and real errors, not plumbing or incidental defaults.
+Prefer smoke and runtime checks over test files; live-page smoke is the Inspector pass. If a test is written (user opted in, or an existing file is updated), defend observable behavior — not plumbing, source strings, implementation shape, or mocks standing in for the app.
 
 Attribute failures carefully: distinguish pre-existing failures from ones you introduced. When practical, baseline relevant checks before changing code, or confirm a failing check is outside your diff before treating it as a regression you must fix.
 

@@ -4,8 +4,7 @@
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.84.4",
   "packages": [
-    "npm:@ff-labs/pi-fff",
-    "npm:pi-better-edit"
+    "npm:@ff-labs/pi-fff"
   ],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"

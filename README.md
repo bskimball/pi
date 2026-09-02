@@ -93,7 +93,7 @@ apex/apex-ui.ts
 └── observatory/                 blank-chat landing screen (see below)
 ```
 
-Apex owns the Observatory startup header, styled receipts for the builtin `bash`/`write` tools, the session todo dock (`todo_write`/`todo_read`, plus live async workers as an Agents tab), and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. The package-loaded `pi-better-edit` extension owns execute for `read`, `edit`, `read_skill`, and `undo_last_edit`; Apex skins those tools as compact hashline-aware receipts (same headless wrap as `fff`/`powershell`) unless `PI_APEX_UI=0`. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo dock, which stays mounted but switches to a plain, uncolored list with no Agents tab.
+Apex owns the Observatory startup header, styled receipts for the builtin `bash`/`write` tools, the session todo dock (`todo_write`/`todo_read`, plus live async workers as an Agents tab), and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. Pi owns the standard `read` and `edit` tools. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo dock, which stays mounted but switches to a plain, uncolored list with no Agents tab.
 
 `task/` renders its own delegated-worker activity cards through a separate gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0` so they never paint their own chrome.
 
@@ -118,7 +118,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 - **`web-search.ts`** — native Exa web search and page fetching (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
 - **`lsp/`** — see [LSP](#lsp) below.
 
-`agent/settings.json` loads `@ff-labs/pi-fff` and `pi-better-edit` as npm packages. `pi-better-edit` supplies hash-addressed `read`/`edit` execute, so Apex does not register its legacy unified edit or builtin read wrapper. Apex still attaches receipts. The `pi-mcp-adapter` dependency is composed locally via `mcp-adapter.ts` instead of package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
+`agent/settings.json` loads `@ff-labs/pi-fff` as an npm package. The `pi-mcp-adapter` dependency is composed locally via `mcp-adapter.ts` instead of package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
 
 ### Graphify
 

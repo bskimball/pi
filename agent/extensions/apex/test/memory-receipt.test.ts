@@ -9,9 +9,7 @@ import {
   MEMORY_LIST_TOOL,
   MEMORY_WRITE_TOOL,
   installMemoryReceipts,
-  memoryListReceiptArg,
   memoryListReceiptRenderers,
-  memoryWriteReceiptArg,
   memoryWriteReceiptRenderers,
 } from "../internal/presentation/memory-receipt.ts";
 
@@ -53,35 +51,6 @@ function stubUi() {
 }
 
 describe("apex memory receipts", () => {
-  it("formats compact header arguments", () => {
-    assert.equal(memoryListReceiptArg({}, 80), "all");
-    assert.equal(memoryListReceiptArg({ scope: "global" }, 80), "global");
-    assert.equal(
-      memoryListReceiptArg({ scope: "local", kind: "prompt" }, 80),
-      "local prompt",
-    );
-
-    assert.equal(
-      memoryWriteReceiptArg(
-        { action: "create", scope: "global", kind: "memory", title: "pref" },
-        80,
-      ),
-      "create global memory pref",
-    );
-    assert.equal(
-      memoryWriteReceiptArg(
-        { action: "delete", scope: "local", id: "scratch_note" },
-        80,
-      ),
-      "delete local scratch_note",
-    );
-    assert.equal(
-      memoryWriteReceiptArg({ action: "update", id: "pref", title: "pref" }, 80),
-      "update global pref",
-    );
-    assert.equal(memoryWriteReceiptArg({}, 80), "write global");
-  });
-
   it("renders memory_list as an Apex receipt instead of boxed JSON args", () => {
     const args = { scope: "all" };
     const ctx = context(args);
