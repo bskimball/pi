@@ -3,9 +3,19 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import {
+  SkillInvocationMessageComponent,
+  ToolExecutionComponent,
+  createEditToolDefinition,
+  createReadToolDefinition,
+  getMarkdownTheme,
+  initTheme,
+} from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
 const { installEditTool } = await import("../internal/edit/edit-tool.ts");
+const { installBuiltinReceipts } = await import("../internal/presentation/builtin-receipts.ts");
+const { installSkillInvocationChrome } = await import("../internal/presentation/skill-invocation.ts");
 
 function registeredTool(apexUi = "1"): any {
   const previousApexUi = process.env.PI_APEX_UI;
@@ -46,7 +56,109 @@ function context(args: any, overrides: Record<string, unknown> = {}): any {
   };
 }
 
-describe("apex edit tool", () => {
+describe("Pi-owned tool and skill chrome", () => {
+  it("renders read and edit through Apex without taking execution ownership", () => {
+    initTheme("dark");
+    const previous = process.env.PI_APEX_UI;
+    process.env.PI_APEX_UI = "1";
+    try {
+      installBuiltinReceipts();
+
+      const readArgs = { path: "src/app.ts", offset: 4, limit: 2 };
+      const read = new ToolExecutionComponent(
+        "read",
+        "read-1",
+        readArgs,
+        { showImages: false },
+        createReadToolDefinition(process.cwd()),
+        { requestRender() {} } as any,
+        process.cwd(),
+      ) as any;
+      read.markExecutionStarted();
+      read.updateResult({
+        content: [{ type: "text", text: "alpha\n\nbeta\n[Image: original 10x10]\n[2 more lines in file. Use offset=6 to continue.]" }],
+      });
+      const readText = read.render(80).join("\n");
+      assert.match(readText, /read/);
+      assert.match(readText, /src\/app\.ts:4\+2/);
+      assert.match(readText, /4 alpha/);
+      assert.match(readText, /6 beta/);
+      assert.match(readText, /\[Image: original 10x10\]/);
+      assert.doesNotMatch(readText, /7 \[Image:/);
+      assert.doesNotMatch(readText, /┌|┐|└|┘/);
+
+      const editArgs = {
+        path: "src/app.ts",
+        edits: [{ oldText: "old", newText: "new" }],
+      };
+      const edit = new ToolExecutionComponent(
+        "edit",
+        "edit-1",
+        editArgs,
+        { showImages: false },
+        createEditToolDefinition(process.cwd()),
+        { requestRender() {} } as any,
+        process.cwd(),
+      ) as any;
+      edit.markExecutionStarted();
+      edit.updateResult({
+        content: [{ type: "text", text: "Successfully replaced 1 block(s)." }],
+        details: { diff: " 1 before\n-2 old\n+2 new\n 3 after" },
+      });
+      edit.setExpanded(true);
+      const editLines = edit.render(80);
+      const editText = editLines.join("\n");
+      assert.match(editText, /edit/);
+      assert.match(editText, /src\/app\.ts/);
+      assert.match(editText, /\+1/);
+      assert.match(editText, /-1/);
+      assert.match(editText, /new/);
+      assert.doesNotMatch(editText, /┌|┐|└|┘/);
+      assert.ok(editLines.every((line: string) => safeVisibleWidth(line) <= 80));
+    } finally {
+      if (previous === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previous;
+    }
+  });
+
+  it("renders compact skill chrome and dynamically restores Pi chrome when disabled", () => {
+    initTheme("dark");
+    installSkillInvocationChrome();
+    const previous = process.env.PI_APEX_UI;
+    try {
+      process.env.PI_APEX_UI = "1";
+      const component = new SkillInvocationMessageComponent(
+        {
+          name: "repo-cleanup\u001b[2J",
+          location: "agent/skills/repo-cleanup/SKILL.md\u001b[0m",
+          content: "# Cleanup\nRun safely.\u001b[2J\nFinal instruction remains visible.",
+          userMessage: undefined,
+        },
+        getMarkdownTheme(),
+      );
+      const collapsed = component.render(80);
+      assert.equal(collapsed.length, 1);
+      assert.match(collapsed[0], /skill repo-cleanup/);
+      assert.doesNotMatch(collapsed[0], /\[skill\]/);
+
+      component.setExpanded(true);
+      const expanded = component.render(80);
+      assert.match(expanded.join("\n"), /Run safely\./);
+      assert.match(expanded.join("\n"), /Final instruction remains visible\./);
+      assert.doesNotMatch(expanded.join("\n"), /\u001b\[2J|\u001b\[0m/);
+      assert.ok(expanded.every((line) => safeVisibleWidth(line) <= 80));
+
+      process.env.PI_APEX_UI = "0";
+      const stock = component.render(80).join("\n");
+      assert.match(stock, /\[skill\]/);
+    } finally {
+      if (previous === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previous;
+    }
+  });
+});
+
+describe("legacy Apex edit tool", () => {
   it("applies a multi-file patch", async () => {
     const tool = registeredTool();
     assert.equal(tool.name, "edit");
