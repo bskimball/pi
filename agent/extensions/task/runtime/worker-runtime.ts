@@ -10,7 +10,7 @@ import { ActivityLedger, type ActivityStatus } from "./activity-ledger.ts";
 import { JobRegistry } from "./job-registry.ts";
 import { killProcessTree } from "./process-tree-kill.ts";
 
-export const DEFAULT_MAX_LIVE_WORKERS = 3;
+export const DEFAULT_MAX_LIVE_WORKERS = 5;
 export const TASK_CONCURRENCY_ENV = "PI_TASK_MAX_WORKERS";
 export const MAX_CONFIGURED_WORKERS = 8;
 

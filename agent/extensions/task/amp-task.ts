@@ -201,8 +201,8 @@ function updateStatus(ctx: ExtensionContext) {
 }
 
 // Full Pi subprocesses are expensive on Windows. The shared bounded setting
-// defaults to three; larger fan-outs queue rather than oversubscribing.
-const DEFAULT_MAX_CONCURRENT = 3;
+// defaults to five; larger fan-outs queue rather than oversubscribing.
+const DEFAULT_MAX_CONCURRENT = 5;
 const MAX_CONFIGURED_CONCURRENT = 8;
 export function configuredSyncTaskLimit(
   raw = process.env.PI_TASK_MAX_WORKERS,

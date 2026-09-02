@@ -131,23 +131,25 @@ describe("WorkerRuntime control plane", () => {
   }
 
   it("counts cap-holding workers until closed, at MAX_LIVE_WORKERS", () => {
-    assert.equal(MAX_LIVE_WORKERS, 3);
+    assert.equal(MAX_LIVE_WORKERS, 5);
     const cap = (n: number) =>
       Array.from({ length: n }, () => ({ countsTowardCap: true, closed: false }));
-    assert.equal(canStartWorker(cap(2)), true);
-    assert.equal(canStartWorker(cap(3)), false);
+    assert.equal(canStartWorker(cap(4)), true);
+    assert.equal(canStartWorker(cap(5)), false);
     const holding = [
       { countsTowardCap: true, closed: false },
       { countsTowardCap: true, closed: false },
       { countsTowardCap: true, closed: false },
-      { countsTowardCap: false, closed: false },
       { countsTowardCap: true, closed: false },
+      { countsTowardCap: true, closed: false },
+      { countsTowardCap: false, closed: false },
+      { countsTowardCap: true, closed: true },
     ];
-    holding[4] = { countsTowardCap: true, closed: true };
-    assert.equal(countLiveWorkers(holding), 3);
+    assert.equal(countLiveWorkers(holding), 5);
     assert.equal(canStartWorker(holding), false);
-    holding[3] = { countsTowardCap: false, closed: false };
-    assert.equal(countLiveWorkers(holding), 3);
+    holding[4] = { countsTowardCap: false, closed: false };
+    assert.equal(countLiveWorkers(holding), 4);
+    assert.equal(canStartWorker(holding), true);
   });
 
   it("owns capacity, ordered pruning, bounded errors, and subscribers", () => {
