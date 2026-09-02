@@ -1,7 +1,7 @@
 ---
 name: picasso
 description: Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, diagrams, and other visual assets.
-model: local-proxy/gemini-3.7-flash-high
+model: local-proxy/gemini-3.8-flash-high
 fallbackModels:
   - local-proxy/gpt-5.6-luna
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'

@@ -5,7 +5,7 @@ tools: read, ffgrep, fffind, ls, bash, edit, write
 model: local-proxy/gpt-5.6-luna
 fallbackModels:
   - local-proxy/grok-composer-2.5-fast
-  - local-proxy/gemini-3.7-flash-high
+  - local-proxy/gemini-3.8-flash-high
 thinking: medium
 inheritSkills: true
 maxTurns: 50
