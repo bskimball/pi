@@ -24,46 +24,64 @@ deterministic:
   handoff: always
   timeout: 30000
 ---
-Ship the current project using the `stevedore` subagent — do not run the deploy yourself.
+Ship the current project using the stevedore subagent: $@
 
-## Resolve the worktree first (mandatory)
+Delegate all lint, format, test, build, and deployment execution to the stevedore subagent. Do not run the deploy directly or edit project files yourself.
 
-Use the deterministic pre-step output above. Before delegating:
+## Scope
+- Target: the active repository worktree identified in the pre-step snapshot.
+- Arguments: extra deploy instructions or target environment ($@). If empty, use the project's default deployment target.
+- In scope: resolving the absolute worktree path, auditing the complete dirty file inventory, assembling a self-contained brief, delegating via `task`, and answering or relaying `need_decision`.
+- Out of scope: executing deploy commands directly in the supervisor session, shipping from an unverified worktree, deploying from `~/.pi` unless that is the explicit target, or omitting uncommitted project changes.
 
-1. Set **absolute worktree path** = `git_toplevel` when present, otherwise the session `session_cwd`. On Windows use a native path (`C:/Users/...`), never a bash-only path.
-2. Confirm you are shipping **this** worktree (branch + dirty files from the snapshot), not a sibling worktree, not `~/.pi`, and not some other project inferred from conversation alone.
-3. If `git worktree list` shows multiple worktrees and the intended one is ambiguous, stop and ask me — do not guess.
-4. Treat the dirty tree as the release contents. Inventory **all** modified, staged, and untracked project files from the snapshot. Do not ship a partial subset of the conversation's "recent files" while leaving related dirty files behind.
+## Resolve
+Use the deterministic pre-step snapshot to establish the release baseline before delegating:
+1. Determine the absolute worktree path: set worktree path to `git_toplevel` when present, otherwise fallback to `session_cwd`. On Windows, use a native path (`C:/Users/...`), never a bash-only path (`/c/...`). Criterion: absolute native worktree path determined.
+2. Confirm target repository identity: verify you are shipping this exact worktree (branch and dirty files from the snapshot), not a sibling worktree, not `~/.pi`, and not another project inferred from conversation history. Criterion: target worktree identity confirmed against snapshot.
+3. Disambiguate worktrees: if `git worktree list` shows multiple worktrees and the release target is ambiguous, stop and ask the user; do not guess. Criterion: target worktree unambiguous or decision requested.
+4. Inventory release contents: treat the dirty tree as the release contents. Inventory all modified, staged, and untracked project files from the snapshot. Never deploy a partial subset of recent files while leaving related dirty changes uncommitted or unreleased. Criterion: complete dirty inventory recorded.
 
 ## Delegate
+Delegate deployment only after resolving the absolute worktree path and verifying the release inventory.
 
 Call the `task` tool once with:
 - `agent`: `stevedore`
-- `cwd`: the absolute worktree path from step 1 (**required** — always pass it explicitly)
-- a complete self-contained brief (stevedore has no conversation access)
+- `cwd`: the absolute worktree path from Resolve (**required** — always pass it explicitly)
+- `prompt`: a complete, self-contained brief (stevedore has no access to conversation history)
 
 Build the brief from:
-- Absolute working directory (repeat the same path you passed as `cwd`)
-- Branch / HEAD from the snapshot
+- Absolute working directory (repeat the same path passed as `cwd`)
+- Branch and HEAD commit from the snapshot
 - Full dirty-file inventory (or "clean") from the snapshot — not a selective subset
-- Anything relevant from our conversation (what changed, which env, known gotchas)
-- Extra instructions: $@
-  - If no extra instructions were provided, use the project's default deploy target.
+- Relevant conversation context (what changed, target environment, known gotchas)
+- Extra instructions: $@ (if blank, instruct stevedore to use the project's default deploy target)
 
-The brief must tell stevedore to:
-1. Work only inside the provided absolute `cwd` / worktree. Refuse if `pwd` / `git rev-parse --show-toplevel` does not match.
-2. Re-run `git status --short --branch` and reconcile against the inventory in the brief. If the tree changed, use the live status and report the delta.
-3. Discover the project's own lint/format/typecheck/test/build/deploy scripts and use those.
+Instruct stevedore in the brief to:
+1. Work exclusively inside the provided absolute `cwd` / worktree. Refuse execution if `pwd` or `git rev-parse --show-toplevel` does not match.
+2. Re-run `git status --short --branch` and reconcile against the inventory in the brief. If the tree changed, use live status and report the delta.
+3. Discover the project's own lint, format, typecheck, test, build, and deploy scripts from package configuration or repository conventions.
 4. Run lint and format checks, fixing only mechanical issues.
-5. Run build/tests; a red build blocks deploy.
-6. **Worktree completeness for release:**
-   - Default: deploy the **entire current worktree** (all current project changes on disk), not a hand-picked subset.
-   - If commit and/or push is part of shipping (explicitly requested by me, or required by the project's release path), stage and commit the **full intended project change set**. Prefer `git add -A` scoped to the repo after reviewing status. Never partially stage "some of the feature" while leaving related project files dirty.
-   - Exclude only true noise/secrets/generated artifacts (e.g. `node_modules/`, build output already ignored, `.env*`, credentials, local scratch). If unsure whether a dirty file belongs in the release, stop with `need_decision` instead of omitting it silently.
-   - After any commit: re-run `git status`. If project files that should have shipped are still dirty/untracked, fix the staging and amend only if the commit has not been pushed and the brief allows it; otherwise make a follow-up commit or stop and report. Do not report success with a partial commit.
-7. Deploy to the stated target; if the target is ambiguous, contact you (supervisor) instead of guessing — answer its ask, don't let it stall.
-8. Verify the deploy and report back in its structured format, including final `git status` after the operation.
+5. Run build and tests; a failing build blocks deploy.
+6. Enforce worktree completeness for release:
+   - Default: deploy the entire current worktree (all current project changes on disk), not a hand-picked subset.
+   - If commit or push is required or requested, stage and commit the full intended project change set (prefer repository-scoped `git add -A` after reviewing status). Never partially stage a feature while leaving related project files dirty.
+   - Exclude only true noise, secrets, and generated artifacts (`node_modules/`, ignored build output, `.env*`, credentials, local scratch). If unsure whether a dirty file belongs in the release, stop with `need_decision` instead of omitting it silently.
+   - After any commit: re-run `git status`. If project files that should have shipped remain dirty or untracked, fix staging and amend only if the commit has not been pushed and the brief permits; otherwise create a follow-up commit or stop and report. Never report success with a partial commit.
+7. Deploy to the stated target. If the target is ambiguous, contact the supervisor with `need_decision` instead of guessing.
+8. Verify the deployment and report results in structured format, including final `git status`.
 
-If stevedore contacts you with `need_decision`, relay the question to me if you can't answer it from context.
+If stevedore contacts you with `need_decision`, answer from context or relay the question to the user. Criterion: stevedore subagent dispatched with complete brief and explicit `cwd`.
 
-When it finishes, give me a short summary: worktree path + branch, pre-flight results, whether the full dirty set was included, what was deployed where, verification, final git status, and any follow-ups.
+## Report
+When stevedore finishes, provide a structured summary:
+- Worktree path and branch
+- Pre-flight check results (lint, format, tests, build)
+- Release completeness confirmation (verifying full dirty set was included)
+- Target and deployment outcome (what was deployed where)
+- Verification results and final `git status`
+- Any follow-ups or open issues
+
+Wait for stevedore to complete and report, or relay its questions if a decision is needed.
+
+## Pre-step snapshot
+The deterministic pre-step runs prior to this prompt and provides session cwd, git toplevel, branch, commit, short status, worktree list, and dirty file counts.

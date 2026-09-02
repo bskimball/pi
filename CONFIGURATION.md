@@ -464,6 +464,40 @@ README wording implying `/browser`/`/deploy` are "registered in
 `agent/settings.json` and defined under `agent/prompts/`" was inaccurate and
 has been corrected (see README changes).
 
+### Body structure
+
+Slash prompts in this repo (live templates under `agent/prompts/*.md`, reference copies in `agent/prompts/inactive/*.md`, and native prompt builders that emit handoff bodies in `agent/extensions/prompt-commands/featured-commands.ts`) follow a unified structural skeleton:
+
+```text
+---
+description: <one line: what it does, and the stance (e.g. do not implement)>
+argument-hint: "<required>" or "[optional]"
+---
+<Invocation: one present-tense sentence naming the target, with the existing substitution token>
+
+<Stance: 1–2 sentences. Mode, whether to edit, and the stop condition. Positive target behavior first.>
+
+## Scope
+What this run covers, how arguments change that, and what is out.
+
+## <Procedure>
+Ordered steps. Each step ends on a checkable completion criterion.
+Use a single leading-word heading for the work this prompt does:
+- brainstorm diverge phase: ## Diverge
+- simplify: ## Hunt
+- browser: ## Attach then ## Act (Attach reports connect status before Act begins)
+- deploy: ## Resolve then ## Delegate
+
+If the prompt has a gated second phase, give it its own heading immediately after (## Converge, ## Act, ## Delegate). Put the gate in the first sentence of that heading ("Only when I ask you to converge…").
+
+## Report
+The required output shape. Checkable. Exhaustive for that shape.
+
+<Stop line: one sentence restating when to stop or wait.>
+```
+
+Native builders (`buildBrowserPrompt`, `buildDeployPrompt`) omit frontmatter and emit this same body beginning at the invocation line, appending disclosed runtime evidence blocks (`[Connect step]`, `## Pre-step snapshot`) after `## Report` and the stop line.
+
 ---
 
 ## Skill markdown (`agent/skills/**/SKILL.md`, upstream Pi)

@@ -8,24 +8,26 @@ deterministic:
   timeout: 90000
 skill: agent-browser
 ---
-You are co-browsing with me in a **dedicated authenticated debug Chrome**.
+Co-browse in dedicated authenticated debug Chrome for: $@
 
-## Why this exists
+Interact with web applications using an authenticated browser session over classic CDP on port 29300. Pause for explicit confirmation before executing any destructive, transactional, or irreversible action.
 
-Chrome's daily-profile remote debugging (`chrome://inspect#remote-debugging`) shows an **Allow** dialog for every new client. We avoid it with a separate profile and classic CDP on port **29300**:
+## Scope
+- With URL or task argument: navigate to the specified destination or execute the requested browser flow.
+- Without arguments: connect, inspect open tabs, and request instructions.
+- In scope: navigating pages, taking interactive snapshots, inspecting DOM state, filling inputs, and clicking elements within the dedicated Chrome profile (`~/.pi/browser/chrome-profile`).
+- Out of scope: using daily Chrome debugging (`--remote-debugging-port=29242`), running bare `agent-browser` without `--cdp 29300`, launching ghost browser instances, or terminating the dedicated Chrome session when done. Public read-only lookups should use `web_search` and `fetch_content` instead.
+
+## Attach
+Chrome daily-profile remote debugging (`chrome://inspect#remote-debugging`) displays an Allow dialog for every new client connection. We avoid Allow spam by using a dedicated user data profile with classic CDP on port 29300:
 
 ```text
 chrome --remote-debugging-port=29300 --user-data-dir=~/.pi/browser/chrome-profile
 ```
 
-Classic CDP exposes `http://127.0.0.1:29300/json/version` and does **not** prompt Allow on each connect. Port **29242** is often daily Chrome UI debugging (Allow spam) — ignore it unless I say otherwise.
+Classic CDP exposes `http://127.0.0.1:29300/json/version` and never prompts Allow on connect. Ignore port 29242 (daily Chrome UI debugging) unless explicitly directed. Google and Microsoft logins persist in this dedicated profile after a one-time login and are not copied from daily Chrome.
 
-Google/Microsoft logins live in this dedicated profile. They persist after a one-time `login` setup; they are not copied from daily Chrome.
-
-## Helper
-
-Resolve the Node helper independently of the current working directory or `PATH`:
-
+Resolve the Node helper independently of working directory or `PATH`:
 ```bash
 BROWSER_CONNECT="${PI_AGENT_DIR:-$HOME/.pi/agent}/bin/browser-connect.mjs"
 node "$BROWSER_CONNECT" connect   # idempotent attach
@@ -34,38 +36,35 @@ node "$BROWSER_CONNECT" tabs
 node "$BROWSER_CONNECT" open <url>
 node "$BROWSER_CONNECT" login     # one-time Google/Microsoft sign-in
 ```
-
 Do not search the project workspace for `browser-connect` and do not assume it is on `PATH`.
 
-## Hard rules
+Attach steps:
+1. Connect and verify isolation under attach rules:
+   - **Never use plain `agent-browser`.** Every invocation must explicitly target this instance with `agent-browser --cdp 29300 ...`, or use the Node helper. Plain commands can launch a ghost browser.
+   - **Never use autoConnect / daily Chrome UI debugging** unless explicitly requested, avoiding Allow spam.
+   - **Never start, stop, or reuse a chrome-devtools CLI daemon.** The configured chrome-devtools MCP already targets `http://127.0.0.1:29300` and serves as fallback-only for network, performance, or console inspection.
+   - Expected mode is **classic** on port **29300**. If classic HTTP discovery is unavailable, stop and report; do not loop retries or attach to another browser.
+   - If pages are logged out, run `node "$BROWSER_CONNECT" login` and prompt the user to sign into Google or Microsoft once in the dedicated debug Chrome window.
+   - Do not close or stop the dedicated Chrome instance after completing the task unless explicitly requested. Never stop daily Chrome.
+   Criterion: classic CDP connectivity on port 29300 verified with Allow dialog confirmed absent.
+2. Emit the connect-status summary to the user:
+   - mode (`classic` expected) + port (`29300`)
+   - whether Allow is required (**should be no**)
+   - open tabs
+   - next action for the task (if blank, ask what to do)
+   Criterion: four-item connect-status report emitted before any `agent-browser` interaction.
 
-1. **Never use plain `agent-browser`.** Every invocation must explicitly target this instance with `agent-browser --cdp 29300 ...`, or use the Node helper. Plain commands can launch a ghost browser.
-2. **Never use autoConnect / daily Chrome UI debugging** unless I explicitly ask. That path causes Allow spam.
-3. **Never start, stop, or reuse a chrome-devtools CLI daemon.** The configured chrome-devtools MCP already targets `http://127.0.0.1:29300` and is fallback-only for network, performance, or console work.
-4. Prefer `agent-browser --cdp 29300` for interaction (`snapshot -i`, `click`, `fill`, `batch`).
-5. If pages are logged out, run `node "$BROWSER_CONNECT" login` and tell me to sign into Google/Microsoft **once** in the dedicated debug Chrome window.
-6. Expected mode is **classic** on port **29300**. If classic HTTP discovery is unavailable, stop and report; do not loop retries or attach to another browser.
-7. Do not close or stop the dedicated Chrome after the task unless I explicitly request it. Never stop daily Chrome.
+## Act
+Proceed with browser actions only after emitting the connect-status report in Attach and confirming classic CDP on port 29300.
 
-## Workflow
+1. Inspect initial page state using `agent-browser --cdp 29300 snapshot -i` to capture interactive elements and active tab URLs. Criterion: tab list and element snapshot obtained.
+2. Execute navigation and interaction using `agent-browser --cdp 29300` (`click`, `fill`, `batch`, `open`) referencing stable ref indices from the snapshot. Re-snapshot after DOM mutations or page transitions. Criterion: target interactions executed and verified against updated snapshots.
+3. Request explicit confirmation before performing any destructive or irreversible action (logout, deletion, purchase, or permanent submission). Criterion: destructive actions gated on user approval.
 
-```bash
-BROWSER_CONNECT="${PI_AGENT_DIR:-$HOME/.pi/agent}/bin/browser-connect.mjs"
-node "$BROWSER_CONNECT" status
-node "$BROWSER_CONNECT" tabs
-agent-browser --cdp 29300 snapshot -i
-# act with agent-browser --cdp 29300 and refs, then re-snapshot after DOM/navigation changes
-```
+## Report
+Provide a structured outcome summary of the completed browser task:
+- Completed actions and resulting page states
+- Direct answers, findings, or data extracted from the target pages
+- If authentication is missing or confirmation is required, state the exact input needed from the user
 
-Task/URL from me (blank means no task was provided; ask what to do after reporting tabs): $@
-
-## After the deterministic connect step
-
-Report briefly:
-
-1. mode (`classic` expected) + port
-2. whether Allow is required (**should be no**)
-3. open tabs
-4. next action for the task
-
-Then do the browser work. Ask before destructive actions (logout, delete, purchase, irreversible submits).
+Wait for user direction if no task was supplied, or pause for approval before executing destructive actions.
