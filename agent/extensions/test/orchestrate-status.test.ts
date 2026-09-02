@@ -107,6 +107,9 @@ describe("orchestrateStatusText", () => {
 
 describe("mode cards", () => {
   it("always injects exactly one card and never both", async () => {
+    const previousSubagent = process.env.PI_SUBAGENT;
+    delete process.env.PI_SUBAGENT;
+    try {
     const state = loadExtension();
     const regular = (await state.beforeAgentStart()) as { systemPrompt: string };
     assert.ok(regular.systemPrompt.startsWith("base prompt"));
@@ -143,6 +146,19 @@ describe("mode cards", () => {
     assert.match(active.systemPrompt, /A clean sequential merge does not get a second Oracle review/);
     assert.match(active.systemPrompt, /reaches acceptance stops/);
     assert.match(active.systemPrompt, /cheapest-applicable local correctness check/);
+    assert.match(active.systemPrompt, /Premium-context containment/);
+    assert.match(active.systemPrompt, /Artisan and Advisor are premium-context specialists/);
+    assert.match(active.systemPrompt, /bounded creative judgment or strategic decisions/);
+    assert.match(active.systemPrompt, /single visually cohesive slice/);
+    assert.match(active.systemPrompt, /settled-design, known-path ordinary UI implementation inline/);
+    assert.match(active.systemPrompt, /Never combine audit\/discovery, feature behavior/);
+    assert.match(active.systemPrompt, /Separate design judgment from implementation/);
+    assert.match(active.systemPrompt, /Supply premium specialists with exact bounded paths or regions/);
+    assert.match(active.systemPrompt, /Fail-closed premium cooldown/);
+    assert.match(active.systemPrompt, /rate_limit/);
+    assert.match(active.systemPrompt, /model_cooldown/);
+    assert.match(active.systemPrompt, /Do not resume that generation or immediately respawn the same premium role/);
+    assert.match(active.systemPrompt, /Never retry merely to obtain a report/);
     assert.match(active.systemPrompt, /After all writers have settled/);
     assert.match(
       active.systemPrompt,
@@ -188,6 +204,10 @@ describe("mode cards", () => {
     const restored = (await state.beforeAgentStart()) as { systemPrompt: string };
     assert.ok(restored.systemPrompt.endsWith(REGULAR_SYSTEM_BLOCK));
     assert.doesNotMatch(restored.systemPrompt, /Strict orchestrator mode \(active\)/);
+    } finally {
+      if (previousSubagent === undefined) delete process.env.PI_SUBAGENT;
+      else process.env.PI_SUBAGENT = previousSubagent;
+    }
   });
 
   it("skips mode-card injection for subagents", async () => {

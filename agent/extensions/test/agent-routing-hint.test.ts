@@ -104,6 +104,11 @@ describe("routing hint", () => {
     assert.match(promptCommands, /control-plane work/);
     assert.match(promptCommands, /If you dispatch multiple subagents, you SHOULD use that fan-out for truly independent units in parallel/);
     assert.match(promptCommands, /When multiple writer slices are already truly independent, you SHOULD launch them in parallel up to that cap/);
+    assert.match(promptCommands, /Premium-context containment/);
+    assert.match(promptCommands, /Artisan and Advisor are premium-context specialists/);
+    assert.match(promptCommands, /Fail-closed premium cooldown/);
+    assert.match(promptCommands, /rate_limit/);
+    assert.match(promptCommands, /model_cooldown/);
     assert.match(system, /diagnostic experiment plan/);
     assert.match(system, /Do not send Oracle an open-ended brief that combines diagnosis with exhaustive experiment execution/);
     assert.match(system, /Live-page checks go to inspector/);
