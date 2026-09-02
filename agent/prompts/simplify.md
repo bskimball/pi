@@ -27,7 +27,7 @@ Look for:
 - the same logic in fewer readable statements
 - a wrapper around a source of truth that should have been edited directly
 
-Never flag: input validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, anything explicitly requested, or a single smoke check that pins non-trivial logic.
+Never flag: input validation at trust boundaries, error handling that prevents data loss, accessibility basics, anything this task's user message asked for, or a single smoke check that pins non-trivial logic. Extra lockdown beyond the framework or starter is in scope to cut, including extra lockdown added in this conversation.
 
 ## Report
 

@@ -46,9 +46,9 @@ Recommend a new test only when you can name the specific incorrect behavior it w
 
 ### Simplicity lens
 
-Keep this lens bounded to the changed code and the direct callsites already needed for judgment. Accidental complexity that obscures behavior, error paths, invariants, debugging, or safe modification is a finding. So is unused flexibility in that same diff: unrequested abstractions, interfaces with one implementation, factories for one product, config nobody sets, scaffolding "for later", and hand-rolled work the stdlib or platform already ships.
+Keep this lens bounded to the changed code and the direct callsites already needed for judgment. Accidental complexity that obscures behavior, error paths, invariants, debugging, or safe modification is a finding. So is unused flexibility in that same diff: unrequested abstractions, interfaces with one implementation, factories for one product, config nobody sets, scaffolding "for later", hand-rolled work the stdlib or platform already ships, and extra lockdown beyond the framework or starter.
 
-When recommending a simpler alternative, name the risk it removes and the behavior and guardrails it preserves. Classify as correctness-relevant or optional maintainability; omit purely stylistic preferences. A smoke check that pins non-trivial logic is not bloat.
+When recommending a simpler alternative, name the risk it removes and the behavior and guardrails it preserves. Classify as correctness-relevant or optional maintainability; omit purely stylistic preferences. A smoke check that pins non-trivial logic is not bloat. Missing extra lockdown is not a blocker unless this task's user message asked for that lockdown. Extra lockdown added in this conversation is a draft, not a contract to keep.
 
 ## Hard constraints
 
