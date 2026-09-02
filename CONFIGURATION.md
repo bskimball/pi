@@ -66,9 +66,11 @@ obviously-fake literals.
 
 **Loaded by:** `agent/extensions/mcp-adapter.ts`, which wraps the
 `pi-mcp-adapter` npm package (`node_modules/pi-mcp-adapter`) on the same
-`ExtensionAPI` as Apex's MCP presentation layer. Do not also add
-`pi-mcp-adapter` to `agent/settings.json` `packages` — that would load a second,
-unwrapped instance and bypass Apex's receipts.
+`ExtensionAPI`. Apex skins `mcp` / `mcpScript` receipts from `apex-ui`
+when presentation is enabled. Direct and namespace MCP tools keep the
+adapter's own chrome. Do not also add
+`pi-mcp-adapter` to `agent/settings.json` `packages` — that would load a second
+adapter instance beside this wrapper.
 
 Because the adapter is composed directly rather than loaded as a package, Pi
 does not auto-discover its bundled skill directory. Register it explicitly via

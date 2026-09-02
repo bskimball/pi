@@ -14,10 +14,12 @@ import {
   reportRenderFailure,
 } from "./internal/presentation/tool-receipt.ts";
 import { installBgProcessReceipts } from "./internal/presentation/bg-process-receipt.ts";
+import { installBrowserAttachReceipts } from "./internal/presentation/browser-attach-receipt.ts";
 import { installBuiltinReceipts } from "./internal/presentation/builtin-receipts.ts";
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
+import { installMcpReceipts } from "./internal/presentation/mcp-receipt.ts";
 import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
 import { installPowerShellReceipts } from "./internal/presentation/powershell-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
@@ -223,15 +225,14 @@ export default function (pi: ExtensionAPI) {
   installPowerShellReceipts();
   installWebSearchReceipts();
   installWorktreeReceipts();
+  installBrowserAttachReceipts();
+  installMcpReceipts();
   installBgProcessReceipts(pi);
 
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
   // the animation clock.
   pi.on("agent_start", (_event, ctx) => applyRandomWorkingIndicator(pi, ctx));
-
-  // MCP presentation is installed by agent/extensions/mcp-adapter.ts on the
-  // adapter's own ExtensionAPI — not here (per-extension tool maps).
 
   installBuiltinTools(pi);
 

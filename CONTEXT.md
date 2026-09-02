@@ -98,14 +98,14 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 ## Feature ownership
 
 - Background jobs: `bg-process.ts` plus `bg-process/internal/`; Apex attaches receipt chrome on `bg_start`/`bg_status`/`bg_list`/`bg_kill`, plus notice chrome on `bg-process-settled`.
-- Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; stock tool rendering.
+- Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; Apex receipt chrome on `memory_list` / `memory_write`.
 - Web search: standalone `web-search.ts`; Apex receipt chrome on `web_search` / `fetch_content` / `get_search_content`.
 - Todo list: Apex-owned (`apex/internal/todo/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todos/agents panel, or stock rendering under `PI_APEX_UI=0`. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; Apex wraps their interactive chrome and restores stock rendering under `PI_APEX_UI=0`. Apex's legacy unified edit under `apex/internal/edit/` is not registered.
-- Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex contains its own pathway launcher copy for Observatory.
+- Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex receipt chrome on `browser_attach`; Apex contains its own pathway launcher copy for Observatory.
 - User profile: loader owned directly by `user-profile.ts`.
 - `@` path overlay: standalone `at-path-complete.ts`; lists on-disk children for scoped `@dir/` mentions so gitignored folders (for example `files/`) appear in autocomplete. Bare `@foo` stays with FFF/stock.
-- MCP adapter: standalone `mcp-adapter.ts`; MCP tools use Pi's stock renderer.
-- Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; stock tool rendering for isolated writer worktrees.
+- MCP adapter: standalone `mcp-adapter.ts`; Apex receipt chrome on `mcp` / `mcpScript` (overrides adapter renderers). Direct and namespace MCP tools keep adapter chrome.
+- Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; Apex receipt chrome on `worktree`.
 
 ## Secrets
 
