@@ -212,9 +212,59 @@ export function qualifyModel(
   return `${provider}/${model}`;
 }
 
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
+
+export function thinkingRank(level: string | undefined): number {
+  if (!level) return -1;
+  return (THINKING_LEVELS as readonly string[]).indexOf(level);
+}
+
+export function nextThinkingLevel(level: string | undefined): string | undefined {
+  const rank = thinkingRank(level);
+  if (rank < 0) return undefined;
+  return THINKING_LEVELS[Math.min(rank + 1, THINKING_LEVELS.length - 1)];
+}
+
 /**
- * Build ordered model attempts. Explicit override replaces only the primary;
- * declared fallbacks remain, excluding the default primary.
+ * Oracle thinking must stay at least as high as its configured default, and
+ * must step above the parent when the parent is at that default or higher.
+ * Example: configured high + parent high -> xhigh. Never drops below configured.
+ */
+export function resolveOracleThinking(
+  configured: string | undefined,
+  parent: string | undefined,
+): string | undefined {
+  const configuredRank = thinkingRank(configured);
+  const parentRank = thinkingRank(parent);
+  if (parentRank >= 0 && parentRank >= Math.max(configuredRank, 0)) {
+    return nextThinkingLevel(parent) ?? configured ?? parent;
+  }
+  return configured ?? parent;
+}
+
+export function resolveAgentThinking(
+  def: Pick<AgentDef, "name" | "thinking">,
+  parent?: string,
+): string | undefined {
+  return def.name === "oracle"
+    ? resolveOracleThinking(def.thinking, parent)
+    : def.thinking;
+}
+
+/**
+ * Build ordered model attempts. New spawns omit override so the configured
+ * primary plus declared fallbacks run. Rebind may pass the sidecar model so a
+ * recovered worker resumes on the model it already landed on.
  * Empty chain returns `[undefined]` so a single default-model attempt still runs.
  */
 export function modelAttempts(
@@ -226,10 +276,9 @@ export function modelAttempts(
   const qualifiedFallbacks = def.fallbackModels.map((model) =>
     qualifyModel(model, provider),
   );
-  // An explicit override replaces only the primary model. The agent's declared
-  // fallback chain remains available, while its default primary stays excluded
-  // so review-diversity overrides cannot silently fall back to that model even
-  // if it was accidentally repeated in fallbackModels.
+  // A rebind override replaces only the primary. Declared fallbacks remain;
+  // the default primary stays excluded so a recovered fallback session cannot
+  // silently return to a primary that already failed.
   const chain = override
     ? [
         qualifyModel(override, provider),

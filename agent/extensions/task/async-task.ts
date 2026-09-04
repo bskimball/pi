@@ -20,6 +20,7 @@ import {
   composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
+  resolveAgentThinking,
   stderrDiagnostic,
   type AgentDef,
 } from "./runtime/agent-discovery.ts";
@@ -1195,7 +1196,6 @@ export default function (pi: ExtensionAPI) {
     params: {
       prompt: string;
       cwd: string;
-      model?: string;
       rebind?: WorkerSidecar;
       reportSchema?: string;
       forkSessionFile?: string;
@@ -1212,7 +1212,10 @@ export default function (pi: ExtensionAPI) {
     const sessionDir = params.rebind?.sessionDir ?? ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
-    const attempts = modelAttempts(def, params.model ?? params.rebind?.model);
+    const thinking =
+      params.rebind?.thinking ??
+      resolveAgentThinking(def, pi.getThinkingLevel());
+    const attempts = modelAttempts(def, params.rebind?.model);
     // Skip known-unhealthy provider/model circuits before spawn. When every
     // candidate is open, selectAttempt still returns a deterministic fail-safe
     // without erasing circuit state.
@@ -1227,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
       mission: params.rebind?.mission ?? missionFromPrompt(params.prompt),
       cwd: params.cwd,
       model: modelLabel,
-      thinking: def.thinking,
+      thinking,
       initialPrompt: params.rebind ? "" : params.prompt,
       modelAttempts: attempts,
       modelAttemptIndex: initial.index,
@@ -1308,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
         args.push("--model", model);
       }
     }
-    if (def.thinking) args.push("--thinking", def.thinking);
+    if (thinking) args.push("--thinking", thinking);
     if (!def.inheritSkills) args.push("--no-skills");
     if (def.tools) {
       const tools = def.tools
@@ -1612,7 +1615,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       model: Type.Optional(
         Type.String({
           description:
-            "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider.",
+            "Ignored. Specialists use their configured default model and fallback chain. Oracle thinking is raised automatically when the parent thinking level is the same or higher.",
         }),
       ),
       reportSchema: Type.Optional(
@@ -1679,7 +1682,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       const { worker, error } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
-        model: params.model,
         reportSchema,
         forkSessionFile,
       });
@@ -1715,8 +1717,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
           id: "starting",
           agent: args.agent ?? "agent",
           mission: missionFromPrompt(args.prompt ?? "Mission"),
-          model: args.model ?? def?.model,
-          thinking: def?.thinking,
+          model: def?.model,
+          thinking: def
+            ? resolveAgentThinking(def, pi.getThinkingLevel())
+            : undefined,
           lifecycle: "starting",
           phase: "none",
           generation: 1,
@@ -1987,7 +1991,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         const { worker, error } = await spawnWorker(def, {
           prompt: "",
           cwd: sidecar.cwd,
-          model: sidecar.model,
           rebind: sidecar,
         });
         lines.push(error

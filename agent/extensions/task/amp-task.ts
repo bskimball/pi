@@ -22,11 +22,10 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
-  agentProvider,
   composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
-  qualifyModel,
+  resolveAgentThinking,
   stderrDiagnostic,
 } from "./runtime/agent-discovery.ts";
 import { isolatedChildEnv } from "./runtime/child-process.ts";
@@ -551,7 +550,7 @@ export default function (pi: ExtensionAPI) {
     model: Type.Optional(
       Type.String({
         description:
-          "Omit this. Every agent has a configured default model and fallback chain; do not override it. The only sanctioned override is upgrading oracle so its review capability is at least the orchestrator's. Format when sanctioned: provider/id, or a bare id to inherit the agent's provider. Declared fallback models remain enabled.",
+          "Ignored. Specialists use their configured default model and fallback chain. Oracle thinking is raised automatically when the parent thinking level is the same or higher.",
       }),
     ),
   });
@@ -609,7 +608,8 @@ export default function (pi: ExtensionAPI) {
       const idleMs = MODEL_IDLE_MS;
       const toolIdleMs = TOOL_IDLE_MS;
       const maxTurns = def.maxTurns ?? 30;
-      const attempts = modelAttempts(def, params.model);
+      const thinking = resolveAgentThinking(def, pi.getThinkingLevel());
+      const attempts = modelAttempts(def);
 
       const ledger = new ActivityLedger({ maxActivities: 400 });
       const attemptedModels: string[] = [];
@@ -641,7 +641,7 @@ export default function (pi: ExtensionAPI) {
         attemptedModels: [...attemptedModels],
         attemptFailures: [...attemptFailures],
         model: currentModel,
-        thinking: def.thinking,
+        thinking,
         fallbackUsed: attemptedModels.length > 1,
         turns,
         exitCode: finalExitCode,
@@ -753,7 +753,7 @@ export default function (pi: ExtensionAPI) {
               );
             else args.push("--model", model);
           }
-          if (def.thinking) args.push("--thinking", def.thinking);
+          if (thinking) args.push("--thinking", thinking);
           if (!def.inheritSkills) args.push("--no-skills");
           if (def.tools) {
             const tools = def.tools
@@ -1155,10 +1155,10 @@ export default function (pi: ExtensionAPI) {
           // through a false "running" frame.
           status: "queued",
           startedAt: context.state.startedAt,
-          model: args.model
-            ? qualifyModel(args.model, agentProvider(def))
-            : def?.model,
-          thinking: def?.thinking,
+          model: def?.model,
+          thinking: def
+            ? resolveAgentThinking(def, pi.getThinkingLevel())
+            : undefined,
           activities: [],
           attemptedModels: [],
           attemptFailures: [],
