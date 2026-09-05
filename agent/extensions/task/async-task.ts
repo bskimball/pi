@@ -1197,6 +1197,7 @@ export default function (pi: ExtensionAPI) {
       prompt: string;
       cwd: string;
       rebind?: WorkerSidecar;
+      modelOverride?: string;
       reportSchema?: string;
       forkSessionFile?: string;
       lastPhaseTag?: string;
@@ -1215,7 +1216,10 @@ export default function (pi: ExtensionAPI) {
     const thinking =
       params.rebind?.thinking ??
       resolveAgentThinking(def, pi.getThinkingLevel());
-    const attempts = modelAttempts(def, params.rebind?.model);
+    const attempts = modelAttempts(
+      def,
+      params.rebind?.model ?? params.modelOverride,
+    );
     // Skip known-unhealthy provider/model circuits before spawn. When every
     // candidate is open, selectAttempt still returns a deterministic fail-safe
     // without erasing circuit state.
@@ -1615,7 +1619,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       model: Type.Optional(
         Type.String({
           description:
-            "Ignored. Specialists use their configured default model and fallback chain. Oracle thinking is raised automatically when the parent thinking level is the same or higher.",
+            "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply. Oracle thinking is raised automatically when the parent thinking level is the same or higher.",
         }),
       ),
       reportSchema: Type.Optional(
@@ -1682,6 +1686,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       const { worker, error } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
+        modelOverride: params.model?.trim() || undefined,
         reportSchema,
         forkSessionFile,
       });

@@ -263,7 +263,8 @@ export function resolveAgentThinking(
 
 /**
  * Build ordered model attempts. New spawns omit override so the configured
- * primary plus declared fallbacks run. Rebind may pass the sidecar model so a
+ * primary plus declared fallbacks run, unless the user explicitly requested a
+ * different model for that delegation. Rebind may pass the sidecar model so a
  * recovered worker resumes on the model it already landed on.
  * Empty chain returns `[undefined]` so a single default-model attempt still runs.
  */
@@ -276,9 +277,10 @@ export function modelAttempts(
   const qualifiedFallbacks = def.fallbackModels.map((model) =>
     qualifyModel(model, provider),
   );
-  // A rebind override replaces only the primary. Declared fallbacks remain;
-  // the default primary stays excluded so a recovered fallback session cannot
-  // silently return to a primary that already failed.
+  // An explicit override (user-requested model or rebind recovery) replaces
+  // only the primary. Declared fallbacks remain; the default primary stays
+  // excluded so a recovered fallback session cannot silently return to a
+  // primary that already failed.
   const chain = override
     ? [
         qualifyModel(override, provider),
