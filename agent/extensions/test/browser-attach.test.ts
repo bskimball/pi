@@ -49,8 +49,7 @@ describe("browser_attach", () => {
     assert.deepEqual(result.details, {});
     assert.deepEqual(execArgs?.slice(-2), ["connect", "inspect https://example.com"]);
     const text = result.content[0]?.text ?? "";
-    assert.match(text, /You are co-browsing with me/);
-    assert.match(text, /Task\/URL from me: inspect https:\/\/example\.com/);
+    assert.match(text, /Co-browse in dedicated authenticated debug Chrome for: inspect https:\/\/example\.com/);
     assert.match(text, /\[Connect step\]/);
     assert.match(text, /status: succeeded/);
     assert.match(text, /STATUS: connected/);

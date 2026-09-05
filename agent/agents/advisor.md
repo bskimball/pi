@@ -1,7 +1,7 @@
 ---
 name: advisor
 description: Strategic planner used on explicit user request, and in orchestrate mode for course changes or conflicting specialist findings. Advisory only; does not implement.
-model: local-proxy/claude-opus-5
+model: local-proxy/gpt-6-astra
 fallbackModels:
   - local-proxy/grok-4.6
   - local-proxy/gpt-5.6-sol

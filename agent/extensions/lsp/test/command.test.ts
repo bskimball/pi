@@ -225,7 +225,7 @@ describe("command resolution", () => {
       wrapper,
       [
         "@echo off",
-        `start /b \"\" cmd.exe /d /c \"ping -n 60 127.0.0.1 >nul & echo still>%MARKER%\"`.replace(
+        `start /b "" cmd.exe /d /c "ping -n 60 127.0.0.1 >nul & echo still>%MARKER%"`.replace(
           "%MARKER%",
           marker.replace(/%/g, "%%"),
         ),

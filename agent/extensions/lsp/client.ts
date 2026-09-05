@@ -568,14 +568,14 @@ export class LspClient {
   }
 
   private notifyWaiters(uri: string): void {
-    for (const waiter of [...this.waiters]) {
+    for (const waiter of this.waiters) {
       if (waiter.uri !== uri) continue;
       waiter.onPublish();
     }
   }
 
   private rejectWaiters(error: Error): void {
-    for (const waiter of [...this.waiters]) {
+    for (const waiter of this.waiters) {
       if (waiter.signal && waiter.abortHandler) {
         waiter.signal.removeEventListener("abort", waiter.abortHandler);
       }

@@ -151,7 +151,7 @@ function writeItemCount(args: unknown): string | undefined {
 /**
  * Same header shape as the generic Apex tool receipt:
  *   ● todo_read
- *   ✓ todo_read  1/3 done · Align the receipt
+ *   ● todo_read  1/3 done · Align the receipt
  */
 function todoReceiptLine(
   theme: StatusTheme,
@@ -170,8 +170,8 @@ function todoReceiptLine(
       : options.kind === "queued"
         ? theme.fg("dim", "\u25cb")
         : options.kind === "failed"
-          ? theme.fg("error", "\u00d7")
-          : theme.fg("success", "\u2713");
+          ? theme.fg("error", "\u25cf")
+          : theme.fg("success", "\u25cf");
   const lead = `${glyph} ${theme.fg("toolTitle", options.tool)}`;
   const subject = safeLine(options.subject, 120);
   const left = subject ? `${lead} ${theme.fg("muted", subject)}` : lead;

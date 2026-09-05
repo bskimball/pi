@@ -82,7 +82,6 @@ export const unifiedEditSchema = {
 } as any;
 
 export type UnifiedEditParams = { text: string };
-type ToolContent = Array<{ type: "text"; text: string }>;
 
 interface Edit {
 	oldText: string;
@@ -879,18 +878,8 @@ async function buildRowPlan(text: string, cwd: string): Promise<ParsedPlan> {
 // Patch parsing/application planning
 // ============================================================================
 
-function isPatchPayload(text: string): boolean {
-	const trimmed = normalizeToLF(text).trim();
-	return trimmed.startsWith("*** Begin Patch") && trimmed.endsWith("*** End Patch");
-}
-
 function isPatchLikePayload(text: string): boolean {
 	return normalizeToLF(text).trimStart().startsWith("*** Begin Patch");
-}
-
-function patchTextForPreview(text: string): string {
-	const normalized = normalizeToLF(text).trimEnd();
-	return normalized.endsWith("*** End Patch") ? normalized : `${normalized}\n*** End Patch`;
 }
 
 function parseUpdateChunk(lines: string[], startIndex: number, lastContentLine: number, allowMissingContext: boolean): { chunk: UpdateChunk; nextIndex: number } {
@@ -1092,13 +1081,6 @@ async function buildPatchPlan(text: string, cwd: string): Promise<ParsedPlan> {
 
 export async function buildPlan(text: string, cwd: string): Promise<ParsedPlan> {
 	return isPatchLikePayload(text) ? buildPatchPlan(text, cwd) : buildRowPlan(text, cwd);
-}
-
-async function buildPreviewPlan(text: string, cwd: string, argsComplete: boolean): Promise<ParsedPlan> {
-	if (!argsComplete && isPatchLikePayload(text) && !isPatchPayload(text)) {
-		return buildPatchPlan(patchTextForPreview(text), cwd);
-	}
-	return buildPlan(text, cwd);
 }
 
 // ============================================================================

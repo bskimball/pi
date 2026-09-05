@@ -449,8 +449,8 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
       const glyph = runningNow
         ? theme.fg("warning", "\u25cf")
         : context.isError
-          ? theme.fg("error", "\u00d7")
-          : theme.fg("success", "\u2713");
+          ? theme.fg("error", "\u25cf")
+          : theme.fg("success", "\u25cf");
       const elapsed = context.state.startedAt
         ? theme.fg(
             "dim",

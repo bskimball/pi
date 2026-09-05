@@ -108,7 +108,7 @@ function validHttpUrl(raw: string): URL | undefined {
 function privateHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal") return true;
-  if (/^127\./.test(host) || /^0\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true;
+  if (host.startsWith("127.") || host.startsWith("0.") || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) return true;
   const match = host.match(/^172\.(\d{1,3})\./);
   if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
   if (host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;

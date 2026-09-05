@@ -6,12 +6,10 @@
 
 import {
   spawn,
-  spawnSync,
   type ChildProcess,
   type ChildProcessByStdio,
 } from "node:child_process";
 import type { Readable } from "node:stream";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

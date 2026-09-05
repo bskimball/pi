@@ -1,4 +1,4 @@
-"""Generate agent/extensions/apex/lib/shark-art.ts from the shark encoder.
+"""Generate agent/extensions/apex/observatory/shark-art.ts from the shark encoder.
 
 Runs encode-shark.py's `to_json` at the landing-screen sizes, packs each cell
 into the string form pixel-art.ts decodes, and overwrites the TS module.
@@ -12,7 +12,7 @@ import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-OUT = ROOT / "agent" / "extensions" / "apex" / "lib" / "shark-art.ts"
+OUT = ROOT / "agent" / "extensions" / "apex" / "observatory" / "shark-art.ts"
 
 spec = importlib.util.spec_from_file_location("encode_shark", HERE / "encode-shark.py")
 encode_shark = importlib.util.module_from_spec(spec)

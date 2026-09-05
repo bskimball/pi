@@ -12,8 +12,6 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killProcessTree } from "./powershell/internal/process-tree-kill.ts";
 
-type PowerShellArgs = { command?: string; timeout?: number };
-
 /**
  * One-line command summary for the receipt header. Multi-line scripts collapse
  * to their first statement plus a line count, never the whole body.

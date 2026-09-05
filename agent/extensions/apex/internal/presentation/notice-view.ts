@@ -13,7 +13,7 @@
 // human-readable body that the model receives.
 
 import { safeTruncateToWidth, wrapPlainText } from "./safe-text-layout.ts";
-import { TREE, WidthText, cleanInline, fitLine } from "./ui-common.ts";
+import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
 import {
   buildTreeLines,
   metaText,
@@ -67,11 +67,11 @@ const TONES: Record<StatusKind, string> = {
 
 const GLYPHS: Record<StatusKind, string> = {
   running: "\u25cf",
-  succeeded: "\u2713",
-  settled: "\u2713",
-  failed: "\u00d7",
-  killed: "\u00d7",
-  unknown: "\u00b7",
+  succeeded: "\u25cf",
+  settled: "\u25cf",
+  failed: "\u25cf",
+  killed: "\u25cf",
+  unknown: "\u25cb",
 };
 
 const LABELS: Record<StatusKind, string> = {
@@ -92,7 +92,7 @@ function statusLabel(kind: StatusKind): string {
 }
 
 function statusGlyph(theme: StatusTheme, kind: StatusKind): string {
-  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u00b7");
+  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u25cb");
 }
 
 function isTerminalKind(kind: StatusKind): boolean {
@@ -164,8 +164,8 @@ function previewRows(
 /**
  * The one notification shape:
  *
- *   ◇ notice  bg process  1 settled                            background
- *   ├─ ✓ bg_1  npm run dev  exit 0 · succeeded
+ *   ● notice  bg process  1 settled                            background
+ *   ├─ ● bg_1  npm run dev  exit 0 · succeeded
  *   │  npm run dev
  *   ╰─ Use bg_status for bounded logs, or bg_list to see jobs.
  *
@@ -197,7 +197,7 @@ export function noticeLines(
   // and the row ids (`bg_1`) already name the subsystem, so it is the
   // first cell to go.
   const headerLeft = [
-    theme.fg("dim", TREE.receipt),
+    theme.fg(failed ? "error" : "success", "\u25cf"),
     theme.fg("customMessageLabel", "notice"),
     inner >= 44 ? theme.fg("muted", safeLine(options.channel, 40)) : "",
     theme.fg(failed ? "error" : "text", summary),

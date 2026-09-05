@@ -31,7 +31,7 @@ function asRange(value: unknown): Range | undefined {
   };
 }
 
-function locLine(uri: string, range: Range | undefined, cwdHint?: string): string {
+function locLine(uri: string, range: Range | undefined): string {
   const path = uriToPath(uri);
   if (!range) return path;
   const { line, column } = fromLspPosition(range.start);

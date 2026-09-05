@@ -55,17 +55,6 @@ export type GraphifyArtifacts = {
   needsUpdatePath: string;
 };
 
-type GraphifyArgs = {
-  operation?: string;
-  question?: string;
-  mode?: string;
-  budget?: number;
-  from?: string;
-  to?: string;
-  concept?: string;
-  scope?: string;
-};
-
 const OPERATIONS = ["query", "path", "explain"] as const;
 
 function notify(

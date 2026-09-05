@@ -327,7 +327,7 @@ function renderWorkerCard(
     ]
       .filter(Boolean)
       .join(" · ");
-    const left = `${theme.fg("dim", TREE.header)} ${theme.fg("dim", view.id)} ${theme.fg("accent", view.agent)}${meta ? ` ${theme.fg("dim", `(${meta})`)}` : ""}  ${theme.fg("text", view.mission)}`;
+    const left = `${theme.fg(stateColor, "\u25cf")} ${theme.fg("dim", view.id)} ${theme.fg("accent", view.agent)}${meta ? ` ${theme.fg("dim", `(${meta})`)}` : ""}  ${theme.fg("text", view.mission)}`;
     const elapsed = formatDuration(now - view.createdAt);
     const lines = [
       fitLine(
@@ -631,7 +631,7 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
       view.lifecycle === "failed" || view.lifecycle === "closed"
         ? theme.fg("error", view.lifecycle)
         : theme.fg("success", view.id === "starting" ? "starting" : "started");
-    const left = `${theme.fg("dim", TREE.header)} ${theme.fg("dim", "async")} ${theme.fg("accent", view.agent)} ${theme.fg("text", view.id)}  ${theme.fg("text", view.mission)}`;
+    const left = `${theme.fg("success", "\u25cf")} ${theme.fg("dim", "async")} ${theme.fg("accent", view.agent)} ${theme.fg("text", view.id)}  ${theme.fg("text", view.mission)}`;
     const hint =
       view.id === "starting"
         ? state
@@ -3055,8 +3055,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           }
           const released = !view.countsTowardCap;
           const left = released
-            ? `${theme.fg("success", "✓")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`
-            : `${theme.fg("dim", TREE.receipt)} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`;
+            ? `${theme.fg("success", "\u25cf")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`
+            : `${theme.fg("warning", "\u25cf")} ${theme.fg("muted", view.id)} ${theme.fg("muted", view.agent)}`;
           const right = released
             ? `${theme.fg("success", "task complete")} ${theme.fg("dim", `· slot released · ${close.liveWorkers}/${close.maxWorkers} workers`)}`
             : theme.fg("warning", "closing · slot retained");

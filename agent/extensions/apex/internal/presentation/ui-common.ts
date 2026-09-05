@@ -55,12 +55,13 @@ export function formatDuration(ms: number): string {
 
 /** Shared tree glyphs and column widths for tool and task surfaces. */
 export const TREE = {
-  header: "\u25c6",
+  /** Active root: filled circle, painted in the owning receipt's status tone. */
+  header: "\u25cf",
   branch: "\u251c\u2500",
   last: "\u2570\u2500",
   rail: "\u2502",
-  /** Receipt root: a closed//cleanup surface that is not a tree child. */
-  receipt: "\u25c7",
+  /** Idle receipt root: open circle, painted in the owning receipt's status tone. */
+  receipt: "\u25cb",
   /** Detached continuation: aligns to the child column without a tree edge. */
   hang: "   ",
 } as const;

@@ -49,17 +49,18 @@ const TONES: Record<StatusKind, string> = {
   unknown: "muted",
 };
 
+/** Status is carried by color, not shape: open circle when idle, filled otherwise. */
 const GLYPHS: Record<StatusKind, string> = {
   queued: "\u25cb",
   starting: "\u25cb",
   running: "\u25cf",
-  waiting: "?",
-  succeeded: "\u2713",
-  settled: "\u2713",
-  failed: "\u00d7",
-  killed: "\u00d7",
-  closed: "\u25c7",
-  unknown: "\u00b7",
+  waiting: "\u25cf",
+  succeeded: "\u25cf",
+  settled: "\u25cf",
+  failed: "\u25cf",
+  killed: "\u25cf",
+  closed: "\u25cb",
+  unknown: "\u25cb",
 };
 
 const LABELS: Record<StatusKind, string> = {
@@ -84,7 +85,7 @@ export function statusLabel(kind: StatusKind): string {
 }
 
 export function statusGlyph(theme: StatusTheme, kind: StatusKind): string {
-  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u00b7");
+  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u25cb");
 }
 
 export function isTerminalKind(kind: StatusKind): boolean {
@@ -219,24 +220,28 @@ export interface ReceiptHeaderOptions {
   label?: string;
   /** Right-aligned duration/age text. */
   duration?: string;
-  /** Root glyph override; defaults to the tree header diamond. */
+  /** Root glyph override for headers without a status kind; defaults to an idle circle. */
   rootGlyph?: string;
 }
 
 /**
  * The one receipt header shape used by every background-job and task surface:
  *
- *   ◆ bg_status  bg_1  npm run dev (pid 4821)      running   2m10s
+ *   ● bg_status  bg_1  npm run dev (pid 4821)      running   2m10s
  *
- * Everything after `tool` is optional and gives way left-to-right as the
- * terminal narrows, because `fitLine` clips the left side only.
+ * The root is always a circle: open when idle, filled otherwise, painted in
+ * the receipt's status tone. Everything after `tool` is optional and gives
+ * way left-to-right as the terminal narrows, because `fitLine` clips the
+ * left side only.
  */
 export function receiptHeader(
   theme: StatusTheme,
   width: number,
   options: ReceiptHeaderOptions,
 ): string {
-  const glyph = theme.fg("dim", options.rootGlyph ?? TREE.header);
+  const glyph = options.kind
+    ? statusGlyph(theme, options.kind)
+    : theme.fg("dim", options.rootGlyph ?? TREE.receipt);
   const parts = [glyph, theme.fg("toolTitle", safeLine(options.tool, 40))];
   const id = safeLine(options.id, 40);
   if (id) parts.push(theme.fg("dim", id));

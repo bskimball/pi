@@ -61,19 +61,19 @@ export const CANONICAL_STATUSES = [
 
 export type TodoStatus = (typeof CANONICAL_STATUSES)[number];
 
-/** Narrow BMP glyphs only: every row is exactly one cell wide in the gutter. */
+/** Circle-only gutter: open when idle, filled otherwise; status reads from color. */
 const TODO_GLYPHS: Record<TodoStatus, string> = {
   pending: "\u25cb", // ○
   in_progress: "\u25cf", // ●
-  blocked: "\u2298", // ⊘
-  completed: "\u2713", // ✓
-  cancelled: "\u00d7", // ×
+  blocked: "\u25cf", // ●
+  completed: "\u25cf", // ●
+  cancelled: "\u25cb", // ○
 };
 
 const TODO_TONES: Record<TodoStatus, string> = {
   pending: "muted",
   in_progress: "warning",
-  blocked: "text",
+  blocked: "error",
   completed: "success",
   cancelled: "dim",
 };
@@ -277,7 +277,7 @@ const AGENT_GLYPHS: Record<string, string> = {
   running: "\u25cf",
   retrying: "\u25cf",
   compacting: "\u25cf",
-  aborting: "\u00d7",
+  aborting: "\u25cf",
 };
 
 const AGENT_TONES: Record<string, string> = {
@@ -363,7 +363,7 @@ export function renderAgentList(
     ].slice(0, TODO_LIST_MAX_LINES);
   }
   const rows = items.slice(0, ROWS_COLLAPSED).map((item) => {
-    const glyph = AGENT_GLYPHS[item.lifecycle] ?? "\u00b7";
+    const glyph = AGENT_GLYPHS[item.lifecycle] ?? "\u25cb";
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
     const label = AGENT_LABELS[item.lifecycle] ?? item.lifecycle;
     const title = cleanInline(item.agent, 40) || "agent";
@@ -427,7 +427,7 @@ function todoRow(
  *
  *   todos  Ship the harness (1 in progress · 3 pending)  ━━━───  2/6
  *     ⋮ 2 earlier
- *     ✓ Read the Observatory conventions
+ *     ● Read the Observatory conventions
  *     ● Render bounded rows
  *       that keep working past the right edge of a narrow terminal
  *     ⋮ 3 more

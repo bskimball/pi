@@ -98,7 +98,7 @@ export function starFieldRow(
   // failure, and the brightest anchors are what make the constellation
   // recognizable as *this* project even at the very end of a context.
   const burn = Math.min(BURN_CEILING, Math.max(0, fill ?? 0));
-  const cells: string[] = new Array(width).fill(" ");
+  const cells: string[] = Array.from({ length: width }, () => " ");
   const stars = constellation(seed, width);
   // Guarantee at least one survivor even if every magnitude happens to fall
   // below the ceiling, so the row is never completely blank.

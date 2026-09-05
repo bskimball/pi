@@ -11,9 +11,11 @@ config/markdown formats used in this repo. Two kinds of format are covered:
   (`agent/extensions/*.ts`) and not part of upstream Pi. Documented here in
   full, sourced directly from the implementation.
 
-Installed package version: `@earendil-works/pi-coding-agent@0.84.1` (see
-`package.json`). Upstream docs can drift between versions; when in doubt, read
-`node_modules/@earendil-works/pi-coding-agent/docs/*.md` directly.
+Declared package version: `@earendil-works/pi-coding-agent@0.85.0` (see
+`package.json`). The installed package and `package-lock.json` may temporarily
+lag while a package reinstall is pending. Upstream docs can drift between
+versions; when in doubt, compare `package.json` with the installed version and
+read `node_modules/@earendil-works/pi-coding-agent/docs/*.md` directly.
 
 ## Contents
 

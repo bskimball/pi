@@ -233,7 +233,7 @@ export function resolveServer(key: LanguageKey, user: LspUserConfig): ResolvedSe
     candidates,
     initializationOptions: {
       ...base.initializationOptions,
-      ...(override.initializationOptions ?? {}),
+      ...override.initializationOptions,
     },
     settings: override.settings !== undefined ? override.settings : base.settings,
     rootMarkers,

@@ -13,7 +13,7 @@
 // human-readable body that the model receives.
 
 import { safeTruncateToWidth, wrapPlainText } from "./safe-text-layout.ts";
-import { TREE, WidthText, cleanInline, fitLine } from "./ui-common.ts";
+import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
 import { buildTreeLines, type TreeRow } from "./tree-view.ts";
 import {
   detailRow,
@@ -84,8 +84,8 @@ function previewRows(
 /**
  * The one notification shape:
  *
- *   ◇ notice  async task  1 settled                            background
- *   ├─ ✓ task_4  librarian  gen 1 · 11 turns · settled
+ *   ● notice  async task  1 settled                            background
+ *   ├─ ● task_4  librarian  gen 1 · 11 turns · settled
  *   │  ## Findings ### Verdict: conditional pi-sticky-input@0.2.0 is …
  *   ╰─ task_status/task_wait for full results · task_send · task_close
  *
@@ -117,7 +117,7 @@ export function noticeLines(
   // and the row ids (`task_4`, `bg_1`) already name the subsystem, so it is the
   // first cell to go.
   const headerLeft = [
-    theme.fg("dim", TREE.receipt),
+    theme.fg(failed ? "error" : "success", "\u25cf"),
     theme.fg("customMessageLabel", "notice"),
     inner >= 44 ? theme.fg("muted", safeLine(options.channel, 40)) : "",
     theme.fg(failed ? "error" : "text", summary),

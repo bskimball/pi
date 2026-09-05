@@ -211,7 +211,7 @@ agent/extensions/apex/observatory/
 └── sky-preview.mjs       star-field-only harness
 ```
 
-The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `agent/extensions/apex/observatory/shark-art.ts` — regenerate it via `tools/shark-art/`, never hand-edit that file. (`tools/shark-art/emit-ts.py` still writes the old `apex/lib/` path; that generator is stale.) `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
+The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `agent/extensions/apex/observatory/shark-art.ts` — regenerate it with `python tools/shark-art/emit-ts.py`, never hand-edit that file. `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
 
 Two facts ride on the mark: the Observatory splash (`observatory.ts`) shows the full mark on a fresh chat only; the star field (`star-field.ts`) encodes the *shape* from the workspace path (so every project has its own constellation, stable across launches) and the *density* from context usage (stars burn out faintest-first as the window fills).
 
