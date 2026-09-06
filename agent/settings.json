@@ -2,7 +2,7 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "0.85.0",
+  "lastChangelogVersion": "0.85.1",
   "packages": [
     "npm:@ff-labs/pi-fff"
   ],
