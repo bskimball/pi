@@ -1,12 +1,12 @@
 ---
 name: artisan
 description: Visual design and UI specialist for substantial frontend, redesign, design-system, or interaction-polish work requiring separate creative judgment, plus diagrams, slides, and data visualization. Ordinary frontend implementation stays with the lead in regular mode.
-model: opencode/muse-spark-1.3-contributor
+model: opencode/muse-spark-1.3-contributor-free
 fallbackModels:
   - local-proxy/claude-opus-5
   - local-proxy/gemini-3.8-flash-high
   - github-copilot/kimi-k3
-  - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
+  - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
 inheritSkills: true

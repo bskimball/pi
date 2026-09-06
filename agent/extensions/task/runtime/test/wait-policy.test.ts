@@ -254,18 +254,20 @@ describe("dispatch wait wake vs timeout", () => {
 })
 
 describe("dispatch steer copy", () => {
-  it("builds unique ids, parent-queued ack, and no-blind-launch prompt", () => {
+  it("builds unique ids, parent-queued ack, and delegation-routed prompt", () => {
     const a = nextDispatchId(1, 0);
     const b = nextDispatchId(1, 1);
     assert.notEqual(a, b);
     const prompt = formatDispatchPrompt(a, "add a second slice");
     assert.match(prompt, /Preserve existing tasks/i);
     assert.match(prompt, /isolated worktrees/i);
-    assert.match(prompt, /Do not automatically launch writers blindly/i);
+    assert.match(prompt, /active delegation policy/i);
+    assert.match(prompt, /Do NOT perform substantial work inline ahead of running workers/i);
+    assert.match(prompt, /artisan for visual\/UI/i);
     assert.match(prompt, /add a second slice/);
     assert.match(
       formatDispatchAck(a),
-      /Recorded .* parent steering requested\. Not assigned to a worker/,
+      /Recorded .* parent steering requested\. Route under active delegation policy/,
     );
     assert.match(formatDispatchWaitYield(a), /not a timeout/);
     assert.equal(DISPATCH_USAGE, "Usage: /dispatch <request>");

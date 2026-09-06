@@ -9,11 +9,13 @@ export function nextDispatchId(now = Date.now(), seq = 0): string {
 
 export function formatDispatchPrompt(id: string, request: string): string {
   return [
-    `Concurrent user dispatch (id=${id}). This is additional work for the SAME orchestrator, not a new session and not an automatic worker launch.`,
+    `Concurrent user dispatch (id=${id}). This is additional work for the SAME orchestrator, not a new session. It arrives while workers may still be running.`,
+    "",
+    "Route it under the active delegation policy (Regular inline-by-default vs strict-orchestrator specialist-first). Do NOT perform substantial work inline ahead of running workers: if the request outgrows trivial glue, delegate via task_start with the correct specialist (artisan for visual/UI, machinist for non-visual code/config/tests, scribe for prose) in an isolated worktree when parallel.",
     "",
     "Preserve existing tasks. Assess overlap and capacity.",
     "Independent work: isolated worktrees. Overlapping requests: steer the owner or wait.",
-    "Review and integrate centrally. Do not automatically launch writers blindly.",
+    "Review and integrate centrally.",
     "",
     "Request:",
     request,
@@ -21,7 +23,7 @@ export function formatDispatchPrompt(id: string, request: string): string {
 }
 
 export function formatDispatchAck(id: string): string {
-  return `Recorded ${id}; parent steering requested. Not assigned to a worker.`;
+  return `Recorded ${id}; parent steering requested. Route under active delegation policy; delegate via task_start when it outgrows trivial glue.`;
 }
 
 export function formatDispatchWaitYield(id: string): string {

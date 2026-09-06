@@ -79,7 +79,7 @@ Task owns specialist discovery, subprocess environment, process-tree reaping, tr
 
 Command for steering the active parent orchestrator with concurrent requests or priority shifts while workers run:
 
-- **Target & Scope**: Directs additional work to the **same orchestrator** session. It is **not** an automatic worker assignment or launch; the orchestrator reviews capacity, preserves active work, steers existing workers, or delegates in isolated worktrees. Ordinary chat messages remain unchanged.
+- **Target & Scope**: Directs additional work to the **same orchestrator** session. The command itself assigns no worker; the orchestrator routes the request under the active delegation policy (Regular inline-by-default vs strict-orchestrator specialist-first) — delegating via `task_start` with the correct specialist (artisan for visual/UI, machinist for code, scribe for prose) when it outgrows trivial glue. It preserves active work, steers existing workers, or delegates in isolated worktrees. Substantial inline work ahead of running workers is out of scope. Ordinary chat messages remain unchanged.
 - **Recording & Delivery**: Records an `async-task-dispatch` entry in the session log and requests steering via hidden custom message (`deliverAs: "steer"`, `triggerTurn: true`).
 - **Interruption Semantics**:
   - Active `task_wait` yields immediately on dispatch without aborting the worker and without applying a timeout or cooldown. The orchestrator absorbs the dispatch and can reconnect later via `task_wait`.

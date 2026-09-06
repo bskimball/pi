@@ -141,7 +141,7 @@ describe("/dispatch command", () => {
     assert.match(payload.content, /first extra slice/);
     assert.deepEqual(first.opts, { triggerTurn: true, deliverAs: "steer" });
     assert.match(harness.notices[0]!, /parent steering requested/);
-    assert.match(harness.notices[0]!, /Not assigned to a worker/);
+    assert.match(harness.notices[0]!, /Route under active delegation policy/);
     assert.ok(harness.notices[0]!.includes(ids[0]!));
   });
 
