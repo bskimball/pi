@@ -82,28 +82,48 @@ export function formatRewaitRejected(options: {
 }
 
 export type WaitOutcome<T> = T | "timeout" | "interrupted";
+export type DispatchWaitOutcome<T> = WaitOutcome<T> | { dispatchId: string };
+
+type WaitSnapshotOptions<T> = {
+  signal?: AbortSignal;
+  timeoutMs: number;
+  register: (resolve: (snapshot: T) => void) => () => void;
+};
+
+type WaitSnapshotDispatchOptions<T> = WaitSnapshotOptions<T> & {
+  registerDispatchWake: (wake: (dispatchId: string) => void) => () => void;
+};
 
 /**
  * Wait for a generation snapshot without coupling cancellation of the caller
  * to cancellation of the worker. Worker termination is an explicit task_abort
  * operation; an interrupted parent turn only detaches this waiter.
+ *
+ * Dispatch wake is opt-in. Callers that omit `registerDispatchWake` keep the
+ * original WaitOutcome contract (task_chain).
  */
-export function waitForSnapshot<T>(options: {
-  signal?: AbortSignal;
-  timeoutMs: number;
-  register: (resolve: (snapshot: T) => void) => () => void;
-}): Promise<WaitOutcome<T>> {
+export function waitForSnapshot<T>(
+  options: WaitSnapshotDispatchOptions<T>,
+): Promise<DispatchWaitOutcome<T>>;
+export function waitForSnapshot<T>(
+  options: WaitSnapshotOptions<T>,
+): Promise<WaitOutcome<T>>;
+export function waitForSnapshot<T>(options: WaitSnapshotOptions<T> & {
+  registerDispatchWake?: (wake: (dispatchId: string) => void) => () => void;
+}): Promise<DispatchWaitOutcome<T>> {
   return new Promise((resolve) => {
     let done = false;
     let timer: NodeJS.Timeout | undefined;
     let unregister = () => {};
+    let unregisterDispatch = () => {};
 
-    const finish = (value: WaitOutcome<T>) => {
+    const finish = (value: DispatchWaitOutcome<T>) => {
       if (done) return;
       done = true;
       options.signal?.removeEventListener("abort", onSignalAbort);
       if (timer) clearTimeout(timer);
       unregister();
+      unregisterDispatch();
       resolve(value);
     };
 
@@ -115,11 +135,22 @@ export function waitForSnapshot<T>(options: {
     options.signal?.addEventListener("abort", onSignalAbort);
 
     unregister = options.register((snapshot) => finish(snapshot));
-    // Registration may discover an already-settled generation and resolve
-    // synchronously. In that case finish() ran before unregister was assigned.
+    // Settlement during register must not attach a dispatch listener.
     if (done) {
       unregister();
       return;
+    }
+
+    if (options.registerDispatchWake) {
+      unregisterDispatch = options.registerDispatchWake((dispatchId) =>
+        finish({ dispatchId }),
+      );
+      // Sync dispatch registration may resolve before unregisterDispatch is
+      // assigned; finish() then ran a no-op. Run the real cleanup once.
+      if (done) {
+        unregisterDispatch();
+        return;
+      }
     }
 
     if (options.timeoutMs > 0) {

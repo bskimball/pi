@@ -75,6 +75,17 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 
 Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
+### `/dispatch <request>`
+
+Command for steering the active parent orchestrator with concurrent requests or priority shifts while workers run:
+
+- **Target & Scope**: Directs additional work to the **same orchestrator** session. It is **not** an automatic worker assignment or launch; the orchestrator reviews capacity, preserves active work, steers existing workers, or delegates in isolated worktrees. Ordinary chat messages remain unchanged.
+- **Recording & Delivery**: Records an `async-task-dispatch` entry in the session log and requests steering via hidden custom message (`deliverAs: "steer"`, `triggerTurn: true`).
+- **Interruption Semantics**:
+  - Active `task_wait` yields immediately on dispatch without aborting the worker and without applying a timeout or cooldown. The orchestrator absorbs the dispatch and can reconnect later via `task_wait`.
+  - For active inference or other executing tools, steering is delivered at the next safe turn boundary.
+- **Reliability & Guarantees**: Steering is requested in-process and best-effort; there is no confirmed delivery receipt, durable recovery, or automatic replay across session restarts.
+
 ## Long-session and subagent stability
 
 1. `crash-logger/internal/segmenter-safety.ts` installs process-wide lazy JS grapheme segmentation before the first fullscreen paint.

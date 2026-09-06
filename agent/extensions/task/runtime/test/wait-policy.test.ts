@@ -7,6 +7,13 @@ import {
   waitForSnapshot,
   WAIT_DEFAULT_TIMEOUT_SEC,
 } from "../wait-policy.ts";
+import {
+  DISPATCH_USAGE,
+  formatDispatchAck,
+  formatDispatchPrompt,
+  formatDispatchWaitYield,
+  nextDispatchId,
+} from "../dispatch-steer.ts";
 
 describe("async task wait policy", () => {
   it("detaches an interrupted waiter without running worker cancellation", async () => {
@@ -72,6 +79,8 @@ describe("async task wait policy", () => {
 
   it("cleans up when registration finds an already-settled generation", async () => {
     let detached = 0;
+    let dispatchAttached = 0;
+    let dispatchDetached = 0;
 
     const outcome = await waitForSnapshot({
       timeoutMs: 1_000,
@@ -81,10 +90,18 @@ describe("async task wait policy", () => {
           detached += 1;
         };
       },
+      registerDispatchWake() {
+        dispatchAttached += 1;
+        return () => {
+          dispatchDetached += 1;
+        };
+      },
     });
 
     assert.equal(outcome, "settled");
     assert.equal(detached, 1);
+    assert.equal(dispatchAttached, 0);
+    assert.equal(dispatchDetached, 0);
   });
 });
 
@@ -176,5 +193,81 @@ describe("same-generation re-wait cooldown", () => {
       now: 1_000 + 10_000,
     });
     assert.equal(allowed.allow, true);
+  });
+});
+
+describe("dispatch wait wake vs timeout", () => {
+  it("wakes waitForSnapshot with dispatchId without timeout cooldown semantics", async () => {
+    let detached = 0;
+    let wake: ((id: string) => void) | undefined;
+    const waiting = waitForSnapshot({
+      timeoutMs: 5_000,
+      register() {
+        return () => {
+          detached += 1;
+        };
+      },
+      registerDispatchWake(fn) {
+        wake = fn;
+        return () => {
+          detached += 1;
+        };
+      },
+    });
+    wake?.("d-test-1");
+    const outcome = await waiting;
+    assert.deepEqual(outcome, { dispatchId: "d-test-1" });
+    assert.equal(detached, 2);
+    assert.notEqual(outcome, "timeout");
+    assert.notEqual(outcome, "interrupted");
+  });
+
+  it("unregisters a synchronously resolving dispatch wake exactly once", async () => {
+    let dispatchDetached = 0;
+    const outcome = await waitForSnapshot({
+      timeoutMs: 1_000,
+      register() {
+        return () => {};
+      },
+      registerDispatchWake(wake) {
+        wake("d-sync");
+        return () => {
+          dispatchDetached += 1;
+        };
+      },
+    });
+    assert.deepEqual(outcome, { dispatchId: "d-sync" });
+    assert.equal(dispatchDetached, 1);
+  });
+
+  it("cleared timeout fields after dispatch yield allow ordinary reconnect", () => {
+    const afterYield = evaluateRewait({
+      generation: 1,
+      lastWaitTimeoutAt: undefined,
+      lastWaitTimeoutSec: undefined,
+      lastWaitGeneration: undefined,
+      now: 1_000 + 10_000,
+      cooldownMs: 60_000,
+    });
+    assert.equal(afterYield.allow, true);
+  });
+})
+
+describe("dispatch steer copy", () => {
+  it("builds unique ids, parent-queued ack, and no-blind-launch prompt", () => {
+    const a = nextDispatchId(1, 0);
+    const b = nextDispatchId(1, 1);
+    assert.notEqual(a, b);
+    const prompt = formatDispatchPrompt(a, "add a second slice");
+    assert.match(prompt, /Preserve existing tasks/i);
+    assert.match(prompt, /isolated worktrees/i);
+    assert.match(prompt, /Do not automatically launch writers blindly/i);
+    assert.match(prompt, /add a second slice/);
+    assert.match(
+      formatDispatchAck(a),
+      /Recorded .* parent steering requested\. Not assigned to a worker/,
+    );
+    assert.match(formatDispatchWaitYield(a), /not a timeout/);
+    assert.equal(DISPATCH_USAGE, "Usage: /dispatch <request>");
   });
 });

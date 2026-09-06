@@ -137,7 +137,17 @@ import {
   formatRewaitRejected,
   resolveWaitTimeoutSec,
   waitForSnapshot,
+  type WaitOutcome,
+  type DispatchWaitOutcome,
 } from "./runtime/wait-policy.ts";
+import {
+  DISPATCH_ENTRY_TYPE,
+  DISPATCH_USAGE,
+  formatDispatchAck,
+  formatDispatchPrompt,
+  formatDispatchWaitYield,
+  nextDispatchId,
+} from "./runtime/dispatch-steer.ts";
 import {
   WAIT_DEFAULT_TIMEOUT_SEC,
   SETTLED_RESULT_CHARS,
@@ -669,9 +679,20 @@ export default function (pi: ExtensionAPI) {
     return reserveTokens;
   };
   let nextId = 1;
+  let dispatchSeq = 0;
   let agentBusy = false;
   let shuttingDown = false;
   let lastFleetKey = "";
+  const dispatchWaitWakes = new Set<(dispatchId: string) => void>();
+  const wakeActiveTaskWaits = (dispatchId: string) => {
+    for (const wake of [...dispatchWaitWakes]) {
+      try {
+        wake(dispatchId);
+      } catch {
+        // ignore listener errors
+      }
+    }
+  };
 
   const snapshotFleetItems = (): FleetSnapshotItem[] => {
     const items: FleetSnapshotItem[] = [];
@@ -1475,38 +1496,69 @@ export default function (pi: ExtensionAPI) {
     return { worker };
   };
 
-  const waitWorkerGeneration = (
+  function waitWorkerGeneration(
     worker: Worker,
     targetGen: number,
     timeoutMs: number,
     signal?: AbortSignal,
-  ) =>
-    waitForSnapshot<GenerationSnapshot>({
+  ): Promise<WaitOutcome<GenerationSnapshot>>;
+  function waitWorkerGeneration(
+    worker: Worker,
+    targetGen: number,
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    options: { yieldOnDispatch: true },
+  ): Promise<DispatchWaitOutcome<GenerationSnapshot>>;
+  function waitWorkerGeneration(
+    worker: Worker,
+    targetGen: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    options?: { yieldOnDispatch?: boolean },
+  ): Promise<DispatchWaitOutcome<GenerationSnapshot>> {
+    const register = (
+      resolve: (snapshot: GenerationSnapshot) => void,
+    ) => {
+      const waiter: Worker["waiters"][number] = {
+        generation: targetGen,
+        resolve,
+        timer: undefined,
+      };
+      worker.waiters.push(waiter);
+      notifySubscribers(worker);
+      if (
+        (worker.lifecycle === "settled" ||
+          worker.lifecycle === "failed" ||
+          worker.lifecycle === "closed") &&
+        worker.generation >= targetGen
+      ) {
+        resolve(generationSnapshot(worker));
+      }
+      return () => {
+        const index = worker.waiters.indexOf(waiter);
+        if (index >= 0) worker.waiters.splice(index, 1);
+        notifySubscribers(worker);
+      };
+    };
+    if (options?.yieldOnDispatch) {
+      return waitForSnapshot<GenerationSnapshot>({
+        signal,
+        timeoutMs,
+        register,
+        registerDispatchWake(wake) {
+          dispatchWaitWakes.add(wake);
+          return () => {
+            dispatchWaitWakes.delete(wake);
+          };
+        },
+      });
+    }
+    return waitForSnapshot<GenerationSnapshot>({
       signal,
       timeoutMs,
-      register(resolve) {
-        const waiter: Worker["waiters"][number] = {
-          generation: targetGen,
-          resolve,
-          timer: undefined,
-        };
-        worker.waiters.push(waiter);
-        notifySubscribers(worker);
-        if (
-          (worker.lifecycle === "settled" ||
-            worker.lifecycle === "failed" ||
-            worker.lifecycle === "closed") &&
-          worker.generation >= targetGen
-        ) {
-          resolve(generationSnapshot(worker));
-        }
-        return () => {
-          const index = worker.waiters.indexOf(waiter);
-          if (index >= 0) worker.waiters.splice(index, 1);
-          notifySubscribers(worker);
-        };
-      },
+      register,
     });
+  }
 
   const closeWorker = (
     worker: Worker,
@@ -2602,9 +2654,29 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         targetGen,
         timeoutMs,
         signal,
+        { yieldOnDispatch: true },
       );
 
       worker.subscribers?.delete(notifyLive);
+
+      if (
+        snapshot &&
+        typeof snapshot === "object" &&
+        "dispatchId" in snapshot
+      ) {
+        worker.lastWaitTimeoutAt = undefined;
+        worker.lastWaitTimeoutSec = undefined;
+        worker.lastWaitGeneration = undefined;
+        return textResult(
+          [
+            formatDispatchWaitYield(snapshot.dispatchId),
+            "",
+            formatWorkerWaitStatus(worker),
+          ].join("\n"),
+          false,
+          { worker: workerView(worker), waiting: false, dispatchYield: true },
+        );
+      }
 
       if (snapshot === "interrupted") {
         // A cancelled parent turn must not become an implicit task_abort. The
@@ -3306,6 +3378,48 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     },
   );
 
+  pi.registerCommand("dispatch", {
+    description:
+      "Queue additional work for the same parent orchestrator without launching a worker",
+    handler: async (args, ctx) => {
+      const request = args.trim();
+      if (!request) {
+        ctx.ui.notify(DISPATCH_USAGE, "warning");
+        return;
+      }
+      dispatchSeq += 1;
+      const id = nextDispatchId(Date.now(), dispatchSeq);
+      try {
+        pi.appendEntry(DISPATCH_ENTRY_TYPE, {
+          id,
+          request,
+          createdAt: Date.now(),
+        });
+      } catch (error) {
+        ctx.ui.notify(
+          `Could not record /dispatch: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        return;
+      }
+      const prompt = formatDispatchPrompt(id, request);
+      // Extension sendMessage is void and swallows async errors; this is a
+      // steering request, not confirmed delivery. Hidden custom message uses
+      // agent.steer when busy (deliverAs steer + triggerTurn).
+      pi.sendMessage(
+        {
+          customType: DISPATCH_ENTRY_TYPE,
+          content: prompt,
+          display: false,
+          details: { id },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+      wakeActiveTaskWaits(id);
+      ctx.ui.notify(formatDispatchAck(id), "info");
+    },
+  });
+
   // ------------------------------------------------------------ lifecycle
 
   // Busy gate is start → settled only (same pattern as bg-process).
@@ -3319,11 +3433,14 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   pi.on("session_start", () => {
+    dispatchSeq = 0;
+    dispatchWaitWakes.clear();
     syncFleetWidget();
   });
 
   pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
     shuttingDown = true;
+    dispatchWaitWakes.clear();
     try {
       for (const { item: worker } of workers.entries()) {
         if (worker.closed) continue;
