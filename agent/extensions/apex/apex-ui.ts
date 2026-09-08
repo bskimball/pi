@@ -18,6 +18,7 @@ import { installBrowserAttachReceipts } from "./internal/presentation/browser-at
 import { installBuiltinReceipts } from "./internal/presentation/builtin-receipts.ts";
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
+import { installIntercomReceipts } from "./internal/presentation/intercom-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
 import { installMcpReceipts } from "./internal/presentation/mcp-receipt.ts";
 import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
@@ -220,6 +221,7 @@ export default function (pi: ExtensionAPI) {
   // cannot import those extensions. Settlement notices use a message renderer.
   installFffReceipts();
   installGraphifyReceipts();
+  installIntercomReceipts(pi);
   installLspReceipts();
   installMemoryReceipts();
   installPowerShellReceipts();
