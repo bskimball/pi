@@ -1,8 +1,9 @@
 ---
 name: advisor
 description: Strategic planner used on explicit user request, and in orchestrate mode for course changes or conflicting specialist findings. Advisory only; does not implement.
-model: local-proxy/gpt-6-astra
+model: opencode/claude-fable-5-1
 fallbackModels:
+  - local-proxy/gpt-6-astra
   - local-proxy/grok-4.6
   - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'

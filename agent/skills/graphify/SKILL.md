@@ -1,6 +1,7 @@
 ---
 name: graphify
-description: "Query an existing knowledge graph when graphify-out/ exists, or build/update a navigable knowledge graph from code, docs, papers, images, or video."
+disable-model-invocation: true
+description: "Build or incrementally update a local Graphify knowledge graph. User-invoked via /graphify; agents must not start a rebuild on their own."
 ---
 
 # /graphify

@@ -4,7 +4,8 @@
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.85.1",
   "packages": [
-    "npm:@ff-labs/pi-fff"
+    "npm:@ff-labs/pi-fff",
+    "npm:pi-intercom"
   ],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"

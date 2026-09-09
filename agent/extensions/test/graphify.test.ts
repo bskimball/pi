@@ -9,9 +9,12 @@ import graphifyExtension, {
   buildGraphifyArgv,
   buildSystemBlock,
   detectArtifacts,
+  GRAPHIFY_CODE_STALE_REMINDER,
+  GRAPHIFY_STALE_SKIP,
   graphifyHandoffInstruction,
   graphifyStatusText,
   isGraphifyUpdateCommand,
+  isGraphStale,
   QUERY_SCOPES,
   isLikelyCodePath,
   isPathInside,
@@ -300,6 +303,56 @@ describe("tool registration and exec contract", () => {
         [...QUERY_SCOPES],
       );
     }
+    assert.match(String((ext.tools[0] as { description?: string }).description), /not stale/i);
+    assert.doesNotMatch(
+      String((ext.tools[0] as { description?: string }).description),
+      /Prefer graphify/i,
+    );
+  });
+
+  it("refuses query when needs_update is set", async () => {
+    const root = tempDir();
+    writeArtifacts(root, { graph: true, needsUpdate: true });
+    const ext = loadExtension();
+    const result = await ext.tools[0]!.execute(
+      "id",
+      { operation: "query", question: "what?" },
+      new AbortController().signal,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0]!.text, GRAPHIFY_STALE_SKIP);
+    assert.equal(ext.execCalls.length, 0);
+  });
+
+  it("refuses query after in-session code edits", async () => {
+    const root = tempDir();
+    writeArtifacts(root, { graph: true });
+    const ext = loadExtension();
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "app.ts"), "x");
+    await ext.emit("turn_start", {}, { cwd: root, ui: { setStatus() {} } });
+    await ext.emit(
+      "tool_result",
+      {
+        toolName: "edit",
+        isError: false,
+        input: { path: join(root, "src", "app.ts") },
+        content: [{ type: "text", text: "patched" }],
+      },
+      { cwd: root, ui: { setStatus() {} } },
+    );
+    const result = await ext.tools[0]!.execute(
+      "id",
+      { operation: "query", question: "what?" },
+      new AbortController().signal,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0]!.text, GRAPHIFY_STALE_SKIP);
+    assert.equal(ext.execCalls.length, 0);
   });
 
   it("forwards query scope and omits it for path", async () => {
@@ -580,11 +633,24 @@ describe("system prompt and stale", () => {
     const reportIdx = event.systemPrompt.indexOf("Report:");
     assert.ok(wikiIdx > 0 && reportIdx > wikiIdx);
     assert.match(event.systemPrompt, /stale/i);
+    assert.match(event.systemPrompt, /Skip the graphify tool/);
+    assert.doesNotMatch(event.systemPrompt, /Prefer graphify/i);
+    assert.doesNotMatch(event.systemPrompt, /Optional: graphify/);
     assert.match(event.systemPrompt, /graphify-out\/wiki\/index\.md/);
     assert.doesNotMatch(event.systemPrompt, /[A-Za-z]:\\/);
     assert.ok(event.systemPrompt.split("\n").length <= 20);
-    const block = buildSystemBlock(detectArtifacts(root, "graphify-out")!, false, root);
+    const staleArts = detectArtifacts(root, "graphify-out")!;
+    assert.equal(isGraphStale(staleArts, false), true);
+    const block = buildSystemBlock(staleArts, false, root);
     assert.ok(block.split("\n").length <= 10);
+    assert.match(block, /Skip the graphify tool/);
+    assert.doesNotMatch(block, /Optional: graphify/);
+    const freshRoot = tempDir();
+    writeArtifacts(freshRoot, { graph: true });
+    const freshBlock = buildSystemBlock(detectArtifacts(freshRoot, "graphify-out")!, false, freshRoot);
+    assert.match(freshBlock, /Optional: graphify query\/path\/explain/);
+    assert.doesNotMatch(freshBlock, /Prefer graphify/i);
+    assert.equal(isGraphStale(detectArtifacts(freshRoot, "graphify-out"), false), false);
     assert.equal(toProjectRelPath(root, join(root, "graphify-out", "wiki", "index.md")), "graphify-out/wiki/index.md");
     } finally {
       if (prev === undefined) delete process.env.PI_SUBAGENT;
@@ -635,7 +701,8 @@ describe("system prompt and stale", () => {
     const ret1 = await ext.emit("tool_result", ev1, ctx);
     assert.equal(ev1.content[0]!.text, "patched");
     assert.ok(Array.isArray(ret1?.content));
-    assert.match(ret1.content.map((c: { text: string }) => c.text).join("\n"), /graph may be stale/i);
+    assert.match(ret1.content.map((c: { text: string }) => c.text).join("\n"), /Graph is stale after code edits/);
+    assert.doesNotMatch(ret1.content.map((c: { text: string }) => c.text).join("\n"), /Rebuild with \/graphify/);
     assert.ok(statuses.includes("graphify stale"));
     const artsAfterEdit = detectArtifacts(root, "graphify-out")!;
     assert.equal(graphifyStatusText(artsAfterEdit, true, true), "graphify stale");
@@ -805,7 +872,10 @@ describe("system prompt and stale", () => {
       ctx,
     );
     assert.ok(Array.isArray(ret?.content));
-    assert.match(ret.content.map((c: { text: string }) => c.text).join("\n"), /graph may be stale/i);
+    assert.equal(
+      ret.content.map((c: { text: string }) => c.text).join("\n").includes(GRAPHIFY_CODE_STALE_REMINDER),
+      true,
+    );
     assert.equal(statuses.at(-1), "graphify stale");
 
     await ext.emit(

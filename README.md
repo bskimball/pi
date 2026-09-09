@@ -122,7 +122,7 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 
 ### Graphify
 
-`graphify.ts` registers a headless LLM tool, `graphify`, that only queries an existing local knowledge graph (`query`/`path`/`explain` — it never builds or mutates one) and requires artifacts to already exist under `graphify-out` (or a configured `outputDir`). The `/graphify` slash command (including `/graphify build`) is a handoff: it tells the agent to load and follow `agent/skills/graphify/SKILL.md`, whose full build/update pipeline runs the upstream CLI as `graphify .` — never as `graphify build`.
+`graphify.ts` registers a headless LLM tool, `graphify`, that only queries an existing local knowledge graph (`query`/`path`/`explain` — it never builds or mutates one) and requires artifacts to already exist under `graphify-out` (or a configured `outputDir`). The tool is optional, not a default map of the repo: when the graph is stale (`needs_update` or in-session code edits) execute refuses the query and the injected prompt says to use source tools instead of rebuilding unasked. The `/graphify` slash command (including `/graphify build`) is a handoff: it tells the agent to load and follow `agent/skills/graphify/SKILL.md`, whose full build/update pipeline runs the upstream CLI as `graphify .` — never as `graphify build`. That skill is user-invoked (`disable-model-invocation: true`).
 
 ### LSP
 
@@ -188,7 +188,7 @@ Skills live in `agent/skills/` and are freeform directories beyond the required 
 - [`agent-browser/SKILL.md`](agent/skills/agent-browser/SKILL.md) — browser automation through the dedicated debug Chrome on CDP port 29300; the same pathway `/browser` uses.
 - [`background-process/SKILL.md`](agent/skills/background-process/SKILL.md) — the `bg_*` tools (from `bg-process.ts`) for long-running commands like dev servers and watchers.
 - [`generate-image/SKILL.md`](agent/skills/generate-image/SKILL.md) — image generation via a bundled helper script, [`generate_image.py`](agent/skills/generate-image/generate_image.py), with an automatic model fallback chain.
-- [`graphify/SKILL.md`](agent/skills/graphify/SKILL.md) — the full graphify build/update CLI pipeline (`graphify .` and friends); see [Graphify](#graphify) above for the query-only tool and `/graphify` handoff.
+- [`graphify/SKILL.md`](agent/skills/graphify/SKILL.md) — the full graphify build/update CLI pipeline (`graphify .` and friends); user-invoked via `/graphify` (`disable-model-invocation: true`). See [Graphify](#graphify) above for the query-only tool.
 - [`improve-codebase-architecture/SKILL.md`](agent/skills/improve-codebase-architecture/SKILL.md) — scans for deepening opportunities and works through them interactively; `disable-model-invocation: true`, so it's invoked explicitly rather than picked automatically.
 - [`mcp-scripting-recipes/SKILL.md`](agent/skills/mcp-scripting-recipes/SKILL.md) — local composition recipes (discovery-first resolution, bounded fan-out, partial failures, timeout budgeting) layered on top of the upstream `mcp-scripting` skill's API contract.
 

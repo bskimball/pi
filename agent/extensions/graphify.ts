@@ -20,6 +20,10 @@ export const MAX_BUDGET = 50_000;
 export const OUTPUT_CAP_CHARS = 12_288;
 export const TRUNCATION_MARKER = "\n...[truncated]";
 const SYSTEM_BLOCK_MAX_LINES = 10;
+export const GRAPHIFY_STALE_SKIP =
+  "Graphify graph is stale (needs_update or in-session code edits). Skip this tool; use source tools. Rebuild only if the user runs /graphify.";
+export const GRAPHIFY_CODE_STALE_REMINDER =
+  "[graphify] Graph is stale after code edits. Skip the graphify tool; use source tools.";
 
 function textResult(text: string, isError = false, details: unknown = {}) {
   return { content: [{ type: "text" as const, text }], details, isError };
@@ -418,13 +422,21 @@ export function buildSystemBlock(
   if (artifacts.wiki) lines.push(`Wiki: ${toProjectRelPath(root, artifacts.wiki)}`);
   if (artifacts.report) lines.push(`Report: ${toProjectRelPath(root, artifacts.report)}`);
   if (artifacts.graph) lines.push(`Graph: ${toProjectRelPath(root, artifacts.graph)}`);
-  lines.push("Prefer graphify query/path/explain, then confirm in targeted source.");
-  if (artifacts.needsUpdate || sessionStale) {
+  if (isGraphStale(artifacts, sessionStale)) {
     lines.push(
-      "Graph may be stale (needs_update or in-session code edits). Rebuild with /graphify (alias `/graphify build` translates to upstream `graphify .`, not `graphify build`).",
+      "Graph is stale (needs_update or in-session code edits). Skip the graphify tool; use source tools. Rebuild only if the user runs /graphify.",
     );
+  } else {
+    lines.push("Optional: graphify query/path/explain for cross-file structure, then confirm in source.");
   }
   return lines.slice(0, SYSTEM_BLOCK_MAX_LINES).join("\n");
+}
+
+export function isGraphStale(
+  artifacts: GraphifyArtifacts | null | undefined,
+  sessionStale = false,
+): boolean {
+  return Boolean(artifacts?.needsUpdate || sessionStale);
 }
 
 export function graphifyStatusText(
@@ -433,7 +445,7 @@ export function graphifyStatusText(
   sessionStale = false,
 ): string | undefined {
   if (!enabled || !artifacts?.exists) return undefined;
-  if (artifacts.needsUpdate || sessionStale) return "graphify stale";
+  if (isGraphStale(artifacts, sessionStale)) return "graphify stale";
   return undefined;
 }
 
@@ -484,13 +496,14 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
     name: GRAPHIFY_TOOL_NAME,
     label: "Graphify",
     description: [
-      "Read a project Graphify knowledge graph (query, path, explain).",
-      "Requires graph artifacts in the configured outputDir (default graphify-out).",
+      "Query a fresh local Graphify knowledge graph (query, path, explain).",
+      "Use only when artifacts exist in the configured outputDir (default graphify-out) and the graph is not stale; skip when status is graphify stale.",
+      "Not a substitute for grep, LSP, or reading current source.",
+      "Does not build or mutate the graph. Rebuilds are user-invoked via /graphify.",
       "If graph.json is missing, tell the user to run /graphify (or /graphify build), which translates to upstream `graphify .` — never `graphify build`.",
       "query: question (required), optional mode bfs|dfs, optional budget (default 2000), optional scope all|runtime|config|tests|docs|reference (architecture default is runtime+config; use all to include tests/docs/reference).",
       "path: from and to node ids/names.",
       "explain: concept.",
-      "Does not build or mutate the graph.",
     ].join(" "),
     parameters: Type.Object({
       operation: Type.Union(OPERATIONS.map((value) => Type.Literal(value)), {
@@ -537,6 +550,9 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
           "graph.json is missing. Rebuild with /graphify (or /graphify build, which translates to upstream `graphify .`).",
           true,
         );
+      }
+      if (isGraphStale(artifacts, sessionStale)) {
+        return textResult(GRAPHIFY_STALE_SKIP, true);
       }
 
       const operation = params.operation as GraphifyOperation;
@@ -646,8 +662,7 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
           } catch {}
           if (!remindedThisTurn) {
             remindedThisTurn = true;
-            const reminder =
-              "[graphify] Code changed; graph may be stale. Rebuild with /graphify (runs `graphify .`).";
+            const reminder = GRAPHIFY_CODE_STALE_REMINDER;
             // Host merge: ToolResultEventResult.content replaces the result (runner.js emitToolResult).
             return {
               content: [
