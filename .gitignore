@@ -21,6 +21,7 @@ agent/trust.json
 agent/harness/
 agent/logs/
 agent/fff/
+agent/intercom/
 exa-usage.json
 .tmp/
 
