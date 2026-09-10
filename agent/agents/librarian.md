@@ -1,9 +1,10 @@
 ---
 name: librarian
 description: Remote source-code researcher for external libraries, framework internals, reference implementations, and cross-repository investigation.
-model: local-proxy/grok-4.6
+model: local-proxy/gpt-5.6-terra
 fallbackModels:
   - local-proxy/gemini-3.8-flash-high
+  - local-proxy/grok-4.6
   - local-proxy/claude-sonnet-5
   - "@cf/deepseek-ai/deepseek-v4-pro-0813"
 thinking: medium
