@@ -212,53 +212,11 @@ export function qualifyModel(
   return `${provider}/${model}`;
 }
 
-export const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
-
-export function thinkingRank(level: string | undefined): number {
-  if (!level) return -1;
-  return (THINKING_LEVELS as readonly string[]).indexOf(level);
-}
-
-export function nextThinkingLevel(level: string | undefined): string | undefined {
-  const rank = thinkingRank(level);
-  if (rank < 0) return undefined;
-  return THINKING_LEVELS[Math.min(rank + 1, THINKING_LEVELS.length - 1)];
-}
-
-/**
- * Oracle thinking must stay at least as high as its configured default, and
- * must step above the parent when the parent is at that default or higher.
- * Example: configured high + parent high -> xhigh. Never drops below configured.
- */
-export function resolveOracleThinking(
-  configured: string | undefined,
-  parent: string | undefined,
-): string | undefined {
-  const configuredRank = thinkingRank(configured);
-  const parentRank = thinkingRank(parent);
-  if (parentRank >= 0 && parentRank >= Math.max(configuredRank, 0)) {
-    return nextThinkingLevel(parent) ?? configured ?? parent;
-  }
-  return configured ?? parent;
-}
-
 export function resolveAgentThinking(
   def: Pick<AgentDef, "name" | "thinking">,
-  parent?: string,
+  _parent?: string,
 ): string | undefined {
-  return def.name === "oracle"
-    ? resolveOracleThinking(def.thinking, parent)
-    : def.thinking;
+  return def.thinking;
 }
 
 /**

@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import {
   modelAttempts,
   resolveAgentThinking,
-  resolveOracleThinking,
   type AgentDef,
 } from "../agent-discovery.ts";
 
@@ -51,29 +50,15 @@ describe("modelAttempts", () => {
   });
 });
 
-describe("resolveOracleThinking", () => {
-  it("keeps configured high when the parent is lower", () => {
-    assert.equal(resolveOracleThinking("high", "medium"), "high");
-    assert.equal(resolveOracleThinking("high", "low"), "high");
-  });
-
-  it("steps above the parent when parent thinking is the same or higher", () => {
-    assert.equal(resolveOracleThinking("high", "high"), "xhigh");
-    assert.equal(resolveOracleThinking("high", "xhigh"), "max");
-    assert.equal(resolveOracleThinking("high", "max"), "max");
-  });
-
-  it("does not drop below configured when parent thinking is unknown", () => {
-    assert.equal(resolveOracleThinking("high", undefined), "high");
-    assert.equal(resolveOracleThinking("high", "mystery"), "high");
-  });
-});
-
 describe("resolveAgentThinking", () => {
-  it("raises only oracle, leaving other specialists on their configured level", () => {
+  it("uses each agent's configured thinking level, including oracle", () => {
     assert.equal(
       resolveAgentThinking(def({ name: "oracle", thinking: "high" }), "high"),
-      "xhigh",
+      "high",
+    );
+    assert.equal(
+      resolveAgentThinking(def({ name: "oracle", thinking: "high" }), "max"),
+      "high",
     );
     assert.equal(
       resolveAgentThinking(def({ name: "machinist", thinking: "low" }), "high"),

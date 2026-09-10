@@ -550,7 +550,7 @@ export default function (pi: ExtensionAPI) {
     model: Type.Optional(
       Type.String({
         description:
-          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply. Oracle thinking is raised automatically when the parent thinking level is the same or higher.",
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply.",
       }),
     ),
   });
