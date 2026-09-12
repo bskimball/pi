@@ -61,18 +61,50 @@ import { runFeaturedExtensionCommand } from "./internal/runtime/featured-command
 export const RANDOM_INDICATOR_FRAME_COUNT = 256;
 export const RANDOM_INDICATOR_INTERVAL_MS = 120;
 
-// Claude skin breathes through a star weight ramp (these dingbats are all
-// Extended_Pictographic-free, so the emoji font never badges them).
-export const CLAUDE_WORKING_GLYPHS = ["\u2736", "\u273b", "\u273d", "\u273a", "\u273d", "\u273b"];
+// Claude skin cycles family-locked star motifs: BLACK STAR (U+2736-U+2739)
+// and ASTERISK (U+273A-U+273E) have different font metrics, so mixing them
+// in one motif jitters. All glyphs here are Extended_Pictographic-free, so
+// the emoji font never badges them.
+export interface ClaudeWorkingMotif {
+  name: string;
+  glyphs: string[];
+}
+
+export const CLAUDE_WORKING_MOTIFS: ClaudeWorkingMotif[] = [
+  { name: "pulse", glyphs: ["\u273c", "\u273b", "\u273d", "\u273a", "\u273d", "\u273b"] },
+  { name: "twinkle", glyphs: ["\u273b", "\u273d", "\u273b", "\u273c", "\u273a", "\u273c"] },
+  { name: "bloom", glyphs: ["\u273c", "\u273e", "\u273b", "\u273e"] },
+  { name: "flash", glyphs: ["\u273a", "\u273d", "\u273a", "\u273b"] },
+  { name: "spin", glyphs: ["\u2736", "\u2737", "\u2738", "\u2739", "\u2738", "\u2737"] },
+  { name: "spinRev", glyphs: ["\u2739", "\u2738", "\u2737", "\u2736", "\u2737", "\u2738"] },
+  { name: "beat", glyphs: ["\u2736", "\u2738", "\u2736", "\u2739"] },
+];
 export const CLAUDE_WORKING_INTERVAL_MS = 180;
 export const CLAUDE_WORKING_MESSAGE = "Thinking";
 
-// Brightness tracks glyph weight, mirroring the apex braille trail decay:
-// the heaviest pair carries the thinking hue, the rest fall off.
-export function claudeWorkingToneAt(index: number, leadTone: string): string {
-  if (index === 2 || index === 3) return leadTone;
-  if (index === 1 || index === 4) return "muted";
-  return "dim";
+function pickClaudeMotif(): ClaudeWorkingMotif {
+  return CLAUDE_WORKING_MOTIFS[Math.floor(Math.random() * CLAUDE_WORKING_MOTIFS.length)];
+}
+
+// Brightness tracks glyph weight, not frame position: motifs peak wherever
+// their heaviest glyph sits. Weights ascend with codepoint within a family.
+export const CLAUDE_WORKING_WEIGHTS: Record<string, number> = {
+  "\u2736": 1, "\u2737": 2, "\u2738": 3, "\u2739": 4,
+  "\u273c": 1, "\u273b": 2, "\u273e": 2, "\u273d": 3, "\u273a": 4,
+};
+
+// Heaviest weight present carries the thinking hue, lightest goes dim,
+// normalized per motif so narrow ranges still spread. Missing weights fail
+// loudly instead of silently flattening the pulse.
+export function claudeWorkingTonesFor(motifGlyphs: string[], leadTone: string): string[] {
+  const weights = motifGlyphs.map((glyph) => {
+    const weight = CLAUDE_WORKING_WEIGHTS[glyph];
+    if (weight === undefined) throw new Error(`claude indicator: no weight for ${glyph}`);
+    return weight;
+  });
+  const min = Math.min(...weights);
+  const max = Math.max(...weights);
+  return weights.map((weight) => (weight === max ? leadTone : weight === min ? "dim" : "muted"));
 }
 
 // One message is picked at random per run. The indicator is event-driven only:
@@ -208,9 +240,12 @@ export function buildWorkingIndicator(
   const leadTone = resolveWorkingLeadTone(pi);
   // Skin is read here at call time so a live /ui switch applies at once.
   if (activeSkinName() === "claude") {
+    // Exactly one motif per run; never concatenated, so families never mix.
+    const motif = pickClaudeMotif();
+    const tones = claudeWorkingTonesFor(motif.glyphs, leadTone);
     return {
-      frames: CLAUDE_WORKING_GLYPHS.map((glyph, index) =>
-        ctx.ui.theme.fg(claudeWorkingToneAt(index, leadTone) as any, glyph),
+      frames: motif.glyphs.map((glyph, index) =>
+        ctx.ui.theme.fg(tones[index] as any, glyph),
       ),
       intervalMs: CLAUDE_WORKING_INTERVAL_MS,
       message: ctx.ui.theme.fg("dim", `${CLAUDE_WORKING_MESSAGE}...`),
