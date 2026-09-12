@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  CLAUDE_INDICATOR_FRAME_COUNT,
   CLAUDE_WORKING_INTERVAL_MS,
   CLAUDE_WORKING_MESSAGE,
   CLAUDE_WORKING_MOTIFS,
@@ -39,49 +40,31 @@ function stubPi(thinkingLevel = "medium"): any {
   return { getThinkingLevel: () => thinkingLevel };
 }
 
-function familyOf(glyph: string): "BLACK" | "ASTERISK" {
-  const code = glyph.codePointAt(0)!;
-  if (code >= 0x2736 && code <= 0x2739) return "BLACK";
-  return "ASTERISK";
-}
-
 const EXPECTED_MOTIFS: Record<string, string[]> = {
   pulse: ["✼", "✻", "✽", "✺", "✽", "✻"],
   twinkle: ["✻", "✽", "✻", "✼", "✺", "✼"],
   bloom: ["✼", "✾", "✻", "✾"],
   flash: ["✺", "✽", "✺", "✻"],
-  spin: ["✶", "✷", "✸", "✹", "✸", "✷"],
-  spinRev: ["✹", "✸", "✷", "✶", "✷", "✸"],
-  beat: ["✶", "✸", "✶", "✹"],
 };
 
 describe("working indicator skins", () => {
-  it("locks every motif to a single star family", () => {
-    assert.equal(CLAUDE_WORKING_MOTIFS.length, 7);
+  it("keeps every motif inside the asterisk family", () => {
+    assert.equal(CLAUDE_WORKING_MOTIFS.length, 4);
     for (const motif of CLAUDE_WORKING_MOTIFS) {
-      const families = new Set(motif.glyphs.map(familyOf));
-      assert.equal(
-        families.size,
-        1,
-        `${motif.name} mixes families: ${motif.glyphs.join(" ")}`,
-      );
-    }
-    // BLACK STAR motifs use only U+2736-U+2739, ASTERISK only U+273A-U+273E.
-    for (const name of ["spin", "spinRev", "beat"]) {
-      const motif = CLAUDE_WORKING_MOTIFS.find((m) => m.name === name)!;
-      assert.ok(motif, `${name} defined`);
       for (const glyph of motif.glyphs) {
         const code = glyph.codePointAt(0)!;
-        assert.ok(code >= 0x2736 && code <= 0x2739, `${name}: ${glyph}`);
+        assert.ok(
+          code >= 0x273a && code <= 0x273e,
+          `${motif.name}: ${glyph} outside U+273A-U+273E`,
+        );
       }
     }
-    for (const name of ["pulse", "twinkle", "bloom", "flash"]) {
-      const motif = CLAUDE_WORKING_MOTIFS.find((m) => m.name === name)!;
-      assert.ok(motif, `${name} defined`);
-      for (const glyph of motif.glyphs) {
-        const code = glyph.codePointAt(0)!;
-        assert.ok(code >= 0x273a && code <= 0x273e, `${name}: ${glyph}`);
-      }
+    // Regression guard for the rejected BLACK STAR family: none of its
+    // codepoints may appear in any motif or in the weights table.
+    const all = CLAUDE_WORKING_MOTIFS.flatMap((m) => m.glyphs).join("");
+    for (const glyph of ["\u2736", "\u2737", "\u2738", "\u2739"]) {
+      assert.ok(!all.includes(glyph), `BLACK STAR ${glyph} still present`);
+      assert.equal(CLAUDE_WORKING_WEIGHTS[glyph], undefined, `weight for ${glyph}`);
     }
   });
 
@@ -103,21 +86,34 @@ describe("working indicator skins", () => {
     }
   });
 
-  it("returns one defined motif per run with a steady label", () => {
+  it("chains motifs within a single run with a steady label", () => {
     withSkin("claude", () => {
       const first = buildWorkingIndicator(stubCtx(), stubPi());
-      const match = CLAUDE_WORKING_MOTIFS.find(
-        (m) =>
-          m.glyphs.length === first.frames.length &&
-          m.glyphs.every((glyph, index) => first.frames[index] === glyph),
-      );
-      assert.ok(match, `frames match a defined motif: ${first.frames.join(" ")}`);
+      assert.equal(first.frames.length, CLAUDE_INDICATOR_FRAME_COUNT);
+      assert.equal(CLAUDE_INDICATOR_FRAME_COUNT, 128);
       assert.equal(first.intervalMs, 180);
       assert.equal(CLAUDE_WORKING_INTERVAL_MS, 180);
       assert.equal(first.message, `${CLAUDE_WORKING_MESSAGE}...`);
       // The label never varies across runs: no random pool pick.
       const second = buildWorkingIndicator(stubCtx(), stubPi());
       assert.equal(second.message, first.message);
+      // Alternation within the run: more distinct glyphs than any one
+      // motif holds (4), plus the bloom signature ✾ shows up.
+      const distinct = new Set(first.frames);
+      const mostDistinct = Math.max(
+        ...CLAUDE_WORKING_MOTIFS.map((m) => new Set(m.glyphs).size),
+      );
+      assert.ok(
+        distinct.size > mostDistinct,
+        `frames alternate motifs: ${[...distinct].join(" ")}`,
+      );
+      assert.ok(first.frames.includes("✾"), "bloom motif appears in the chain");
+      // No rejected-family glyph leaks into the chained frames either.
+      for (const frame of first.frames) {
+        const code = frame.codePointAt(0)!;
+        assert.ok(code < 0x2736 || code > 0x2739, `BLACK STAR in chain: ${frame}`);
+        assert.doesNotMatch(frame, /\p{Extended_Pictographic}/u, frame);
+      }
     });
   });
 
@@ -134,7 +130,25 @@ describe("working indicator skins", () => {
     assert.throws(() => claudeWorkingTonesFor(["?"], "thinkingHigh"));
   });
 
-  it("tracks tone to glyph weight on every motif", () => {
+  it("tracks tone to glyph weight on a 6-frame and a 4-frame motif", () => {
+    const pulse = CLAUDE_WORKING_MOTIFS.find((m) => m.name === "pulse")!;
+    const bloom = CLAUDE_WORKING_MOTIFS.find((m) => m.name === "bloom")!;
+    assert.equal(pulse.glyphs.length, 6);
+    assert.equal(bloom.glyphs.length, 4);
+    assert.deepEqual(claudeWorkingTonesFor(pulse.glyphs, "thinkingHigh"), [
+      "dim",
+      "muted",
+      "muted",
+      "thinkingHigh",
+      "muted",
+      "muted",
+    ]);
+    assert.deepEqual(claudeWorkingTonesFor(bloom.glyphs, "thinkingHigh"), [
+      "dim",
+      "thinkingHigh",
+      "thinkingHigh",
+      "thinkingHigh",
+    ]);
     for (const motif of CLAUDE_WORKING_MOTIFS) {
       const tones = claudeWorkingTonesFor(motif.glyphs, "thinkingHigh");
       const weights = motif.glyphs.map((glyph) => CLAUDE_WORKING_WEIGHTS[glyph]);
@@ -150,12 +164,8 @@ describe("working indicator skins", () => {
         }
       });
     }
-    // The exact inversion being fixed: spinRev opens on its heaviest glyph.
-    const spinRev = CLAUDE_WORKING_MOTIFS.find((m) => m.name === "spinRev")!;
-    assert.equal(spinRev.glyphs[0], "✹");
-    assert.equal(claudeWorkingTonesFor(spinRev.glyphs, "thinkingHigh")[0], "thinkingHigh");
-    // End to end through the builder: the recorded tones match the helper
-    // applied to whichever motif was picked.
+    // End to end through the builder: every recorded tone matches the
+    // weight-derived tone for its own glyph, whatever motif was picked.
     withSkin("claude", () => {
       const pairs: Array<[string, string]> = [];
       const built = buildWorkingIndicator(
@@ -167,14 +177,25 @@ describe("working indicator skins", () => {
       );
       // The stub also records the dim label call after the frames.
       const framePairs = pairs.slice(0, built.frames.length);
-      const motif = CLAUDE_WORKING_MOTIFS.find((m) =>
-        m.glyphs.every((glyph, index) => framePairs[index]?.[1] === glyph),
-      );
-      assert.ok(motif, `frames match a defined motif: ${built.frames.join(" ")}`);
-      assert.deepEqual(
-        framePairs.map(([key]) => key),
-        claudeWorkingTonesFor(motif!.glyphs, "thinkingHigh"),
-      );
+      for (const [key, text] of framePairs) {
+        assert.ok(
+          CLAUDE_WORKING_WEIGHTS[text] !== undefined,
+          `frame glyph has a weight: ${text}`,
+        );
+        // Tones normalize per motif, so a glyph may carry a different tone
+        // in different chain segments; it must always be one the helper
+        // produces for a motif containing that glyph.
+        const allowed = new Set<string>();
+        for (const motif of CLAUDE_WORKING_MOTIFS) {
+          if (!motif.glyphs.includes(text)) continue;
+          const tones = claudeWorkingTonesFor(motif.glyphs, "thinkingHigh");
+          motif.glyphs.forEach((glyph, index) => {
+            if (glyph === text) allowed.add(tones[index]);
+          });
+        }
+        assert.ok(allowed.size > 0, `${text} belongs to a motif`);
+        assert.ok(allowed.has(key), `${text} carries tone ${key}`);
+      }
       assert.ok(
         built.message.length > 0 && pairs.some(([key]) => key === "dim"),
         "label stays dim",

@@ -61,10 +61,12 @@ import { runFeaturedExtensionCommand } from "./internal/runtime/featured-command
 export const RANDOM_INDICATOR_FRAME_COUNT = 256;
 export const RANDOM_INDICATOR_INTERVAL_MS = 120;
 
-// Claude skin cycles family-locked star motifs: BLACK STAR (U+2736-U+2739)
-// and ASTERISK (U+273A-U+273E) have different font metrics, so mixing them
-// in one motif jitters. All glyphs here are Extended_Pictographic-free, so
-// the emoji font never badges them.
+// Claude skin chains ASTERISK-family star motifs (U+273A-U+273E) into one
+// long run. Chaining is safe only within a single family — uniform font
+// metrics, so no horizontal jitter at motif boundaries. The BLACK STAR
+// family (U+2736-U+2739) rendered badly and was removed for this reason.
+// All glyphs are Extended_Pictographic-free, so the emoji font never
+// badges them.
 export interface ClaudeWorkingMotif {
   name: string;
   glyphs: string[];
@@ -75,21 +77,14 @@ export const CLAUDE_WORKING_MOTIFS: ClaudeWorkingMotif[] = [
   { name: "twinkle", glyphs: ["\u273b", "\u273d", "\u273b", "\u273c", "\u273a", "\u273c"] },
   { name: "bloom", glyphs: ["\u273c", "\u273e", "\u273b", "\u273e"] },
   { name: "flash", glyphs: ["\u273a", "\u273d", "\u273a", "\u273b"] },
-  { name: "spin", glyphs: ["\u2736", "\u2737", "\u2738", "\u2739", "\u2738", "\u2737"] },
-  { name: "spinRev", glyphs: ["\u2739", "\u2738", "\u2737", "\u2736", "\u2737", "\u2738"] },
-  { name: "beat", glyphs: ["\u2736", "\u2738", "\u2736", "\u2739"] },
 ];
+export const CLAUDE_INDICATOR_FRAME_COUNT = 128;
 export const CLAUDE_WORKING_INTERVAL_MS = 180;
 export const CLAUDE_WORKING_MESSAGE = "Thinking";
-
-function pickClaudeMotif(): ClaudeWorkingMotif {
-  return CLAUDE_WORKING_MOTIFS[Math.floor(Math.random() * CLAUDE_WORKING_MOTIFS.length)];
-}
 
 // Brightness tracks glyph weight, not frame position: motifs peak wherever
 // their heaviest glyph sits. Weights ascend with codepoint within a family.
 export const CLAUDE_WORKING_WEIGHTS: Record<string, number> = {
-  "\u2736": 1, "\u2737": 2, "\u2738": 3, "\u2739": 4,
   "\u273c": 1, "\u273b": 2, "\u273e": 2, "\u273d": 3, "\u273a": 4,
 };
 
@@ -224,6 +219,23 @@ function randomWorkingFrames(ctx: ExtensionContext, leadTone: string): string[] 
   return frames;
 }
 
+function claudeWorkingFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const frames: string[] = [];
+  while (frames.length < CLAUDE_INDICATOR_FRAME_COUNT) {
+    for (const motif of shuffle(CLAUDE_WORKING_MOTIFS)) {
+      // Randomly reverse each motif so repeated cycles keep varying. Tones
+      // derive from each glyph's own weight, so reversal stays aligned.
+      const glyphs = Math.random() < 0.5 ? [...motif.glyphs].reverse() : motif.glyphs;
+      const tones = claudeWorkingTonesFor(glyphs, leadTone);
+      for (let beat = 0; beat < glyphs.length; beat++) {
+        frames.push(ctx.ui.theme.fg(tones[beat] as any, glyphs[beat]));
+        if (frames.length >= CLAUDE_INDICATOR_FRAME_COUNT) return frames;
+      }
+    }
+  }
+  return frames;
+}
+
 export function resolveWorkingLeadTone(pi: ExtensionAPI): string {
   try {
     return THINKING_TONES[String(pi.getThinkingLevel())] ?? "accent";
@@ -240,13 +252,8 @@ export function buildWorkingIndicator(
   const leadTone = resolveWorkingLeadTone(pi);
   // Skin is read here at call time so a live /ui switch applies at once.
   if (activeSkinName() === "claude") {
-    // Exactly one motif per run; never concatenated, so families never mix.
-    const motif = pickClaudeMotif();
-    const tones = claudeWorkingTonesFor(motif.glyphs, leadTone);
     return {
-      frames: motif.glyphs.map((glyph, index) =>
-        ctx.ui.theme.fg(tones[index] as any, glyph),
-      ),
+      frames: claudeWorkingFrames(ctx, leadTone),
       intervalMs: CLAUDE_WORKING_INTERVAL_MS,
       message: ctx.ui.theme.fg("dim", `${CLAUDE_WORKING_MESSAGE}...`),
     };
