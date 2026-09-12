@@ -34,7 +34,7 @@ function joinPromptAppends(...sections: Array<string | undefined>): string | und
   return present.length ? present.join("\n\n") : undefined;
 }
 
-export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string): void {
+export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = ""): void {
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
@@ -315,7 +315,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("before_agent_start", async (event, ctx) => {
     if (state.mode === "apex") return { systemPrompt: event.systemPrompt + regular };
     if (state.mode === "apex-orchestrate") return { systemPrompt: event.systemPrompt + orchestrate };
-    if (state.mode === "fusion") return { systemPrompt: event.systemPrompt + fusion };
+    if (state.mode === "fusion") return { systemPrompt: fusionPreface + event.systemPrompt + fusion };
     const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: BuildSystemPromptOptions) => string };
     const selectedTools = pi.getActiveTools();
     // Pi retains its stock builder behavior unchanged.

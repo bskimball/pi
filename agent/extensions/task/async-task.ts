@@ -184,6 +184,27 @@ const DEFAULT_MAX_TURNS = 30;
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
+/** Lead discovery tool calls per user turn that trigger one Fusion dispatch nudge. */
+export const FUSION_DISCOVERY_NUDGE_EVERY = 6;
+
+/** Tool names that count as lead discovery for the Fusion dispatch nudge. */
+const FUSION_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "ls",
+  "find",
+  "bash",
+  "ffgrep",
+  "fffind",
+  "lsp",
+  "powershell",
+]);
+
+/** Single-line plain-text nudge appended to every Nth undispatched discovery result. */
+function fusionDiscoveryNudge(count: number): string {
+  return `[fusion] ${count} discovery calls this turn with no sidekick dispatch. Discovery beyond user-named files is sidekick-owned: write the owned todo list and call task_start now, or state the one-line inline reason.`;
+}
+
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
   "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
@@ -1255,6 +1276,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     sidekick: { provider: string; modelId: string; thinking?: string };
   };
   let behaviorMode = process.env.PI_BEHAVIOR_MODE ?? "pi";
+  // Lead discovery calls since the last user-turn start or task_start/task_send.
+  // Counted in tool_result (fusion lead only); drives the dispatch nudge below.
+  let fusionDiscoveryCalls = 0;
   type FusionSessionEntry = { parentSessionId: string; sessionFile: string; sessionId?: string; cwd: string };
   // Single owner for designated-worker sequences (readiness/reuse, config
   // ack/rollback, parking, isolation, gates). Pair state lives here, not in
@@ -3633,12 +3657,23 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       ? fusionLifecycle.gateSidekick(event.toolName)
       : undefined;
     if (sidekickReason) return { block: true, reason: sidekickReason };
+    if (event.toolName === "task_start" || event.toolName === "task_send") fusionDiscoveryCalls = 0;
     if (behaviorMode !== "fusion" && behaviorMode !== "work") return;
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
       (event.input as { id?: string } | undefined)?.id,
     );
     if (leadReason) return { block: true, reason: leadReason };
+  });
+  pi.on("tool_result", event => {
+    if (behaviorMode !== "fusion" || process.env.PI_FUSION_SIDEKICK === "1") return;
+    if (!FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) return;
+    fusionDiscoveryCalls += 1;
+    if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY !== 0) return;
+    const existing = Array.isArray(event.content) ? event.content : [];
+    return {
+      content: [...existing, { type: "text" as const, text: fusionDiscoveryNudge(fusionDiscoveryCalls) }],
+    };
   });
   pi.on("agent_end", async event => {
     if (behaviorMode !== "fusion" && behaviorMode !== "work") return;
@@ -3650,8 +3685,10 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   // Busy gate is start → settled only (same pattern as bg-process).
+  // agent_start also bounds the Fusion discovery-nudge window: one user turn.
   pi.on("agent_start", () => {
     agentBusy = true;
+    fusionDiscoveryCalls = 0;
   });
   pi.on("agent_settled", () => {
     agentBusy = false;

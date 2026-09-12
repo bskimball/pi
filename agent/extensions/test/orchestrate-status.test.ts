@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT } from "../prompt-commands.ts";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT } from "../prompt-commands.ts";
 import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
@@ -88,7 +88,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     await emit("session_start", { reason: "resume" });
     assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
     const fused = (await prompt()).systemPrompt;
-    assert.equal(fused, "Apex base" + FUSION_SYSTEM_BLOCK);
+    assert.equal(fused, FUSION_PREFACE + "Apex base" + FUSION_SYSTEM_BLOCK);
     assert.doesNotMatch(fused, /^You are an expert coding assistant operating inside pi/);
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("pi", ctx);

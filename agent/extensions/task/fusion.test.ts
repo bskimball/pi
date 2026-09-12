@@ -395,6 +395,77 @@ test("Fusion sidekick model updates apply sequentially with compensation", async
   );
 });
 
+test("Fusion discovery backstop nudges every 6 undispatched discovery calls", () => {
+  const prior = process.env.PI_BEHAVIOR_MODE;
+  const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+  process.env.PI_BEHAVIOR_MODE = "fusion";
+  delete process.env.PI_FUSION_SIDEKICK;
+  const handlers = new Map<string, Function[]>();
+  const bus = new Map<string, Function>();
+  const pi: any = {
+    registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
+    events: { on(name: string, fn: Function) { bus.set(name, fn); } },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi);
+    const fireToolResult = (toolName: string, content: any[] = [{ type: "text", text: "ok" }]) => {
+      const event = { toolName, content, isError: false };
+      for (const fn of handlers.get("tool_result") ?? []) {
+        const out = fn(event) as any;
+        if (out) return out;
+      }
+      return undefined;
+    };
+    const fireToolCall = (toolName: string) => {
+      for (const fn of handlers.get("tool_call") ?? []) fn({ toolName, input: {} });
+    };
+    const fireAgentStart = () => {
+      for (const fn of handlers.get("agent_start") ?? []) fn();
+    };
+    const nudgeText = (out: any) => out?.content?.at(-1)?.text as string | undefined;
+
+    fireAgentStart();
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined, `call ${i + 1}: no nudge`);
+    const sixth = fireToolResult("read", [{ type: "image", data: "a", mimeType: "image/png" }]);
+    assert.ok(sixth, "6th discovery call nudges");
+    assert.equal(sixth.content.length, 2, "nudge appended, original blocks kept");
+    assert.equal(sixth.content[0].type, "image", "non-text result block preserved");
+    const first = nudgeText(sixth);
+    assert.match(first!, /^\[fusion\] 6 discovery calls this turn/);
+    assert.equal(first!.includes("\n"), false, "nudge is a single line");
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("bash"), undefined);
+    assert.match(nudgeText(fireToolResult("fffind"))!, /^\[fusion\] 12 discovery calls this turn/, "second nudge at 12");
+    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("edit"), undefined, "non-discovery tools never nudge");
+
+    fireToolCall("task_start");
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined, "no nudge within 5 calls of dispatch");
+    assert.match(nudgeText(fireToolResult("ls"))!, /6 discovery calls/, "nudge resumes 6 calls after dispatch");
+
+    fireToolCall("task_send");
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("lsp"), undefined, "task_send resets too");
+
+    fireAgentStart();
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("powershell"), undefined, "new user turn resets");
+    assert.match(nudgeText(fireToolResult("ffgrep"))!, /6 discovery calls/, "nudge resumes 6 calls into the new turn");
+
+    bus.get("pi:modes:changed")!({ mode: "apex" });
+    fireAgentStart();
+    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("read"), undefined, "no nudge outside fusion mode");
+    bus.get("pi:modes:changed")!({ mode: "fusion" });
+    process.env.PI_FUSION_SIDEKICK = "1";
+    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("read"), undefined, "no nudge for the sidekick itself");
+    delete process.env.PI_FUSION_SIDEKICK;
+    fireAgentStart();
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("grep"), undefined);
+    assert.match(nudgeText(fireToolResult("find"))!, /6 discovery calls/, "lead nudges again after sidekick check");
+  } finally {
+    if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
+    if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+  }
+});
+
 test("Fusion configure handshake acknowledges synchronously and requires a pair", async () => {
   const prior = process.env.PI_BEHAVIOR_MODE;
   process.env.PI_BEHAVIOR_MODE = "fusion";

@@ -149,12 +149,16 @@ The user has switched this session into strict orchestrator mode. This overrides
 
 Review and context gates still apply as stated in this block. No unrequested \`model\` override: specialists use their configured default and fallback chain unless the user explicitly requested a different model for that delegation; \`maxTurns\`/\`timeoutSec\` overrides are silently ignored. Control-plane, glue, and known-path edits are the inline path in this mode — they are not a reason to skip a path-triggered Oracle review after a behavior or trust-boundary change. If a unit truly cannot be delegated (credentials, interactive auth, user-only decisions), surface it to the user instead of doing it silently.`;
 
+export const FUSION_PREFACE = `# Fusion lead
+You are paired with a persistent sidekick (\`task_start\`, agent \`sidekick\`) that reads, investigates, and implements on your behalf. Before reading any file the user did not name, write the owned todo list and dispatch the sidekick for discovery; the investigation rules below are carried out through the sidekick, not by you. Full contract: "Fusion mode (active)" at the end of this prompt.
+
+`;
 export const FUSION_SYSTEM_BLOCK = `\n\n${readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "fusion.md"), "utf8").trim()}`;
 export const WORK_SYSTEM_PROMPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "work.md"), "utf8").trim();
 
 export default function (pi: ExtensionAPI): void {
   registerBrowserAttachTool(pi);
-  registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT);
+  registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE);
 
   pi.registerCommand("browser", {
     description:
