@@ -15,7 +15,7 @@ test("legacy modes restore without adopting a new global default", () => {
 test("Pi exposes built-in default tools; Fusion excludes roster dispatch but keeps coordination", () => {
   const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   assert.deepEqual(toolsForMode("pi", tools), ["read", "write", "edit", "bash"]);
-  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task_start", "todo_write", "intercom", "fffind", "ffgrep"]);
+  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"]);
 });
 test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));

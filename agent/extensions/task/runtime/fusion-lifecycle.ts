@@ -14,6 +14,19 @@ import {
 import { parseReportSchema, reportInstruction } from "./report-schema.ts";
 import type { ReportStatus } from "./report-schema.ts";
 
+export const FUSION_EPHEMERAL_AGENTS = [
+  "librarian",
+  "stevedore",
+  "oracle",
+  "picasso",
+] as const;
+
+export type FusionEphemeralAgent = (typeof FUSION_EPHEMERAL_AGENTS)[number];
+
+export function isFusionEphemeralAgent(name: string): boolean {
+  return (FUSION_EPHEMERAL_AGENTS as readonly string[]).includes(name);
+}
+
 export interface FusionModelChoice {
   provider: string;
   modelId: string;
@@ -509,7 +522,6 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
    */
   gateLead(toolName: string, inputId: string | undefined): string | undefined {
     if (
-      toolName === "task" ||
       toolName === "task_chain" ||
       toolName === "task_rebind"
     ) {

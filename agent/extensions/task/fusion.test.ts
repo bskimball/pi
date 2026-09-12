@@ -104,11 +104,18 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(acceptedName.content[0].text, /Fusion sidekick configuration is unavailable/);
     const sync = await tools.get("task").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
     assert.equal(sync.isError, true);
+    assert.match(sync.content[0].text, /Apex-only/);
+    for (const agent of ["librarian", "stevedore", "oracle", "picasso"]) {
+      const allowedSync = await tools.get("task").execute("call", { agent, prompt: "do work" }, AbortSignal.abort(), undefined, ctx);
+      const text = allowedSync.content?.[0]?.text ?? "";
+      assert.doesNotMatch(text, /Apex-only|Synchronous task spawning is disabled/);
+    }
     const chain = await tools.get("task_chain").execute("call", { steps: [{ agent: "machinist", prompt: "write a file" }] }, undefined, undefined, ctx);
     assert.equal(chain.isError, true);
     const busy = { busy: true }; bus.get("pi:modes:query-busy")!(busy); assert.equal(busy.busy, true);
     const idle = { busy: false }; bus.get("pi:modes:query-busy")!(idle); assert.equal(idle.busy, false);
-    for (const toolName of ["task", "task_chain", "task_rebind"]) {
+    assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "task", input: {} })).find(Boolean), undefined);
+    for (const toolName of ["task_chain", "task_rebind"]) {
       const result = handlers.get("tool_call")!.map(fn => fn({ toolName, input: {} })).find(Boolean);
       assert.equal(result.block, true);
     }
@@ -116,11 +123,12 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     const agentParam = () => advertised().parameters.properties.agent.description as string;
     const wrappedAgent = () => wrapped?.agent ?? "";
     assert.match(advertised().description, /sidekick/);
-    assert.doesNotMatch(advertised().description, /machinist|oracle|scout/);
+    assert.doesNotMatch(advertised().description, /machinist|scout|artisan/);
+    assert.match(advertised().description, /librarian|stevedore|oracle|picasso/);
     assert.match(agentParam(), /sidekick/);
-    assert.doesNotMatch(agentParam(), /machinist|oracle|scout/);
+    assert.doesNotMatch(agentParam(), /machinist|scout|artisan/);
     assert.match(wrapped?.description ?? "", /sidekick/);
-    assert.doesNotMatch(wrapped?.description ?? "", /machinist|oracle|scout/);
+    assert.doesNotMatch(wrapped?.description ?? "", /machinist|scout|artisan/);
     assert.match(wrappedAgent(), /sidekick/);
     bus.get("pi:modes:changed")!({ mode: "apex" });
     assert.match(advertised().description, /machinist/);
@@ -129,13 +137,14 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(wrappedAgent(), /machinist/);
     bus.get("pi:modes:changed")!({ mode: "fusion" });
     assert.match(advertised().description, /sidekick/);
-    assert.doesNotMatch(advertised().description, /machinist|oracle|scout/);
+    assert.doesNotMatch(advertised().description, /machinist|scout|artisan/);
+    assert.match(advertised().description, /librarian|stevedore|oracle|picasso/);
     assert.match(agentParam(), /sidekick/);
-    assert.doesNotMatch(agentParam(), /machinist|oracle|scout/);
+    assert.doesNotMatch(agentParam(), /machinist|scout|artisan/);
     assert.match(wrapped?.description ?? "", /sidekick/);
-    assert.doesNotMatch(wrapped?.description ?? "", /machinist|oracle|scout/);
+    assert.doesNotMatch(wrapped?.description ?? "", /machinist|scout|artisan/);
     assert.match(wrappedAgent(), /sidekick/);
-    assert.doesNotMatch(wrappedAgent(), /machinist|oracle|scout/);
+    assert.doesNotMatch(wrappedAgent(), /machinist|scout|artisan/);
 
     assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "intercom", input: {} })).find(Boolean), undefined);
   } finally {
@@ -257,7 +266,8 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   assert.equal(h.lifecycle.findTranscript(lookupBranch, undefined), undefined);
   assert.equal(h.lifecycle.gateSidekick("task_start"), "Fusion sidekick cannot dispatch agents, write the lead's plan, or coordinate peer sessions.");
   assert.equal(h.lifecycle.gateSidekick("read"), undefined);
-  assert.equal(h.lifecycle.gateLead("task", "task_2"), "Fusion permits only its designated sidekick.");
+  assert.equal(h.lifecycle.gateLead("task", "task_2"), undefined);
+  assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its designated sidekick.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its designated sidekick.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined);
   assert.equal(h.lifecycle.gateLead("edit", undefined), "Wait for or stop the Fusion sidekick before taking over workspace writes.");

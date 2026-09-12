@@ -68,6 +68,10 @@ import {
   MODEL_IDLE_MS,
   TOOL_IDLE_MS,
 } from "./runtime/worker-runtime.ts";
+import {
+  FUSION_EPHEMERAL_AGENTS,
+  isFusionEphemeralAgent,
+} from "./runtime/fusion-lifecycle.ts";
 
 // ---------------------------------------------------------------- visual helpers
 
@@ -563,8 +567,15 @@ export default function (pi: ExtensionAPI) {
     executionMode: "parallel",
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      if (process.env.PI_FUSION_SIDEKICK === "1" || process.env.PI_BEHAVIOR_MODE === "fusion") {
+      if (process.env.PI_FUSION_SIDEKICK === "1") {
         const text = "Synchronous task spawning is disabled in Fusion.";
+        return { content: [{ type: "text", text }], isError: true, details: {} };
+      }
+      if (
+        process.env.PI_BEHAVIOR_MODE === "fusion" &&
+        !isFusionEphemeralAgent(params.agent)
+      ) {
+        const text = `Fusion permits synchronous task only for ${FUSION_EPHEMERAL_AGENTS.join(", ")}; ${params.agent} is Apex-only — use the sidekick or switch modes.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       const def = agents.get(params.agent);

@@ -674,7 +674,7 @@ Available agents:
 ${agentList}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartFusionDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done.
+  const taskStartFusionDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}

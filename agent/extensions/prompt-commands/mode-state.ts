@@ -40,6 +40,6 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
 }
 export function toolsForMode(mode: Mode, names: string[]): string[] {
   if (mode === "pi") return names.filter(name => ["read", "bash", "edit", "write"].includes(name));
-  if (mode === "fusion") return names.filter(name => !["task", "task_chain", "task_rebind"].includes(name));
+  if (mode === "fusion") return names.filter(name => !["task_chain", "task_rebind"].includes(name));
   return names;
 }
