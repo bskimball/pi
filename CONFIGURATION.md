@@ -11,11 +11,15 @@ config/markdown formats used in this repo. Two kinds of format are covered:
   (`agent/extensions/*.ts`) and not part of upstream Pi. Documented here in
   full, sourced directly from the implementation.
 
-Declared package version: `@earendil-works/pi-coding-agent@0.85.0` (see
-`package.json`). The installed package and `package-lock.json` may temporarily
-lag while a package reinstall is pending. Upstream docs can drift between
-versions; when in doubt, compare `package.json` with the installed version and
-read `node_modules/@earendil-works/pi-coding-agent/docs/*.md` directly.
+Declared and locked package version: `@earendil-works/pi-coding-agent@0.85.1`
+(see `package.json` and `package-lock.json`). `pi-mcp-adapter@2.32.1` still
+peers `@earendil-works/pi-ai@^0.84.1`; npm's 0.x caret excludes 0.85.x, so a
+clean install needs `npm install --legacy-peer-deps`. (`pi-mcp-adapter@2.33.0`
+widens that peer range but currently depends on a GitHub `pkg.pr.new` remote
+tarball, which this machine's npm `allow-remote=none` policy blocks.) Upstream
+docs can drift between versions; when in doubt, compare `package.json` with the
+installed version and read `node_modules/@earendil-works/pi-coding-agent/docs/*.md`
+directly.
 
 ## Contents
 
@@ -326,16 +330,18 @@ optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
-(`grok-4.5`, provider-local id), `defaultProvider` (`local-proxy`),
-`defaultThinkingLevel`, `lastChangelogVersion`, `packages` (empty — the
-third-party MCP dependency used here is composed locally by `mcp-adapter.ts`
-instead of loaded from this array; see the mcp.json section above for why),
+(`gpt-5.6-sol`), `defaultProvider` (`local-proxy`),
+`defaultThinkingLevel`, `lastChangelogVersion`, `packages`
+(`npm:@ff-labs/pi-fff` for FFF fuzzy finding, `npm:pi-intercom` for the
+`intercom` tool — the third-party MCP dependency used here is still composed
+locally by `mcp-adapter.ts` instead of loaded from this array; see the mcp.json
+section above for why),
 `skills` (registers the `pi-mcp-adapter` bundled skill directory so
 `mcp-scripting` is discoverable without loading the adapter twice),
 `compaction` (`reserveTokens: 44000`, leaving roughly 20% of the default
 220k-token context as headroom before between-run auto-compaction, while
 retaining the upstream `keepRecentTokens: 20000` behavior), `steeringMode`,
-`transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme`,
+`transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme` (`claude-dark`),
 `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
 `openai-codex/*`, `xai/*`, `opencode/*`, and other providers for optional manual selection).
 
@@ -375,7 +381,7 @@ body.
 | `model` | No | string | Primary model, e.g. `local-proxy/grok-4.5`. Bare model names (no `/`) inherit no provider qualification unless already qualified. |
 | `fallbackModels` | No | list | YAML-style list (inline `[a, b]` or block `- item` form). Tried in order if the primary model fails; see `modelAttempts()` for the exact chain-building logic (explicit override at task-call time replaces only the primary, not the fallback chain). |
 | `thinking` | No | string | Thinking level, e.g. `medium`. |
-| `tools` | No | string | **Comma-separated string**, not a YAML list, e.g. `read, grep, find, ls, bash, edit, write, task`. |
+| `tools` | No | string | **Comma-separated string**, not a YAML list, e.g. `read, ffgrep, fffind, ls, bash, edit, write, task`. |
 | `maxTurns` | No | number | Parsed with `Number(...)`; invalid values become `undefined`. |
 | `timeoutSec` | No | number | Same parsing behavior as `maxTurns`. |
 | `inheritSkills` | No | boolean | Defaults to `true`; only the literal string `"false"` in frontmatter disables it (passes `--no-skills` to the child). |
@@ -550,8 +556,9 @@ plus the optional `export` block and 4 supported color-value formats (hex,
 256-color index, `vars` reference, `""` for terminal default). Not
 reproduced here; read the doc when authoring or editing a theme.
 
-**Location used here:** `agent/themes/apex-dark.json`, selected via
-`agent/settings.json` `"theme": "apex-dark"`. Root shape: `{ "$schema"?, "name",
+**Location used here:** `agent/themes/apex-dark.json` and
+`agent/themes/claude-dark.json`, selected via `agent/settings.json` `"theme"`
+(currently `"claude-dark"`). Root shape: `{ "$schema"?, "name",
 "vars"?, "colors", "export"? }`. Hot-reloads when the *currently active*
 custom theme file is edited.
 

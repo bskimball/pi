@@ -19,8 +19,18 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
   const handlers = new Map<string, Function[]>();
   const bus = new Map<string, Function>();
   const tools = new Map<string, any>();
+  // wrapToolDefinition copies description/parameters; mutating the registered object
+  // is not enough unless registerTool runs again and re-wraps.
+  let wrapped: { description: string; agent: string } | undefined;
+  const snapshotWrap = (tool: any) => {
+    if (tool?.name !== "task_start") return;
+    wrapped = {
+      description: tool.description as string,
+      agent: tool.parameters.properties.agent.description as string,
+    };
+  };
   const pi: any = {
-    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerTool: (tool: any) => { tools.set(tool.name, tool); snapshotWrap(tool); },
     registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
     on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
     events: { on(name: string, fn: Function) { bus.set(name, fn); } },
@@ -48,6 +58,31 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
       const result = handlers.get("tool_call")!.map(fn => fn({ toolName, input: {} })).find(Boolean);
       assert.equal(result.block, true);
     }
+    const advertised = () => tools.get("task_start");
+    const agentParam = () => advertised().parameters.properties.agent.description as string;
+    const wrappedAgent = () => wrapped?.agent ?? "";
+    assert.match(advertised().description, /sidekick/);
+    assert.doesNotMatch(advertised().description, /machinist|oracle|scout/);
+    assert.match(agentParam(), /sidekick/);
+    assert.doesNotMatch(agentParam(), /machinist|oracle|scout/);
+    assert.match(wrapped?.description ?? "", /sidekick/);
+    assert.doesNotMatch(wrapped?.description ?? "", /machinist|oracle|scout/);
+    assert.match(wrappedAgent(), /sidekick/);
+    bus.get("pi:modes:changed")!({ mode: "apex" });
+    assert.match(advertised().description, /machinist/);
+    assert.match(agentParam(), /machinist/);
+    assert.match(wrapped?.description ?? "", /machinist/);
+    assert.match(wrappedAgent(), /machinist/);
+    bus.get("pi:modes:changed")!({ mode: "fusion" });
+    assert.match(advertised().description, /sidekick/);
+    assert.doesNotMatch(advertised().description, /machinist|oracle|scout/);
+    assert.match(agentParam(), /sidekick/);
+    assert.doesNotMatch(agentParam(), /machinist|oracle|scout/);
+    assert.match(wrapped?.description ?? "", /sidekick/);
+    assert.doesNotMatch(wrapped?.description ?? "", /machinist|oracle|scout/);
+    assert.match(wrappedAgent(), /sidekick/);
+    assert.doesNotMatch(wrappedAgent(), /machinist|oracle|scout/);
+
     assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "intercom", input: {} })).find(Boolean), undefined);
   } finally {
     for (const fn of handlers.get("session_shutdown") ?? []) fn({}, {});

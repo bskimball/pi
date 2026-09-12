@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK } from "../prompt-commands.ts";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
 
 test("legacy modes restore without adopting a new global default", () => {
@@ -45,7 +45,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
       events: { emit(name: string, data: any) { if (name === "pi:modes:query-busy" && workerBusy) data.busy = true; } },
       appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
       getAllTools: () => allTools.map(name => ({ name })),
-      getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; }, getThinkingLevel: () => "medium",
+      getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; }, getThinkingLevel: () => "medium", setThinkingLevel() {},
     };
     promptCommands(pi);
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
@@ -68,6 +68,15 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     allTools.push("fffind", "ffgrep", "intercom");
     await commands.mode("apex", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "fusion", models: {}, fusion: { lead: { provider: "configured", modelId: "lead", thinking: "medium" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } } } });
+    ctx.modelRegistry = { find: () => ({ provider: "configured", id: "lead" }) };
+    pi.setModel = async () => true;
+    await emit("session_start", { reason: "resume" });
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
+    const fused = (await prompt()).systemPrompt;
+    assert.equal(fused, "Apex base" + FUSION_SYSTEM_BLOCK);
+    assert.doesNotMatch(fused, /^You are an expert coding assistant operating inside pi/);
+    assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("pi", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash"]);
     await commands.ui("pi", ctx);

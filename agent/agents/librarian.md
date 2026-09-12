@@ -6,7 +6,7 @@ fallbackModels:
   - local-proxy/gemini-3.8-flash-high
   - local-proxy/gpt-5.6-terra
   - local-proxy/claude-sonnet-5
-  - "@cf/deepseek-ai/deepseek-v4-pro-0813"
+  - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content
 inheritSkills: true

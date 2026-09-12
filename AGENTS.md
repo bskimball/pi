@@ -11,7 +11,7 @@ Do not redirect requests to an unrelated application repository based on terms s
 ```text
 agent/
 ├── SYSTEM.md              # base system prompt
-├── settings.json          # model, theme (apex-dark), tuiMode, compaction
+├── settings.json          # model, theme (currently claude-dark), tuiMode, compaction
 ├── models.json / mcp.json # provider + MCP configuration
 ├── agents/                # specialist briefs (_shared*.md are composed in)
 ├── prompts/               # slash-command prompts (inactive/ = extension-owned)
@@ -97,7 +97,7 @@ npm run lint                                             # oxlint, .oxlintrc.jso
 node --experimental-transform-types --test agent/extensions/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/lsp/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/apex/test/*.test.ts
-node --experimental-transform-types --test agent/extensions/task/*.test.ts agent/extensions/task/runtime/test/*.test.ts
+node --experimental-transform-types --test agent/extensions/task/*.test.ts agent/extensions/task/presentation/*.test.ts agent/extensions/task/runtime/test/*.test.ts
 ```
 
 Run `extension-discovery.test.ts` after any change to extension layout, entry points, or imports.

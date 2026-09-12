@@ -6,7 +6,7 @@ The Fusion model picker uses the same available-provider catalog as Pi's `/model
 
 Mode changes preserve the conversation and require an idle lead and idle workers. Running dev servers do not block switching. Earlier conversation history remains visible to the model, so switching to Pi is not a clean-room reset of prior messages.
 
-Pi uses the installed Pi system-prompt builder and the default built-in read, bash, edit, and write tools. Custom profile, memory, Graphify, and read-guard injections are suppressed. Project context and installed skill descriptions retain Pi's normal loading behavior. Apex retains the standard prompt; Apex Orchestrate adds its existing specialist-first instructions.
+Pi uses the installed Pi system-prompt builder and the default built-in read, bash, edit, and write tools. Custom profile, memory, Graphify, and read-guard injections are suppressed. Project context and installed skill descriptions retain Pi's normal loading behavior. Apex, Apex Orchestrate, and Fusion each overlay the shared `agent/SYSTEM.md` base prompt with their own mode card (Regular, Orchestrate, Fusion); Fusion no longer replaces the base prompt. Apex appends the Regular card; Apex Orchestrate appends its existing specialist-first instructions.
 
 Each session saves its mode and model choices. Explicit mode switching also sets the default for new sessions. Resuming restores the session's own settings; older sessions map their saved orchestration state to Apex or Apex Orchestrate.
 
@@ -14,7 +14,7 @@ Each session saves its mode and model choices. Explicit mode switching also sets
 
 Fusion uses the existing async task runtime with one `sidekick` agent. The lead owns investigation and judgment, and may delegate bounded read-only inventory, reference checks, or diagnostics early; the sidekick also executes scoped edits and validation in the same workspace. Each handoff identifies read-only versus execution work, scope, authorization, expected evidence or deliverable, and validation where appropriate. Preparation stops once authorized scope, affected files, risks, and validation are clear unless contradictory evidence appears.
 
-While the sidekick is active, runtime gates reject additional agent dispatch, every lead `bash` or `powershell` call (including read-only shell), and lead `edit` or `write`. The lead may continue read-only inspection with read, grep/find, or LSP, or wait for/stop the sidekick before using shell. Both roles may use installed utilities within those gates. The sidekick cannot maintain the lead's todo list.
+While the sidekick is active, runtime gates reject additional agent dispatch, every lead `bash` or `powershell` call (including read-only shell), and lead `edit` or `write`. The lead may continue read-only inspection with `read`, `ffgrep`/`fffind`, or LSP, or wait for/stop the sidekick before using shell. Both roles may use installed utilities within those gates. The sidekick cannot maintain the lead's todo list.
 
 The first entry requires a model pair. Canceling setup leaves the active mode unchanged. Context persists across assignments and is restored from the saved sidekick transcript after parking or session restart. Changing models retains that transcript. Escape stops active sidekick work as well as the lead. Unavailable models are reported rather than automatically substituted.
 

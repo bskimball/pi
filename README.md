@@ -10,9 +10,9 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
-- **Slash commands and prompt templates** — native `/orchestrate` switches the lead into sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
+- **Slash commands and prompt templates** — `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion), `/ui` switches presentation (pi / apex / claude), and native `/orchestrate` toggles sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, and MCP scripting.
-- **A theme** (`agent/themes/apex-dark.json`) selected via `agent/settings.json`.
+- **Themes** (`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`) selected via `agent/settings.json` (currently `claude-dark`).
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
 
 ## Sub-agents and Orchestration Tools
@@ -48,6 +48,7 @@ The task tool and the sub-agent prompts are **based on Amp's prompts and sub-age
 | `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, and diagrams. |
 | `scout` | Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
+| `sidekick` | Persistent Fusion execution partner for implementation, investigation, writing, and validation; Fusion-only. |
 | `stevedore` | Fast execution specialist for integrated gates, exact diagnostic experiment execution, deploys, git, and platform CLIs. |
 
 Shared norms that apply to every specialist (smallest-correct-change discipline, browser rules, evidence, dirty-worktree safety, etc.) live in [`agent/agents/_shared.md`](agent/agents/_shared.md). Worker-mode semantics are separate: `_shared-sync.md` describes fire-and-forget `task` runs, while `_shared-async.md` describes persistent RPC workers with steering, follow-ups, and UI requests. [`agent/agents/_handoff.md`](agent/agents/_handoff.md) is appended for both modes and requires a non-empty visible final report for each generation. Each agent file also declares its primary model plus a fallback chain. Both task modes retry only clean provider/model availability failures; async workers replace the failed RPC session and replay only before visible output or tool execution, preventing duplicate work.
@@ -65,8 +66,9 @@ agent/extensions/
 ├── powershell.ts    + powershell/         direct PowerShell child process
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
-├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate
+├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate, /mode, /ui
 ├── graphify.ts                            local knowledge-graph query + /graphify handoff
+├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
 ├── mcp-adapter.ts                         pi-mcp-adapter bridge (stock MCP rendering)
 ├── read-guard.ts                          duplicate-image + downscale guard
 ├── user-profile.ts                        private user context injection
@@ -109,8 +111,9 @@ There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publi
 - **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
 - **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/logs/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/logs/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
 - **`continual-memory.ts`** — `memory_list`/`memory_write`; small evidence-backed durable notes outside the chat transcript. Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default write scope is global; local is this-session scratch. Global entries live under `agent/harness/global.json` (gitignored).
-- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, and `/orchestrate` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands). `/todos` and `/agents` are registered by Apex (`todo-tools.ts`), not here.
+- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands). `/todos` and `/agents` are registered by Apex (`todo-tools.ts`), not here.
 - **`graphify.ts`** — see [Graphify](#graphify) below.
+- **`worktree.ts`** — isolated Git worktree `add`/`list`/`remove` for parallel writers; support code in `worktree/internal/`; Apex receipt chrome on `worktree`.
 - **`mcp-adapter.ts`** — standalone bridge that boots the root `pi-mcp-adapter` dependency on this `ExtensionAPI`. MCP tools use Pi's stock renderer. Do not also add `pi-mcp-adapter` to `agent/settings.json` `packages`; a second package-loaded copy would initialize a duplicate MCP extension.
 - **`read-guard.ts`** — blocks a repeated `read` of the same image path when mtime/size are unchanged; downscales image blocks in any tool result to a 1568px long edge; gives an advisory nudge on very large bash output. No text re-read guard.
 - **`user-profile.ts`** — injects `agent/USER_PROFILE.local.md` (gitignored, capped at 8,000 characters) into the system prompt via `before_agent_start`, if the file exists.
@@ -134,7 +137,7 @@ A single on-demand `lsp` tool for semantic navigation (`definition`, `references
 
 ## Slash commands
 
-`/browser`, `/deploy`, and `/orchestrate` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, and sticky session-mode switching, respectively — that plain prompt-template expansion can't do. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
+`/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, sticky session-mode switching, and the behavior/presentation pickers — that plain prompt-template expansion can't do. `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion) and `/ui` switches presentation (pi / apex / claude); see `agent/extensions/prompt-commands/README.md` for Fusion/UI detail. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
 
 Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md), [`/simplify`](agent/prompts/simplify.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
@@ -194,7 +197,7 @@ Skills live in `agent/skills/` and are freeform directories beyond the required 
 
 ## Theme
 
-`agent/themes/apex-dark.json` is a custom dark theme selected via `agent/settings.json` (`"theme": "apex-dark"`) and hot-reloads when edited while active. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
+`agent/themes/apex-dark.json` and `agent/themes/claude-dark.json` are custom dark themes selected via `agent/settings.json` (`"theme"` is currently `"claude-dark"`); the active theme hot-reloads when edited. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
 
 ## The shark / Observatory
 
@@ -245,8 +248,10 @@ Copying an example is a starting point, not a drop-in config: placeholders need 
 2. Install dependencies:
 
    ```bash
-   npm install
+   npm install --legacy-peer-deps
    ```
+
+   `pi-mcp-adapter@2.32.1` still peers `@earendil-works/pi-ai@^0.84.1`, which excludes the locked 0.85.1 line. See [CONFIGURATION.md](CONFIGURATION.md) for the peer/install note.
 
 3. Restore the ignored local configuration files from their tracked examples (see [CONFIGURATION.md](CONFIGURATION.md) for field details):
 

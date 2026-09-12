@@ -13,6 +13,7 @@ import {
   SettingsManager,
   type ExtensionAPI,
   type ExtensionContext,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
@@ -661,6 +662,34 @@ export default function (pi: ExtensionAPI) {
   const agentList = [...agents.values()]
     .map((agent) => `- ${agent.name}: ${agent.description}`)
     .join("\n");
+  const sidekickDef = agents.get("sidekick");
+  const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
+
+Available agents:
+${agentList}
+
+At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+  const taskStartFusionDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done.
+
+Available agent:
+- sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}
+
+At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+  const taskStartDescription = (fusionMode: boolean) => fusionMode && sidekickDef ? taskStartFusionDescription : taskStartFullDescription;
+  const taskStartAgentDescription = (fusionMode: boolean) => fusionMode && sidekickDef
+    ? "Agent to run. One of: sidekick. Fusion permits only its designated sidekick."
+    : agentParamDescription(agents);
+  const applyTaskStartAdvertisement = (fusionMode: boolean) => {
+    taskStartToolDef.description = taskStartDescription(fusionMode);
+    const properties = (taskStartToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
+    taskStartToolDef.parameters = Type.Object({
+      ...properties,
+      agent: Type.String({ description: taskStartAgentDescription(fusionMode) }),
+    }) as typeof taskStartToolDef.parameters;
+    // registerTool() is the public path that re-wraps; wrapToolDefinition snapshots
+    // description/parameters, and setActiveTools only looks up the existing wrap.
+    pi.registerTool(taskStartToolDef);
+  };
 
   const runtime = new WorkerRuntime<Worker>({
     maxErrors: MAX_ERRORS,
@@ -1700,15 +1729,42 @@ export default function (pi: ExtensionAPI) {
 
   // ------------------------------------------------------------ tools
 
-  pi.registerTool({
+  const taskStartParams = Type.Object({
+    agent: Type.String({
+      description: taskStartAgentDescription(behaviorMode === "fusion"),
+    }),
+    prompt: Type.String({
+      description:
+        "Complete self-contained work order: goal, scope, context, evidence, validation, and expected return format.",
+    }),
+    cwd: Type.Optional(
+      Type.String({
+        description: "Working directory for the agent (defaults to current)",
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply.",
+      }),
+    ),
+    reportSchema: Type.Optional(
+      Type.String({
+        description:
+          "JSON Schema subset (object; properties string|number|boolean; required[]; optional enum). Child final message must include a ```report``` JSON fence matching it.",
+      }),
+    ),
+    context: Type.Optional(
+      Type.Union([Type.Literal("fresh"), Type.Literal("fork")], {
+        description:
+          "fresh (default) starts empty. fork copies this parent session unfiltered, including prior task_* calls. Falls back to fresh if the parent session is not yet persisted.",
+      }),
+    ),
+  });
+  const taskStartToolDef: ToolDefinition<typeof taskStartParams> = {
     name: "task_start",
     label: "Task Start",
-    description: `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
-
-Available agents:
-${agentList}
-
-At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
+    description: taskStartDescription(behaviorMode === "fusion"),
     promptSnippet:
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
@@ -1718,38 +1774,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
-    parameters: Type.Object({
-      agent: Type.String({
-        description: agentParamDescription(agents),
-      }),
-      prompt: Type.String({
-        description:
-          "Complete self-contained work order: goal, scope, context, evidence, validation, and expected return format.",
-      }),
-      cwd: Type.Optional(
-        Type.String({
-          description: "Working directory for the agent (defaults to current)",
-        }),
-      ),
-      model: Type.Optional(
-        Type.String({
-          description:
-            "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply.",
-        }),
-      ),
-      reportSchema: Type.Optional(
-        Type.String({
-          description:
-            "JSON Schema subset (object; properties string|number|boolean; required[]; optional enum). Child final message must include a ```report``` JSON fence matching it.",
-        }),
-      ),
-      context: Type.Optional(
-        Type.Union([Type.Literal("fresh"), Type.Literal("fork")], {
-          description:
-            "fresh (default) starts empty. fork copies this parent session unfiltered, including prior task_* calls. Falls back to fresh if the parent session is not yet persisted.",
-        }),
-      ),
-    }),
+    parameters: taskStartParams,
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       syncFleetWidget(ctx);
@@ -1980,7 +2005,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         }, "[async worker display unavailable]");
       },
     }),
-  });
+  };
+
+  pi.registerTool(taskStartToolDef);
 
   pi.registerTool({
     name: "task_chain",
@@ -3535,6 +3562,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     const event = payload as { mode?: string; fusion?: FusionPair };
     behaviorMode = event.mode ?? "pi";
     fusion = event.fusion;
+    applyTaskStartAdvertisement(behaviorMode === "fusion");
     if (behaviorMode !== "fusion") {
       const worker = fusionWorker();
       if (worker && (worker.lifecycle === "settled" || worker.lifecycle === "failed")) {

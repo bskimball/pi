@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -10,7 +9,7 @@ import { pickFusionModel } from "./model-picker.ts";
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion" };
 
-export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string): void {
+export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string): void {
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
@@ -192,11 +191,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     return undefined;
   });
   pi.on("before_agent_start", async (event, ctx) => {
-    if (state.mode === "apex" || state.mode === "apex-orchestrate") return { systemPrompt: event.systemPrompt + (state.mode === "apex" ? regular : orchestrate) };
+    if (state.mode === "apex") return { systemPrompt: event.systemPrompt + regular };
+    if (state.mode === "apex-orchestrate") return { systemPrompt: event.systemPrompt + orchestrate };
+    if (state.mode === "fusion") return { systemPrompt: event.systemPrompt + fusion };
     const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: BuildSystemPromptOptions) => string };
     const selectedTools = pi.getActiveTools();
-    const options: BuildSystemPromptOptions = { ...event.systemPromptOptions, customPrompt: undefined, appendSystemPrompt: undefined, promptGuidelines: state.mode === "pi" ? [] : event.systemPromptOptions.promptGuidelines, cwd: ctx.cwd, selectedTools };
-    if (state.mode === "fusion") options.customPrompt = readFileSync(join(getAgentDir(), "prompts", "inactive", "fusion.md"), "utf8");
+    const options: BuildSystemPromptOptions = { ...event.systemPromptOptions, customPrompt: undefined, appendSystemPrompt: undefined, promptGuidelines: [], cwd: ctx.cwd, selectedTools };
     return { systemPrompt: buildSystemPrompt(options) };
   });
 }
