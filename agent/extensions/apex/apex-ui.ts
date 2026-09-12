@@ -203,10 +203,8 @@ export default function (pi: ExtensionAPI) {
   // registers its opt-out policy and may migrate a leftover older wrap so
   // stock Pi chrome wins after an extension reload. The persistent plain todo
   // widget installed above is the sole mounted UI exception.
-  if (process.env.PI_APEX_UI === "0") {
-    installPowerShellReceipts();
-    return;
-  }
+  const presentationEnabled = () => process.env.PI_APEX_UI !== "0";
+  const installPresentation = () => {
 
   // Install the process-wide boundary only when Apex presentation is active.
   // It keeps malformed model/extension values from terminating the TUI while
@@ -234,7 +232,11 @@ export default function (pi: ExtensionAPI) {
   // Regenerate the sequence for every run so retries and subsequent turns do
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
   // the animation clock.
-  pi.on("agent_start", (_event, ctx) => applyRandomWorkingIndicator(pi, ctx));
+  };
+  installPresentation();
+  pi.on("agent_start", (_event, ctx) => {
+    if (presentationEnabled()) applyRandomWorkingIndicator(pi, ctx);
+  });
 
   installBuiltinTools(pi);
 
@@ -498,7 +500,7 @@ export default function (pi: ExtensionAPI) {
     // Rebuild only for a conversation-blank new/initial startup chat.
     // Ignore model_change / thinking_level_change / session_info seeds that
     // the SDK appends before session_start on every fresh session.
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || !presentationEnabled()) return;
     let blank: boolean;
     try {
       blank = isConversationBlank(ctx.sessionManager.getEntries());
@@ -511,8 +513,22 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.events.on("pi:ui:changed", (payload: unknown) => {
+    const { ctx } = payload as { ctx: ExtensionContext };
+    clearObservatory();
+    if (presentationEnabled()) {
+      installPresentation();
+      installLayout(pi, ctx);
+    } else if (ctx.hasUI) {
+      ctx.ui.setEditorComponent(undefined);
+      ctx.ui.setWorkingIndicator(undefined);
+      ctx.ui.setWorkingMessage(undefined);
+      ctx.ui.setHiddenThinkingLabel(undefined);
+    }
+  });
+
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || !presentationEnabled()) return;
     applyRandomWorkingIndicator(piApi, ctx);
 
     // Collapsed reasoning is otherwise a bare italic sentence that reads like

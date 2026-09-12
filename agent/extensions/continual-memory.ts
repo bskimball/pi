@@ -128,7 +128,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (process.env.PI_SUBAGENT === "1") return undefined;
+    if (process.env.PI_SUBAGENT === "1" || process.env.PI_BEHAVIOR_MODE === "pi") return undefined;
     // Read-only reload without holding lock across the whole turn; overview is advisory.
     const loaded = loadJsonStore(globalPath());
     if (!loaded.error) globalStore = loaded.store;

@@ -291,7 +291,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   const PANEL_KEY = "todo-list";
   const TOGGLE_HINT = "alt+t";
   const SWITCH_HINT = "alt+a";
-  const presentationEnabled = apexPresentationEnabled();
+  let presentationEnabled = apexPresentationEnabled();
 
   function clearPanel(): void {
     const ctx = currentCtx;
@@ -322,6 +322,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   function renderPanel(): void {
     const ctx = currentCtx;
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
+    if (process.env.PI_BEHAVIOR_MODE === "pi") { clearPanel(); return; }
     if (!dockHasSurface()) {
       if (dockMounted) clearPanel();
       return;
@@ -422,6 +423,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
       handler: async (_args, ctx) => switchPane(ctx, "agents"),
     });
   }
+
+  pi.events.on("pi:ui:changed", () => {
+    presentationEnabled = apexPresentationEnabled();
+    renderPanel();
+  });
+  pi.events.on("pi:modes:changed", () => renderPanel());
 
   pi.on("session_start", (event: any, ctx: ExtensionContext) => {
     clearPanel();

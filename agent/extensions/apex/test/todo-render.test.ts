@@ -24,6 +24,7 @@ function createMockPi(apexUi = "1") {
     const listeners = new Map<string, Array<(event: any, ctx: any) => void>>();
 
     const pi = {
+      events: { on() {} },
       registerTool(definition: any) {
         tools.push(definition);
       },

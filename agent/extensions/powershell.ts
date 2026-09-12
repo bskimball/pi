@@ -12,31 +12,6 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killProcessTree } from "./powershell/internal/process-tree-kill.ts";
 
-/**
- * One-line command summary for the receipt header. Multi-line scripts collapse
- * to their first statement plus a line count, never the whole body.
- */
-export function formatPowerShellCommand(
-  command: unknown,
-  budget = 120,
-): string {
-  const max = Math.max(0, Math.floor(budget));
-  if (max === 0) return "";
-  const lines = String(command ?? "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .filter((line) => line.trim().length > 0);
-  if (!lines.length) return "";
-  const extra = lines.length - 1;
-  const clean = (value: string) => value.replace(/\s+/g, " ").trim();
-  const truncate = (value: string) =>
-    value.length <= max ? value : value.slice(0, max);
-  if (extra <= 0) return truncate(clean(lines[0]));
-  const suffix = ` +${extra} ${extra === 1 ? "line" : "lines"}`;
-  const head = clean(lines[0]).slice(0, Math.max(0, max - suffix.length));
-  return truncate(`${head}${suffix}`);
-}
-
 const DEFAULT_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 const MAX_TIMEOUT_MS = 2_147_483_647;

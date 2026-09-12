@@ -603,8 +603,3 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
 
   return { renderCall, renderResult };
 }
-
-/** Back-compat alias used by web-search-ui callers. */
-export const webToolRenderers = toolRenderers;
-export type WebToolSpec<TArgs> = ToolSpec<TArgs>;
-export type WebToolRenderState = ToolRenderState;

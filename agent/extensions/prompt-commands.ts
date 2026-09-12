@@ -4,7 +4,6 @@
 
 import type {
   ExtensionAPI,
-  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
   registerBrowserAttachTool,
@@ -12,10 +11,7 @@ import {
   runDeployCommand,
 } from "./prompt-commands/featured-commands.ts";
 
-const ORCHESTRATE_STATUS_KEY = "orchestrate";
-const ORCHESTRATE_STATUS_LABEL = "orchestrator";
-
-const ORCHESTRATE_ENTRY_TYPE = "orchestrate-mode";
+import { registerModes } from "./prompt-commands/modes.ts";
 
 export const REGULAR_SYSTEM_BLOCK = `
 
@@ -57,101 +53,9 @@ The user has switched this session into strict orchestrator mode. This overrides
 
 The non-negotiable gates still apply. Control-plane, glue, and known-path edits are the inline path in this mode — they are not a reason to skip a path-triggered Oracle review after a behavior or trust-boundary change. If a unit truly cannot be delegated (credentials, interactive auth, user-only decisions), surface it to the user instead of doing it silently.`;
 
-function notify(
-  ctx: ExtensionContext,
-  message: string,
-  type: "info" | "warning" | "error" = "info",
-): void {
-  if (ctx.hasUI) {
-    ctx.ui.notify(message, type);
-    return;
-  }
-  process.stderr.write(`${message}\n`);
-}
-
-export function orchestrateStatusText(
-  enabled: boolean,
-  theme?: { fg?(key: string, text: string): string },
-): string | undefined {
-  if (!enabled) return undefined;
-  try {
-    const styled = theme?.fg?.("warning", ORCHESTRATE_STATUS_LABEL);
-    if (typeof styled === "string" && styled.length > 0) return styled;
-  } catch {}
-  return ORCHESTRATE_STATUS_LABEL;
-}
-
-function syncOrchestrateStatus(ctx: ExtensionContext, enabled: boolean): void {
-  try {
-    ctx.ui.setStatus(
-      ORCHESTRATE_STATUS_KEY,
-      orchestrateStatusText(enabled, ctx.ui.theme),
-    );
-  } catch {}
-}
-
 export default function (pi: ExtensionAPI): void {
   registerBrowserAttachTool(pi);
-  let orchestrateMode = false;
-  const footerPatchReady = Promise.resolve(false);
-
-  const setOrchestrateMode = (
-    enabled: boolean,
-    ctx: ExtensionContext,
-  ): void => {
-    syncOrchestrateStatus(ctx, enabled);
-    if (orchestrateMode === enabled) {
-      notify(ctx, `Orchestrator mode already ${enabled ? "on" : "off"}.`);
-      return;
-    }
-    orchestrateMode = enabled;
-    pi.appendEntry(ORCHESTRATE_ENTRY_TYPE, { enabled });
-    notify(
-      ctx,
-      enabled
-        ? "Strict orchestrator mode ON — specialist-first; control-plane, glue, and known-path edits stay inline. Offer /orchestrate off for status/continue/one-file work."
-        : "Strict orchestrator mode OFF — inline-by-default restored.",
-    );
-  };
-
-  pi.registerCommand("orchestrate", {
-    description:
-      "Toggle strict orchestrator mode (specialist-first; control-plane still inline)",
-    handler: async (args, ctx) => {
-      await footerPatchReady;
-      const arg = args.trim().toLowerCase();
-      if (arg === "on") setOrchestrateMode(true, ctx);
-      else if (arg === "off") setOrchestrateMode(false, ctx);
-      else if (arg === "" || arg === "toggle") {
-        setOrchestrateMode(!orchestrateMode, ctx);
-      } else {
-        notify(ctx, "Usage: /orchestrate [on|off]", "warning");
-      }
-    },
-  });
-
-  pi.on("session_start", async (_event, ctx) => {
-    await footerPatchReady;
-    orchestrateMode = false;
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (
-        entry.type === "custom" &&
-        entry.customType === ORCHESTRATE_ENTRY_TYPE
-      ) {
-        const data = entry.data as { enabled?: boolean } | undefined;
-        orchestrateMode = data?.enabled === true;
-      }
-    }
-    syncOrchestrateStatus(ctx, orchestrateMode);
-  });
-
-  pi.on("before_agent_start", async (event) => {
-    if (process.env.PI_SUBAGENT === "1") return undefined;
-    const block = orchestrateMode
-      ? ORCHESTRATE_SYSTEM_BLOCK
-      : REGULAR_SYSTEM_BLOCK;
-    return { systemPrompt: event.systemPrompt + block };
-  });
+  registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK);
 
   pi.registerCommand("browser", {
     description:

@@ -156,10 +156,14 @@ export function buildTreeLines(
       index === rows.length - 1 && !options.hasFollowingContent;
     lines.push(safeTruncateToWidth(row.line(isLast ? TREE.last : TREE.branch), width));
     const prefix = isLast ? TREE.hang : `${theme.fg("dim", TREE.rail)}  `;
-    const continuation = boundExpandedCardText(
+    const continuationLines = boundExpandedCardText(
       (row.continuation ?? []).join("\n"),
       { maxChars: 2_400, maxLines: 8 },
-    ).text.split("\n").filter((line, index, all) => !(all.length === 1 && line === ""));
+    ).text.split("\n");
+    const continuation =
+      continuationLines.length === 1 && continuationLines[0] === ""
+        ? []
+        : continuationLines;
     for (const line of continuation) {
       lines.push(
         safeTruncateToWidth(

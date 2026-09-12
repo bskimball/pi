@@ -625,7 +625,7 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (process.env.PI_SUBAGENT === "1") return;
+    if (process.env.PI_SUBAGENT === "1" || process.env.PI_BEHAVIOR_MODE === "pi") return;
     const cwd = ctx.cwd;
     if (!cwd) return;
     const { config, artifacts } = refresh(cwd);
@@ -638,6 +638,7 @@ export default function graphifyExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
+    if (process.env.PI_BEHAVIOR_MODE === "pi") return;
     try {
       if (event.isError) return;
       const cwd = ctx.cwd;

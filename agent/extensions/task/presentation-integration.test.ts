@@ -15,6 +15,7 @@ interface RegisteredTool {
 function register(extension: (pi: ExtensionAPI) => void): RegisteredTool[] {
   const tools: RegisteredTool[] = [];
   const pi = {
+    events: { on() {} },
     registerTool(tool: RegisteredTool) {
       tools.push(tool);
     },
@@ -39,6 +40,7 @@ function loadAsyncDispatch() {
   const userMessages: unknown[] = [];
   const notices: string[] = [];
   asyncTask({
+    events: { on() {} },
     registerTool() {},
     registerShortcut() {},
     registerCommand(name: string, spec: { handler: typeof commands[string] }) {

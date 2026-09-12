@@ -619,6 +619,23 @@ describe("/graphify handoff", () => {
 });
 
 describe("system prompt and stale", () => {
+  it("leaves Pi prompts and built-in edit results untouched", async () => {
+    const previous = process.env.PI_BEHAVIOR_MODE;
+    process.env.PI_BEHAVIOR_MODE = "pi";
+    try {
+      const root = tempDir();
+      writeArtifacts(root, { wiki: true, report: true, graph: true, needsUpdate: true });
+      const ext = loadExtension();
+      const ctx = { cwd: root, ui: { setStatus() {} } };
+      const prompt = { systemPrompt: "stock Pi" };
+      await ext.emit("before_agent_start", prompt, ctx);
+      assert.equal(prompt.systemPrompt, "stock Pi");
+      const result = await ext.emit("tool_result", { toolName: "edit", input: { path: "src/app.ts" }, content: [{ type: "text", text: "edited" }] }, ctx);
+      assert.equal(result, undefined);
+    } finally {
+      if (previous === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = previous;
+    }
+  });
   it("injects wiki-first system block and stale warning", async () => {
     const prev = process.env.PI_SUBAGENT;
     delete process.env.PI_SUBAGENT;

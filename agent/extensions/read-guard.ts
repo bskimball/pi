@@ -133,6 +133,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if (process.env.PI_BEHAVIOR_MODE === "pi") return;
     if (isToolCallEventType("grep", event)) {
       const { pattern, literal } = event.input;
       if (literal === true || typeof pattern !== "string") return;
@@ -169,6 +170,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+    if (process.env.PI_BEHAVIOR_MODE === "pi") return;
     if (event.isError) return;
 
     // Bash: advise piping when output is unusually large. Never truncate.

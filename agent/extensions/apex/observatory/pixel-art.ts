@@ -80,11 +80,3 @@ export function pixelRows(art: readonly string[]): string[] {
       .join(""),
   );
 }
-
-/**
- * Decode one packed row into per-cell strings rather than a joined line, for
- * callers that composite a sprite into an existing row of text.
- */
-export function pixelCells(row: string): string[] {
-  return row.split(",").map((cell) => (cell ? pixelCell(cell) : " "));
-}

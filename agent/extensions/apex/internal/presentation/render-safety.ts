@@ -286,13 +286,6 @@ export function requestHostRender(): boolean {
   return painted;
 }
 
-/** Prefer a host frame; remount the tool row only when no TUI is attached. */
-export function paintPinnedSurface(remount: () => void): boolean {
-  if (requestHostRender()) return true;
-  remount();
-  return false;
-}
-
 function findOwnMethod(
   start: object,
   name: string,

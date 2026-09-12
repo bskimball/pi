@@ -1,192 +1,121 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { test } from "node:test";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK } from "../prompt-commands.ts";
+import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
 
-const {
-  default: promptCommands,
-  ORCHESTRATE_SYSTEM_BLOCK,
-  REGULAR_SYSTEM_BLOCK,
-  orchestrateStatusText,
-} = await import("../prompt-commands.ts");
-
-type StatusCall = [string, string | undefined];
-
-function loadExtension(persisted: Array<{ enabled: boolean }> = []) {
-  const commands: Record<
-    string,
-    (args: string, ctx: unknown) => unknown | Promise<unknown>
-  > = {};
-  const listeners: Record<string, Array<(e: unknown, c: unknown) => unknown>> = {};
-  const entries: Array<{ type: string; data: unknown }> = [];
-
-  promptCommands({
-    registerCommand(name: string, spec: { handler: typeof commands[string] }) {
-      commands[name] = spec.handler;
-    },
-    registerTool() {},
-    registerShortcut() {},
-    appendEntry(type: string, data: unknown) {
-      entries.push({ type, data });
-    },
-    on(event: string, handler: (e: unknown, c: unknown) => unknown) {
-      (listeners[event] ??= []).push(handler);
-    },
-  } as any);
-
-  const statuses: StatusCall[] = [];
-  const notices: string[] = [];
-  let setFooterCalls = 0;
-  const ctx = {
-    hasUI: true,
-    ui: {
-      theme: undefined,
-      setStatus(key: string, text: string | undefined) {
-        statuses.push([key, text]);
-      },
-      setFooter() {
-        setFooterCalls++;
-      },
-      notify(message: string) {
-        notices.push(message);
-      },
-    },
-    sessionManager: {
-      getEntries: () =>
-        persisted.map(({ enabled }) => ({
-          type: "custom",
-          customType: "orchestrate-mode",
-          data: { enabled },
-        })),
-    },
-  };
-
-  return {
-    statuses,
-    notices,
-    entries,
-    get setFooterCalls() {
-      return setFooterCalls;
-    },
-    orchestrate: (args: string) =>
-      Promise.resolve(commands.orchestrate!(args, ctx)),
-    emit: async (event: string) => {
-      for (const handler of listeners[event] ?? []) await handler({}, ctx);
-    },
-    beforeAgentStart: async (systemPrompt = "base prompt") => {
-      const results = [];
-      for (const handler of listeners.before_agent_start ?? []) {
-        results.push(await handler({ systemPrompt }, ctx));
-      }
-      return results.at(-1);
-    },
-  };
-}
-
-describe("orchestrateStatusText", () => {
-  it("uses a compact ASCII label and warning theme", () => {
-    const calls: Array<[string, string]> = [];
-    assert.equal(
-      orchestrateStatusText(true, {
-        fg(key, text) {
-          calls.push([key, text]);
-          return `<${text}>`;
-        },
-      }),
-      "<orchestrator>",
-    );
-    assert.deepEqual(calls, [["warning", "orchestrator"]]);
-  });
-
-  it("clears when off and falls back when theme throws", () => {
-    assert.equal(orchestrateStatusText(false), undefined);
-    assert.equal(
-      orchestrateStatusText(true, { fg() { throw new Error("theme"); } }),
-      "orchestrator",
-    );
-  });
+test("legacy modes restore without adopting a new global default", () => {
+  const prefs = initialPreferences(); prefs.mode = "pi";
+  assert.equal(restoreMode([], prefs, false).mode, "apex");
+  assert.equal(restoreMode([], prefs, true).mode, "pi");
+  assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
 });
-
-describe("mode cards", () => {
-  it("always injects exactly one card and never both", async () => {
-    const previousSubagent = process.env.PI_SUBAGENT;
-    delete process.env.PI_SUBAGENT;
-    try {
-      const state = loadExtension();
-      const regular = (await state.beforeAgentStart()) as { systemPrompt: string };
-      assert.equal(regular.systemPrompt, `base prompt${REGULAR_SYSTEM_BLOCK}`);
-
-      await state.orchestrate("on");
-      const active = (await state.beforeAgentStart()) as {
-        systemPrompt: string;
-      };
-      assert.equal(active.systemPrompt, `base prompt${ORCHESTRATE_SYSTEM_BLOCK}`);
-
-      await state.orchestrate("off");
-      const restored = (await state.beforeAgentStart()) as { systemPrompt: string };
-      assert.ok(restored.systemPrompt.endsWith(REGULAR_SYSTEM_BLOCK));
-      assert.doesNotMatch(restored.systemPrompt, /Strict orchestrator mode \(active\)/);
-    } finally {
-      if (previousSubagent === undefined) delete process.env.PI_SUBAGENT;
-      else process.env.PI_SUBAGENT = previousSubagent;
+test("Pi exposes built-in default tools; Fusion excludes roster dispatch", () => {
+  const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_start", "todo_write", "intercom"];
+  assert.deepEqual(toolsForMode("pi", tools), ["read", "write", "edit", "bash"]);
+  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task_start", "todo_write"]);
+});
+test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));
+  const oldDir = process.env.PI_CODING_AGENT_DIR;
+  const oldChild = process.env.PI_SUBAGENT;
+  const oldMode = process.env.PI_BEHAVIOR_MODE;
+  const oldUi = process.env.PI_APEX_UI;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    let busy = false;
+    let workerBusy = false;
+    const notices: string[] = [];
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => !busy,
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit(name: string, data: any) { if (name === "pi:modes:query-busy" && workerBusy) data.busy = true; } },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => ["read", "write", "edit", "bash", "task_start"].map(name => ({ name })),
+      getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; }, getThinkingLevel: () => "medium",
+    };
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    await emit("session_start", { reason: "new" });
+    const prompt = () => emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir, toolSnippets: { read: "Read files" } } });
+    assert.equal((await prompt()).systemPrompt, "Apex base" + REGULAR_SYSTEM_BLOCK);
+    await commands.orchestrate("on", ctx);
+    assert.equal((await prompt()).systemPrompt, "Apex base" + ORCHESTRATE_SYSTEM_BLOCK);
+    busy = true;
+    await commands.mode("pi", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate");
+    busy = false; workerBusy = true;
+    await commands.mode("pi", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate");
+    workerBusy = false;
+    await commands.mode("pi", ctx);
+    assert.match((await prompt()).systemPrompt, /^You are an expert coding assistant operating inside pi/);
+    assert.doesNotMatch((await prompt()).systemPrompt, /Apex base|Strict orchestrator/);
+    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    await commands.ui("pi", ctx);
+    assert.equal(process.env.PI_APEX_UI, "0");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
+    ctx.ui.theme.name = "light";
+    await commands.ui("apex", ctx);
+    assert.equal(ctx.ui.theme.name, "apex-dark");
+    await commands.ui("pi", ctx);
+    assert.equal(ctx.ui.theme.name, "light");
+    assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi");
+    assert.ok(notices.some(text => text.includes("Stop active")));
+    const catalog = [
+      { provider: "configured", id: "lead", reasoning: false },
+      { provider: "configured", id: "not-in-available-snapshot", reasoning: false },
+    ];
+    let refreshed = false;
+    const shown: string[] = [];
+    ctx.mode = "tui";
+    ctx.scopedModels = [];
+    ctx.modelRegistry = {
+      async refresh() { refreshed = true; },
+      getAll() { return catalog; },
+      getAvailable() { assert.equal(refreshed, true); return catalog.slice(0, 1); },
+      find: () => undefined,
+    };
+    ctx.ui.custom = async (factory: Function) => new Promise(resolve => {
+      const picker = factory({ terminal: { rows: 24 } }, { fg: (_key: string, text: string) => text }, {}, resolve);
+      shown.push(picker.render(100).join("\n"));
+      picker.handleInput("\r");
+    });
+    ctx.ui.select = async () => "off";
+    await commands.mode("configure", ctx);
+    assert.equal(shown.length, 2);
+    for (const view of shown) {
+      assert.match(view, /lead/);
+      assert.doesNotMatch(view, /not-in-available-snapshot/);
     }
-  });
-
-  it("skips mode-card injection for subagents", async () => {
-    const previous = process.env.PI_SUBAGENT;
-    process.env.PI_SUBAGENT = "1";
-    try {
-      const state = loadExtension();
-      assert.equal(await state.beforeAgentStart(), undefined);
-      await state.orchestrate("on");
-      assert.equal(await state.beforeAgentStart(), undefined);
-    } finally {
-      if (previous === undefined) delete process.env.PI_SUBAGENT;
-      else process.env.PI_SUBAGENT = previous;
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "unavailable selection leaves prior mode intact");
+    const prefsPath = join(dir, "mode-settings.json");
+    const otherSession = JSON.parse(readFileSync(prefsPath, "utf8"));
+    otherSession.mode = "fusion"; otherSession.ui = "apex";
+    writeFileSync(prefsPath, JSON.stringify(otherSession));
+    await emit("session_shutdown");
+    const afterShutdown = JSON.parse(readFileSync(prefsPath, "utf8"));
+    assert.equal(afterShutdown.mode, "fusion");
+    assert.equal(afterShutdown.ui, "apex");
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "fusion", models: {}, fusion: { lead: { provider: "missing", modelId: "unavailable", thinking: "high" }, sidekick: { provider: "missing", modelId: "sidekick", thinking: "low" } } } });
+    ctx.modelRegistry = { find: () => undefined };
+    await emit("session_start", { reason: "resume" });
+    assert.deepEqual(await emit("input", { text: "continue" }), { action: "handled" });
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: oldDir, PI_SUBAGENT: oldChild, PI_BEHAVIOR_MODE: oldMode, PI_APEX_UI: oldUi })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
-  });
-});
-
-describe("/orchestrate stock-footer status", () => {
-  it("sets and clears only the orchestrate status", async () => {
-    const state = loadExtension();
-    await state.orchestrate("on");
-    await state.orchestrate("off");
-    assert.deepEqual(state.statuses, [
-      ["orchestrate", "orchestrator"],
-      ["orchestrate", undefined],
-    ]);
-    assert.equal(state.setFooterCalls, 0);
-  });
-
-  it("resyncs when already on without duplicate persistence", async () => {
-    const state = loadExtension();
-    await state.orchestrate("on");
-    await state.orchestrate("on");
-    assert.deepEqual(state.statuses, [
-      ["orchestrate", "orchestrator"],
-      ["orchestrate", "orchestrator"],
-    ]);
-    assert.equal(state.entries.length, 1);
-    assert.equal(state.notices.at(-1), "Orchestrator mode already on.");
-    assert.equal(state.setFooterCalls, 0);
-  });
-});
-
-describe("session_start stock-footer status", () => {
-  it("restores on from persisted state", async () => {
-    const state = loadExtension([{ enabled: true }]);
-    await state.emit("session_start");
-    assert.deepEqual(state.statuses, [["orchestrate", "orchestrator"]]);
-    assert.equal(state.setFooterCalls, 0);
-  });
-
-  it("restores off or absent state by clearing", async () => {
-    const off = loadExtension([{ enabled: true }, { enabled: false }]);
-    await off.emit("session_start");
-    assert.deepEqual(off.statuses, [["orchestrate", undefined]]);
-
-    const absent = loadExtension();
-    await absent.emit("session_start");
-    assert.deepEqual(absent.statuses, [["orchestrate", undefined]]);
-    assert.equal(off.setFooterCalls + absent.setFooterCalls, 0);
-  });
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -126,11 +126,6 @@ export function componentOwnsPresentation(component: HeadlessComponent): boolean
   );
 }
 
-export function receiptFor(toolName: string | undefined): RegisteredReceipt | undefined {
-  if (!toolName) return undefined;
-  return getHeadlessReceiptState().registry.get(toolName);
-}
-
 /** Register Apex receipts for one headless tool. Last register for a name wins. */
 export function registerHeadlessReceipt(
   toolName: string,

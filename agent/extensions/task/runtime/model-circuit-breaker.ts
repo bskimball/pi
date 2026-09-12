@@ -450,10 +450,3 @@ export function getSharedModelCircuitBreaker(): ModelCircuitBreaker {
   if (!shared) shared = createModelCircuitBreaker();
   return shared;
 }
-
-/** Test-only: replace or clear the process-local shared instance. */
-export function setSharedModelCircuitBreaker(
-  breaker: ModelCircuitBreaker | undefined,
-): void {
-  shared = breaker;
-}

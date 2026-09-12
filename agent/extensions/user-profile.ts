@@ -31,6 +31,7 @@ export function applyUserProfileToSystemPrompt(
 
 export default function (pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event) => {
+    if (process.env.PI_BEHAVIOR_MODE === "pi") return undefined;
     const profile = loadUserProfile(getAgentDir());
     const systemPrompt = applyUserProfileToSystemPrompt(event.systemPrompt, profile);
     if (!systemPrompt) return undefined;

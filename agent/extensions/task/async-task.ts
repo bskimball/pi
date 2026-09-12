@@ -296,6 +296,9 @@ interface Worker extends RuntimeEventWorker {
   lastWaitTimeoutAt?: number;
   lastWaitTimeoutSec?: number;
   lastWaitGeneration?: number;
+  /** Fusion's sole persistent counterpart; never participates in fallback. */
+  fusion?: boolean;
+  fusionParentSessionId?: string;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -777,7 +780,7 @@ export default function (pi: ExtensionAPI) {
     runtime.forceKill(worker, reason);
   const abortWorkerAndEscalate = (worker: Worker) =>
     runtime.abortAndEscalate(worker);
-  const armIdle = (worker: Worker) => runtime.armIdle(worker);
+  const armIdle = (worker: Worker) => { if (!worker.fusion) runtime.armIdle(worker); };
 
   const resolveWaiters = (worker: Worker, snapshot: GenerationSnapshot) => {
     const matched: Worker["waiters"] = [];
@@ -1147,7 +1150,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   const shouldRetryWorkerFallback = (worker: Worker) =>
-    shouldRetryModelFallback({
+    !worker.fusion && shouldRetryModelFallback({
       hasNextAttempt:
         worker.fallbackReplaySafe &&
         worker.modelAttemptIndex + 1 < worker.modelAttempts.length,
@@ -1212,6 +1215,27 @@ export default function (pi: ExtensionAPI) {
 
   const startGeneration = (worker: Worker) => runtime.startGeneration(worker);
 
+  type FusionPair = {
+    lead: { provider: string; modelId: string; thinking?: string };
+    sidekick: { provider: string; modelId: string; thinking?: string };
+  };
+  let behaviorMode = process.env.PI_BEHAVIOR_MODE ?? "pi";
+  let fusion: FusionPair | undefined;
+  const fusionWorker = () => workers.entries().map(({ item }) => item).find((w) => w.fusion && !w.closed);
+  const fusionModel = () => fusion && `${fusion.sidekick.provider}/${fusion.sidekick.modelId}`;
+  type FusionSessionEntry = { parentSessionId: string; sessionFile: string; sessionId?: string; cwd: string };
+  const fusionSessionFrom = (ctx: ExtensionContext): FusionSessionEntry | undefined => {
+    const branch = ctx.sessionManager?.getBranch?.() ?? [];
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i] as { type?: string; customType?: string; data?: unknown };
+      if (entry.type === "custom" && entry.customType === "fusion-sidekick-session" && entry.data && typeof entry.data === "object") {
+        const data = entry.data as Partial<FusionSessionEntry>;
+        if (typeof data.parentSessionId === "string" && typeof data.sessionFile === "string") return data as FusionSessionEntry;
+      }
+    }
+    return undefined;
+  };
+
   const spawnWorker = async (
     def: AgentDef,
     params: {
@@ -1222,6 +1246,9 @@ export default function (pi: ExtensionAPI) {
       reportSchema?: string;
       forkSessionFile?: string;
       lastPhaseTag?: string;
+      fusion?: boolean;
+      fusionParentSessionId?: string;
+      resumeSessionFile?: string;
     },
   ): Promise<{ worker?: Worker; error?: string }> => {
     const identity = params.rebind
@@ -1233,18 +1260,19 @@ export default function (pi: ExtensionAPI) {
     );
     const sessionDir = params.rebind?.sessionDir ?? ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
-    const maxTurns = def.maxTurns ?? DEFAULT_MAX_TURNS;
-    const thinking =
-      params.rebind?.thinking ??
-      resolveAgentThinking(def, pi.getThinkingLevel());
-    const attempts = modelAttempts(
-      def,
-      params.rebind?.model ?? params.modelOverride,
-    );
-    // Skip known-unhealthy provider/model circuits before spawn. When every
-    // candidate is open, selectAttempt still returns a deterministic fail-safe
-    // without erasing circuit state.
-    const initial = getSharedModelCircuitBreaker().selectAttempt(attempts, 0);
+    const maxTurns = params.fusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
+    const forcedFusionModel = params.fusion ? fusionModel() : undefined;
+    const thinking = params.fusion
+      ? fusion?.sidekick.thinking
+      : params.rebind?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
+    const attempts = params.fusion
+      ? [forcedFusionModel]
+      : modelAttempts(def, params.rebind?.model ?? params.modelOverride);
+    // Fusion has exactly one configured model and deliberately bypasses the
+    // circuit/fallback chain; preserving its transcript matters more than retry.
+    const initial = params.fusion
+      ? { index: 0, model: forcedFusionModel, skipped: [], failSafe: false }
+      : getSharedModelCircuitBreaker().selectAttempt(attempts, 0);
     const model = initial.model;
     const modelLabel = model ?? "default model";
 
@@ -1295,6 +1323,8 @@ export default function (pi: ExtensionAPI) {
         : params.reportSchema?.trim()
           ? "missing"
           : "none-requested",
+      fusion: params.fusion,
+      fusionParentSessionId: params.fusionParentSessionId,
     };
 
     workers.set(instanceId, worker);
@@ -1313,7 +1343,7 @@ export default function (pi: ExtensionAPI) {
       "--session-dir",
       sessionDir,
       "--exclude-tools",
-      EXCLUDED_CHILD_TOOLS,
+      params.fusion ? `${EXCLUDED_CHILD_TOOLS},todo_write` : EXCLUDED_CHILD_TOOLS,
       "--name",
       `async-${def.name}-${id}`,
     ];
@@ -1347,7 +1377,7 @@ export default function (pi: ExtensionAPI) {
     }
     // Async workers support steering/follow-ups and UI requests; load mode-
     // correct shared norms rather than the fire-and-forget sync preamble.
-    const shared = composeSpecialistSharedPrompts("async");
+    const shared = params.fusion ? {} : composeSpecialistSharedPrompts("async");
     const systemPrompt = [shared.systemPreamble, def.body]
       .filter(Boolean)
       .join("\n\n");
@@ -1374,6 +1404,7 @@ export default function (pi: ExtensionAPI) {
           PI_ASYNC_RPC: "1",
           PI_SUBAGENT_AGENT: def.name,
           PI_SUBAGENT_MODEL: modelLabel,
+          ...(params.fusion ? { PI_FUSION_SIDEKICK: "1" } : {}),
         },
         onEvent: (event) => handleRpcEvent(worker, event),
         onUiRequest: (req) => handleUiRequest(worker, req),
@@ -1407,7 +1438,23 @@ export default function (pi: ExtensionAPI) {
       return { worker };
     }
 
-    runtime.armHard(worker, timeoutMs);
+    if (params.resumeSessionFile) {
+      const switched = await client.request({ type: "switch_session", sessionPath: params.resumeSessionFile }, 30_000);
+      if (!switched.success) {
+        closeWorker(worker, "Fusion transcript restore rejected", "sync");
+        return { error: `${id} could not restore Fusion transcript: ${switched.error ?? "unknown"}` };
+      }
+    }
+    if (params.fusion && forcedFusionModel) {
+      const slash = forcedFusionModel.indexOf("/");
+      const selected = await client.request({ type: "set_model", provider: forcedFusionModel.slice(0, slash), modelId: forcedFusionModel.slice(slash + 1) }, 30_000);
+      if (!selected.success) { closeWorker(worker, "Fusion model unavailable", "sync"); return { error: `Fusion model unavailable: ${selected.error ?? forcedFusionModel}` }; }
+      if (thinking) {
+        const configured = await client.request({ type: "set_thinking_level", level: thinking }, 30_000);
+        if (!configured.success) { closeWorker(worker, "Fusion thinking configuration rejected", "sync"); return { error: "Fusion thinking configuration rejected." }; }
+      }
+    }
+    if (!params.fusion) runtime.armHard(worker, timeoutMs);
 
     // Accept the initial prompt before returning the handle. Model/provider
     // preflight failures are eligible for the same configured fallback chain
@@ -1421,6 +1468,10 @@ export default function (pi: ExtensionAPI) {
         const message = response.error ?? "prompt rejected";
         worker.modelError = message;
         pushError(worker, message);
+        if (params.fusion) {
+          settleGeneration(worker, "failed", { error: message });
+          return { error: `${id} prompt rejected: ${message}` };
+        }
         const fallbackResult = await retryModelFallback(worker);
         if (fallbackResult !== "retried") {
           const finalError = worker.modelError ?? message;
@@ -1447,6 +1498,10 @@ export default function (pi: ExtensionAPI) {
       const message = error instanceof Error ? error.message : String(error);
       worker.modelError = message;
       pushError(worker, message);
+      if (params.fusion) {
+        settleGeneration(worker, "failed", { error: message });
+        return { error: `${id} failed to accept prompt: ${message}` };
+      }
       const fallbackResult = await retryModelFallback(worker);
       if (fallbackResult !== "retried") {
         const finalError = worker.modelError ?? message;
@@ -1463,11 +1518,10 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Best-effort state fetch for session id (non-blocking for the caller —
-    // we already accepted the prompt).
-    void client
-      .request({ type: "get_state" }, 10_000)
-      .then((res) => {
+    // Fusion must persist its transcript before the caller gets a handle;
+    // ordinary workers retain the prior non-blocking state lookup.
+    const stateRequest = client.request({ type: "get_state" }, 10_000);
+    const applyState = (res: any) => {
         if (!res.success || !res.data || typeof res.data !== "object") return;
         const data = res.data as {
           sessionId?: string;
@@ -1485,13 +1539,22 @@ export default function (pi: ExtensionAPI) {
             notifySubscribers(worker);
           }
         }
-      })
-      .catch(() => {});
+      };
+    if (params.fusion) {
+      try { applyState(await stateRequest); } catch { /* surfaced by normal RPC lifecycle */ }
+      if (!worker.sessionFile) {
+        closeWorker(worker, "Fusion transcript path unavailable", "sync");
+        return { error: `${id} did not report a Fusion transcript path.` };
+      }
+    } else {
+      void stateRequest.then(applyState).catch(() => {});
+    }
 
     if (worker.lifecycle === "starting") {
       worker.lifecycle = "running";
     }
-    armIdle(worker);
+    // A parked Fusion sidekick intentionally has no normal idle deadline.
+    if (!params.fusion) armIdle(worker);
     syncFleetWidget();
     return { worker };
   };
@@ -1700,6 +1763,22 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
+      if (behaviorMode === "fusion") {
+        if (process.env.PI_FUSION_SIDEKICK === "1") return textResult("Fusion sidekick cannot spawn workers.", true);
+        if (params.agent !== "sidekick") return textResult("Fusion permits task_start only for sidekick.", true);
+        const existing = fusionWorker();
+        if (existing) {
+          if (existing.lifecycle !== "settled" && existing.lifecycle !== "failed") return textResult(`${existing.id} is already the active Fusion sidekick.`, true);
+          if (!existing.client || existing.client.isClosed) return textResult(`${existing.id} is parked; transcript resume requires a live RPC reconnect.`, true);
+          existing.initialPrompt = params.prompt;
+          existing.fallbackReplaySafe = false;
+          startGeneration(existing);
+          const accepted = await existing.client.request({ type: "prompt", message: params.prompt }, PROMPT_ACCEPT_TIMEOUT_MS);
+          if (!accepted.success) return textResult(`${existing.id} prompt rejected: ${accepted.error ?? "unknown"}`, true);
+          return textResult(`reused ${existing.id} Fusion sidekick context (generation ${existing.generation}).`);
+        }
+        if (!fusion) return textResult("Fusion sidekick configuration is unavailable.", true);
+      }
       if (!runtime.canStart()) {
         return textResult(
           `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers). Close a settled worker with task_close to free a slot. If none are settled, task_wait the oldest live one, then task_close it. Persistent workers count against the cap until closed.`,
@@ -1735,15 +1814,37 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
         }
       }
 
+      const parentSessionId = ctx.sessionManager?.getSessionId?.();
+      const savedFusion = behaviorMode === "fusion" ? fusionSessionFrom(ctx) : undefined;
       const { worker, error } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
         modelOverride: params.model?.trim() || undefined,
         reportSchema,
         forkSessionFile,
+        fusion: behaviorMode === "fusion",
+        fusionParentSessionId: parentSessionId,
+        resumeSessionFile: savedFusion?.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
       });
       if (error || !worker) {
         return textResult(error ?? "Failed to start worker.", true);
+      }
+      if (worker.fusion) {
+        if (!worker.sessionFile || !parentSessionId || ctx.sessionManager?.getSessionId?.() !== parentSessionId) {
+          closeWorker(worker, "Fusion parent session changed before transcript persistence", "sync");
+          return textResult("Fusion transcript was not persisted because the parent session changed.", true);
+        }
+        try {
+          pi.appendEntry("fusion-sidekick-session", {
+            parentSessionId,
+            sessionFile: worker.sessionFile,
+            sessionId: worker.sessionId,
+            cwd,
+          } satisfies FusionSessionEntry);
+        } catch (cause) {
+          closeWorker(worker, "Fusion transcript persistence failed", "sync");
+          return textResult(`Fusion transcript persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`, true);
+        }
       }
 
       const text = [
@@ -1907,6 +2008,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       syncFleetWidget(ctx);
+      if (behaviorMode === "fusion" || process.env.PI_FUSION_SIDEKICK === "1") return textResult("task_chain cannot spawn workers in Fusion.", true);
       const steps = params.steps ?? [];
       if (!Array.isArray(steps) || steps.length < 1) {
         return textResult("steps must contain at least one {agent, prompt}.", true);
@@ -2328,6 +2430,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const worker = workerByHandle(id);
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true, sendDetails("rejected", "unknown worker"));
+      }
+      if (behaviorMode === "fusion" && !worker.fusion) {
+        return textResult("Fusion task_send targets only the designated sidekick.", true, sendDetails("rejected", "not Fusion sidekick"));
       }
       if (worker.closed || worker.lifecycle === "closed") {
         return textResult(`${id} is closed.`, true, sendDetails("rejected", "worker closed"));
@@ -3422,6 +3527,64 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   // ------------------------------------------------------------ lifecycle
 
+  pi.events.on("pi:modes:query-busy", (payload: unknown) => {
+    const event = payload as { busy: boolean };
+    event.busy ||= workers.entries().some(({ item }) => !item.closed && (item.lifecycle !== "settled" && item.lifecycle !== "failed" && item.lifecycle !== "closed"));
+  });
+  pi.events.on("pi:modes:changed", (payload: unknown) => {
+    const event = payload as { mode?: string; fusion?: FusionPair };
+    behaviorMode = event.mode ?? "pi";
+    fusion = event.fusion;
+    if (behaviorMode !== "fusion") {
+      const worker = fusionWorker();
+      if (worker && (worker.lifecycle === "settled" || worker.lifecycle === "failed")) {
+        // Keep the transcript file; a later Fusion entry restores it explicitly.
+        closeWorker(worker, "fusion parked", "sync");
+      }
+    }
+  });
+  pi.events.on("pi:fusion:configure", (payload: unknown) => {
+    const event = payload as { fusion?: FusionPair; error?: string; promise?: Promise<void> };
+    if (!event.fusion) { event.error = "Fusion pair configuration is required."; return; }
+    fusion = event.fusion;
+    const worker = fusionWorker();
+    if (!worker?.client || worker.client.isClosed) return;
+    const sidekick = event.fusion.sidekick;
+    event.promise = Promise.all([
+      worker.client.request({ type: "set_model", provider: sidekick.provider, modelId: sidekick.modelId }, 30_000),
+      sidekick.thinking ? worker.client.request({ type: "set_thinking_level", level: sidekick.thinking }, 30_000) : Promise.resolve({ success: true }),
+    ]).then(([model, thinking]) => {
+      if (!model.success || !thinking.success) throw new Error("Fusion sidekick model/thinking update rejected");
+      worker.model = `${sidekick.provider}/${sidekick.modelId}`;
+      worker.thinking = sidekick.thinking;
+      worker.modelAttempts = [worker.model];
+      worker.modelAttemptIndex = 0;
+      notifySubscribers(worker);
+    }).catch((error) => { event.error = error instanceof Error ? error.message : String(error); throw error; });
+  });
+
+  pi.on("tool_call", event => {
+    if (process.env.PI_FUSION_SIDEKICK === "1" && (event.toolName.startsWith("task") || event.toolName === "todo_write" || event.toolName === "intercom")) {
+      return { block: true, reason: "Fusion sidekick cannot dispatch agents or write the lead's plan." };
+    }
+    if (behaviorMode !== "fusion") return;
+    const worker = fusionWorker();
+    if (event.toolName === "task" || event.toolName === "task_chain" || event.toolName === "task_rebind" || event.toolName === "intercom") return { block: true, reason: "Fusion permits only its designated sidekick." };
+    if (event.toolName.startsWith("task_") && event.toolName !== "task_start" && event.toolName !== "task_list") {
+      const input = event.input as { id?: string };
+      if (!worker || input.id !== worker.id) return { block: true, reason: "Fusion task operations are scoped to its designated sidekick." };
+    }
+    if (worker && !["settled", "failed", "closed"].includes(worker.lifecycle) && ["edit", "write", "bash", "powershell"].includes(event.toolName)) return { block: true, reason: "Wait for or stop the Fusion sidekick before taking over workspace writes." };
+  });
+  pi.on("agent_end", async event => {
+    if (behaviorMode !== "fusion") return;
+    const last = event.messages.at(-1) as { role?: string; stopReason?: string } | undefined;
+    if (last?.role === "assistant" && (last.stopReason === "aborted" || last.stopReason === "error")) {
+      const worker = fusionWorker();
+      if (worker && !["settled", "failed", "closed"].includes(worker.lifecycle)) await abortWorkerAndEscalate(worker);
+    }
+  });
+
   // Busy gate is start → settled only (same pattern as bg-process).
   pi.on("agent_start", () => {
     agentBusy = true;
@@ -3432,13 +3595,26 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     syncFleetWidget();
   });
 
-  pi.on("session_start", () => {
+  let removeFusionInputListener: (() => void) | undefined;
+  pi.on("session_start", (_event, ctx) => {
+    removeFusionInputListener?.();
+    for (const { item } of workers.entries()) {
+      if (item.fusion && item.fusionParentSessionId !== ctx.sessionManager.getSessionId()) closeWorker(item, "Fusion parent session changed", "sync");
+    }
+    if (ctx?.hasUI) removeFusionInputListener = ctx.ui.onTerminalInput(data => {
+      if (data === "\u001b" && behaviorMode === "fusion") {
+        const worker = fusionWorker();
+        if (worker && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") void abortWorkerAndEscalate(worker);
+      }
+      return undefined;
+    });
     dispatchSeq = 0;
     dispatchWaitWakes.clear();
     syncFleetWidget();
   });
 
   pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
+    removeFusionInputListener?.();
     shuttingDown = true;
     dispatchWaitWakes.clear();
     try {

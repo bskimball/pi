@@ -15,6 +15,7 @@ web-search.json
 agent/sessions/
 agent/run-history.jsonl
 agent/models-store.json
+agent/mode-settings.json
 agent/mcp-cache.json
 agent/mcp-npx-cache.json
 agent/trust.json

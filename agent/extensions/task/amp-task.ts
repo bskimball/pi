@@ -563,6 +563,10 @@ export default function (pi: ExtensionAPI) {
     executionMode: "parallel",
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      if (process.env.PI_FUSION_SIDEKICK === "1" || process.env.PI_BEHAVIOR_MODE === "fusion") {
+        const text = "Synchronous task spawning is disabled in Fusion.";
+        return { content: [{ type: "text", text }], isError: true, details: {} };
+      }
       const def = agents.get(params.agent);
       const mission = missionFromPrompt(params.prompt);
       const startedAt = Date.now();
