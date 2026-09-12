@@ -14,6 +14,7 @@ import {
   wrapPlainText,
 } from "../presentation/safe-text-layout.ts";
 import { cleanInline, fitLine } from "../presentation/ui-common.ts";
+import { skinGlyphs } from "../presentation/skin.ts";
 import { metaText, type StatusTheme } from "../presentation/receipt-tree.ts";
 
 /**
@@ -61,13 +62,27 @@ export const CANONICAL_STATUSES = [
 
 export type TodoStatus = (typeof CANONICAL_STATUSES)[number];
 
-/** Circle-only gutter: open when idle, filled otherwise; status reads from color. */
+/**
+ * Status gutter: idle when open, active otherwise; status reads from color.
+ * Getter-based so a live /ui switch swaps glyphs without re-import
+ * (squares under the claude skin, circles under apex).
+ */
 const TODO_GLYPHS: Record<TodoStatus, string> = {
-  pending: "\u25cb", // ○
-  in_progress: "\u25cf", // ●
-  blocked: "\u25cf", // ●
-  completed: "\u25cf", // ●
-  cancelled: "\u25cb", // ○
+  get pending() {
+    return skinGlyphs().statusIdle; // ○ / □
+  },
+  get in_progress() {
+    return skinGlyphs().statusActive; // ● / ■
+  },
+  get blocked() {
+    return skinGlyphs().statusActive; // ● / ■
+  },
+  get completed() {
+    return skinGlyphs().statusActive; // ● / ■
+  },
+  get cancelled() {
+    return skinGlyphs().statusIdle; // ○ / □
+  },
 };
 
 const TODO_TONES: Record<TodoStatus, string> = {
@@ -273,11 +288,21 @@ export interface DockAgentItem {
 }
 
 const AGENT_GLYPHS: Record<string, string> = {
-  starting: "\u25cb",
-  running: "\u25cf",
-  retrying: "\u25cf",
-  compacting: "\u25cf",
-  aborting: "\u25cf",
+  get starting() {
+    return skinGlyphs().statusIdle;
+  },
+  get running() {
+    return skinGlyphs().statusActive;
+  },
+  get retrying() {
+    return skinGlyphs().statusActive;
+  },
+  get compacting() {
+    return skinGlyphs().statusActive;
+  },
+  get aborting() {
+    return skinGlyphs().statusActive;
+  },
 };
 
 const AGENT_TONES: Record<string, string> = {
@@ -363,7 +388,7 @@ export function renderAgentList(
     ].slice(0, TODO_LIST_MAX_LINES);
   }
   const rows = items.slice(0, ROWS_COLLAPSED).map((item) => {
-    const glyph = AGENT_GLYPHS[item.lifecycle] ?? "\u25cb";
+    const glyph = AGENT_GLYPHS[item.lifecycle] ?? skinGlyphs().statusIdle;
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
     const label = AGENT_LABELS[item.lifecycle] ?? item.lifecycle;
     const title = cleanInline(item.agent, 40) || "agent";

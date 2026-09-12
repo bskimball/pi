@@ -7,6 +7,7 @@ import {
   safeVisibleWidth,
   stripTerminalSequences,
 } from "./safe-text-layout.ts";
+import { skinGlyphs } from "./skin.ts";
 
 export function stripAnsi(text: string): string {
   return stripTerminalSequences(text);
@@ -53,18 +54,37 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Shared tree glyphs and column widths for tool and task surfaces. */
+/**
+ * Shared tree glyphs and column widths for tool and task surfaces.
+ *
+ * Property reads consult the active skin on every access (same dynamic
+ * contract as PI_APEX_UI), so a live /ui switch swaps glyphs without a
+ * restart. Shape and keys are unchanged; the apex skin returns the exact
+ * values this object used to hold statically.
+ */
 export const TREE = {
   /** Active root: filled circle, painted in the owning receipt's status tone. */
-  header: "\u25cf",
-  branch: "\u251c\u2500",
-  last: "\u2570\u2500",
-  rail: "\u2502",
+  get header(): string {
+    return skinGlyphs().header;
+  },
+  get branch(): string {
+    return skinGlyphs().branch;
+  },
+  get last(): string {
+    return skinGlyphs().last;
+  },
+  get rail(): string {
+    return skinGlyphs().rail;
+  },
   /** Idle receipt root: open circle, painted in the owning receipt's status tone. */
-  receipt: "\u25cb",
+  get receipt(): string {
+    return skinGlyphs().receipt;
+  },
   /** Detached continuation: aligns to the child column without a tree edge. */
-  hang: "   ",
-} as const;
+  get hang(): string {
+    return skinGlyphs().hang;
+  },
+};
 
 export const DURATION_COLUMN = 6;
 

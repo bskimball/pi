@@ -15,8 +15,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
   let state: ModeState = structuredClone(preferences);
-  let allTools: string[] = [];
   let changing = false;
+  const availableTools = () => pi.getAllTools().map(tool => tool.name);
+  const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools()));
   let modelBlocked = false;
   const persist = (setDefault = false) => {
     pi.appendEntry("behavior-mode", structuredClone(state));
@@ -81,7 +82,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       }
       state.mode = mode;
       state.fusion = fusion;
-      pi.setActiveTools(toolsForMode(mode, allTools));
+      applyModeTools(mode);
       announce();
       modelBlocked = false;
       persist(true);
@@ -122,12 +123,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     },
   });
   pi.registerCommand("ui", {
-    description: "Switch default Pi or Apex presentation, independently of behavior",
+    description: "Switch Pi, Apex, or Claude presentation, independently of behavior",
     handler: async (args, ctx) => {
       if (!idle(ctx)) return;
-      const value = args.trim().toLowerCase() || await ctx.ui.select("Presentation", ["pi", "apex"]);
+      const value = args.trim().toLowerCase() || await ctx.ui.select("Presentation", ["pi", "apex", "claude"]);
       if (!value) return;
-      if (value !== "pi" && value !== "apex") { ctx.ui.notify("Usage: /ui [pi|apex]", "warning"); return; }
+      if (value !== "pi" && value !== "apex" && value !== "claude") { ctx.ui.notify("Usage: /ui [pi|apex|claude]", "warning"); return; }
       const oldUi = preferences.ui;
       const oldTheme = ctx.ui.theme.name ?? preferences.themes[oldUi];
       preferences = readPreferences(preferencePath);
@@ -135,15 +136,15 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const result = ctx.ui.setTheme(preferences.themes[value]);
       if (!result.success) { ctx.ui.notify(result.error ?? "Theme unavailable", "error"); return; }
       preferences.ui = value;
-      process.env.PI_APEX_UI = value === "apex" ? "1" : "0";
+      process.env.PI_APEX_UI = value === "pi" ? "0" : "1";
+      process.env.PI_UI_SKIN = value === "claude" ? "claude" : "apex";
       pi.events.emit("pi:ui:changed", { ui: value, ctx });
       savePreferences(preferencePath, preferences);
-      ctx.ui.notify(`UI: ${value === "apex" ? "Apex" : "Default Pi"}`, "info");
+      ctx.ui.notify(`UI: ${value === "apex" ? "Apex" : value === "claude" ? "Claude" : "Default Pi"}`, "info");
     },
   });
   pi.on("session_start", async (event, ctx) => {
     preferences = readPreferences(preferencePath);
-    allTools = pi.getAllTools().map(tool => tool.name);
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
     state = restoreMode(entries, preferences, fresh);
@@ -152,10 +153,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     try { await applyModel(ctx, state.mode === "fusion" ? state.fusion?.lead : state.models[state.mode]); }
     catch (error) { modelBlocked = true; ctx.ui.notify(String(error), "error"); }
     finally { changing = false; }
-    pi.setActiveTools(toolsForMode(state.mode, allTools));
+    applyModeTools(state.mode);
     announce();
     pi.appendEntry("behavior-mode", structuredClone(state));
-    process.env.PI_APEX_UI = preferences.ui === "apex" ? "1" : "0";
+    process.env.PI_APEX_UI = preferences.ui === "pi" ? "0" : "1";
+    process.env.PI_UI_SKIN = preferences.ui === "claude" ? "claude" : "apex";
     if (ctx.hasUI) {
       ctx.ui.setTheme(preferences.themes[preferences.ui]);
       pi.events.emit("pi:ui:changed", { ui: preferences.ui, ctx });

@@ -22,7 +22,7 @@ The lead owns one todo list and supplies an update after work in another mode. U
 
 ## Presentation
 
-`/ui pi` selects default Pi presentation; `/ui apex` selects Apex. The picker is available with `/ui`. Switching is live and idle-only, independent of behavior and models. UI selection is shared for future launches, with a separate saved theme for each UI. Change themes through Pi's normal theme controls; the selected theme is saved on UI switch or session shutdown.
+`/ui pi` selects default Pi presentation; `/ui apex` selects Apex; `/ui claude` selects the Claude Code skin on Apex presentation. The picker is available with `/ui`. Switching is live and idle-only, independent of behavior and models. UI selection is shared for future launches, with a separate saved theme for each UI. Change themes through Pi's normal theme controls; the selected theme is saved on UI switch or session shutdown.
 
 There is no UI plugin framework. Apex owns its own install/teardown behavior; other extensions communicate through events rather than cross-extension source imports.
 

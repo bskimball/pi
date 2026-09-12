@@ -388,8 +388,8 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
       }
 
       const glyph = context.executionStarted
-        ? theme.fg("warning", "\u25cf")
-        : theme.fg("dim", "\u25cb");
+        ? theme.fg("warning", TREE.header)
+        : theme.fg("dim", TREE.receipt);
       const startedAt = context.state.startedAt;
       const title = asTitle(spec.title, args);
 
@@ -447,10 +447,10 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
       if (!runningNow) context.state.endedAt ??= Date.now();
 
       const glyph = runningNow
-        ? theme.fg("warning", "\u25cf")
+        ? theme.fg("warning", TREE.header)
         : context.isError
-          ? theme.fg("error", "\u25cf")
-          : theme.fg("success", "\u25cf");
+          ? theme.fg("error", TREE.header)
+          : theme.fg("success", TREE.header);
       const elapsed = context.state.startedAt
         ? theme.fg(
             "dim",

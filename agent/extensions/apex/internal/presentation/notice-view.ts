@@ -14,6 +14,7 @@
 
 import { safeTruncateToWidth, wrapPlainText } from "./safe-text-layout.ts";
 import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
+import { skinGlyphs } from "./skin.ts";
 import {
   buildTreeLines,
   metaText,
@@ -65,13 +66,26 @@ const TONES: Record<StatusKind, string> = {
   unknown: "muted",
 };
 
+/** Status glyphs, read from the active skin on every access. */
 const GLYPHS: Record<StatusKind, string> = {
-  running: "\u25cf",
-  succeeded: "\u25cf",
-  settled: "\u25cf",
-  failed: "\u25cf",
-  killed: "\u25cf",
-  unknown: "\u25cb",
+  get running() {
+    return skinGlyphs().statusActive;
+  },
+  get succeeded() {
+    return skinGlyphs().statusActive;
+  },
+  get settled() {
+    return skinGlyphs().statusActive;
+  },
+  get failed() {
+    return skinGlyphs().statusActive;
+  },
+  get killed() {
+    return skinGlyphs().statusActive;
+  },
+  get unknown() {
+    return skinGlyphs().statusIdle;
+  },
 };
 
 const LABELS: Record<StatusKind, string> = {
@@ -92,7 +106,7 @@ function statusLabel(kind: StatusKind): string {
 }
 
 function statusGlyph(theme: StatusTheme, kind: StatusKind): string {
-  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u25cb");
+  return theme.fg(statusTone(kind), GLYPHS[kind] ?? skinGlyphs().statusIdle);
 }
 
 function isTerminalKind(kind: StatusKind): boolean {
@@ -197,7 +211,7 @@ export function noticeLines(
   // and the row ids (`bg_1`) already name the subsystem, so it is the
   // first cell to go.
   const headerLeft = [
-    theme.fg(failed ? "error" : "success", "\u25cf"),
+    theme.fg(failed ? "error" : "success", skinGlyphs().statusActive),
     theme.fg("customMessageLabel", "notice"),
     inner >= 44 ? theme.fg("muted", safeLine(options.channel, 40)) : "",
     theme.fg(failed ? "error" : "text", summary),

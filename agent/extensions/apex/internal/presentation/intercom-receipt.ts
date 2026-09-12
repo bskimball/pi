@@ -20,6 +20,7 @@ import {
 } from "./safe-text-layout.ts";
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
+import { skinGlyphs } from "./skin.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
   installHeadlessReceipts,
@@ -399,7 +400,7 @@ export function intercomMessageLines(
     ]) || "message";
 
   const headerLeft = [
-    theme.fg(tone, "\u25cf"),
+    theme.fg(tone, skinGlyphs().statusActive),
     theme.fg("customMessageLabel", "message"),
     inner >= 44 ? theme.fg("muted", "intercom") : "",
     theme.fg(view.expectsReply ? "warning" : "text", summary),
@@ -417,7 +418,7 @@ export function intercomMessageLines(
   const treeRows: TreeRow[] = [
     {
       line: (rail) => {
-        const cells = [theme.fg("dim", rail), theme.fg(tone, "\u25cf")];
+        const cells = [theme.fg("dim", rail), theme.fg(tone, skinGlyphs().statusActive)];
         if (view.senderName) {
           cells.push(theme.fg("accent", safeLine(view.senderName, 40)));
         }

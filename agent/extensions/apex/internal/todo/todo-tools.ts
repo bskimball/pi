@@ -46,6 +46,7 @@ import {
   type ToolRenderContext,
 } from "../presentation/ui-common.ts";
 import { requestHostRender } from "../presentation/render-safety.ts";
+import { skinGlyphs } from "../presentation/skin.ts";
 import { writeLastPhase } from "../runtime/last-phase.ts";
 import { safeLine, type StatusTheme } from "../presentation/receipt-tree.ts";
 
@@ -166,12 +167,12 @@ function todoReceiptLine(
 ): string {
   const glyph =
     options.kind === "running"
-      ? theme.fg("warning", "\u25cf")
+      ? theme.fg("warning", skinGlyphs().statusActive)
       : options.kind === "queued"
-        ? theme.fg("dim", "\u25cb")
+        ? theme.fg("dim", skinGlyphs().statusIdle)
         : options.kind === "failed"
-          ? theme.fg("error", "\u25cf")
-          : theme.fg("success", "\u25cf");
+          ? theme.fg("error", skinGlyphs().statusActive)
+          : theme.fg("success", skinGlyphs().statusActive);
   const lead = `${glyph} ${theme.fg("toolTitle", options.tool)}`;
   const subject = safeLine(options.subject, 120);
   const left = subject ? `${lead} ${theme.fg("muted", subject)}` : lead;

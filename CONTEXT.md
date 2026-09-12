@@ -44,6 +44,8 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 ## Presentation ownership
 
 - Apex is the only general custom-presentation extension. Its Observatory, built-in tool receipts, layout safety, and width-safe primitives live under `apex/`.
+- Apex receipts cover the Pi-owned `read`, `edit`, `grep`, and `ls` built-ins through `registerHeadlessReceipt(..., { overrideOwned: true })`; Pi keeps execution. `bash` and `write` are instead re-registered in `apex/builtin-tools.ts` because Apex wraps their execute (write captures a diff). Add chrome for a Pi-owned tool the first way unless execute genuinely needs wrapping.
+- `claude` is a skin over Apex rather than a third presentation extension: `PI_UI_SKIN` selects the glyph set in `apex/internal/presentation/skin.ts`, consumed through `TREE` in `ui-common.ts` and the composer prompt in `apex-ui.ts`. Only one extension patches `ToolExecutionComponent`, so no second prototype wrapper exists.
 - Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
 - Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
 - Todo is Apex-private (`apex/internal/todo/`): receipts and the docked above-editor panel, or stock rendering under `PI_APEX_UI=0`.

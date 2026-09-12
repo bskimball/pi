@@ -6,15 +6,16 @@ export type Mode = typeof MODES[number];
 export type ModelChoice = { provider: string; modelId: string; thinking: string };
 export type FusionPair = { lead: ModelChoice; sidekick: ModelChoice };
 export type ModeState = { mode: Mode; models: Partial<Record<Mode, ModelChoice>>; fusion?: FusionPair };
-export type Preferences = ModeState & { ui: "pi" | "apex"; themes: { pi: string; apex: string } };
+export type UiPresentation = "pi" | "apex" | "claude";
+export type Preferences = ModeState & { ui: UiPresentation; themes: { pi: string; apex: string; claude: string } };
 export const isMode = (value: unknown): value is Mode => MODES.includes(value as Mode);
 export function initialPreferences(): Preferences {
-  return { mode: "apex", models: {}, ui: "apex", themes: { pi: "dark", apex: "apex-dark" } };
+  return { mode: "apex", models: {}, ui: "apex", themes: { pi: "dark", apex: "apex-dark", claude: "claude-dark" } };
 }
 export function readPreferences(path: string): Preferences {
   try {
     const data = JSON.parse(readFileSync(path, "utf8"));
-    if (!isMode(data.mode) || !data.models || !["pi", "apex"].includes(data.ui)) throw new Error("Invalid mode preferences");
+    if (!isMode(data.mode) || !data.models || !["pi", "apex", "claude"].includes(data.ui)) throw new Error("Invalid mode preferences");
     return { ...initialPreferences(), ...data, themes: { ...initialPreferences().themes, ...data.themes } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return initialPreferences();
@@ -39,6 +40,6 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
 }
 export function toolsForMode(mode: Mode, names: string[]): string[] {
   if (mode === "pi") return names.filter(name => ["read", "bash", "edit", "write"].includes(name));
-  if (mode === "fusion") return names.filter(name => !["task", "task_chain", "task_rebind", "intercom"].includes(name));
+  if (mode === "fusion") return names.filter(name => !["task", "task_chain", "task_rebind"].includes(name));
   return names;
 }

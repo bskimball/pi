@@ -27,6 +27,7 @@ import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installSkillInvocationChrome } from "./internal/presentation/skill-invocation.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
+import { composerPromptGlyph } from "./internal/presentation/skin.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
@@ -569,7 +570,7 @@ export default function (pi: ExtensionAPI) {
           if (lines.length > 1) {
             const inputLine = stripAnsi(lines[1]);
             if (inputLine.startsWith("  ")) {
-              lines[1] = `${ctx.ui.theme.fg("accent", "❯")} ${lines[1].slice(2)}`;
+              lines[1] = `${ctx.ui.theme.fg("accent", composerPromptGlyph())} ${lines[1].slice(2)}`;
             }
           }
           // The editor itself uses Pi's authoritative width/cursor layout.

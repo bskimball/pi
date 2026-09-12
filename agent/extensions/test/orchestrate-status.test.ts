@@ -12,10 +12,10 @@ test("legacy modes restore without adopting a new global default", () => {
   assert.equal(restoreMode([], prefs, true).mode, "pi");
   assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
 });
-test("Pi exposes built-in default tools; Fusion excludes roster dispatch", () => {
-  const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_start", "todo_write", "intercom"];
+test("Pi exposes built-in default tools; Fusion excludes roster dispatch but keeps coordination", () => {
+  const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   assert.deepEqual(toolsForMode("pi", tools), ["read", "write", "edit", "bash"]);
-  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task_start", "todo_write"]);
+  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task_start", "todo_write", "intercom", "fffind", "ffgrep"]);
 });
 test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));
@@ -23,6 +23,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
   const oldChild = process.env.PI_SUBAGENT;
   const oldMode = process.env.PI_BEHAVIOR_MODE;
   const oldUi = process.env.PI_APEX_UI;
+  const oldSkin = process.env.PI_UI_SKIN;
   process.env.PI_CODING_AGENT_DIR = dir;
   delete process.env.PI_SUBAGENT;
   try {
@@ -30,6 +31,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     const handlers: Record<string, any[]> = {};
     const entries: any[] = [];
     let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start"];
     let busy = false;
     let workerBusy = false;
     const notices: string[] = [];
@@ -42,7 +44,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
       on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
       events: { emit(name: string, data: any) { if (name === "pi:modes:query-busy" && workerBusy) data.busy = true; } },
       appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
-      getAllTools: () => ["read", "write", "edit", "bash", "task_start"].map(name => ({ name })),
+      getAllTools: () => allTools.map(name => ({ name })),
       getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; }, getThinkingLevel: () => "medium",
     };
     promptCommands(pi);
@@ -63,6 +65,11 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.match((await prompt()).systemPrompt, /^You are an expert coding assistant operating inside pi/);
     assert.doesNotMatch((await prompt()).systemPrompt, /Apex base|Strict orchestrator/);
     assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    allTools.push("fffind", "ffgrep", "intercom");
+    await commands.mode("apex", ctx);
+    assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
+    await commands.mode("pi", ctx);
+    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
     await commands.ui("pi", ctx);
     assert.equal(process.env.PI_APEX_UI, "0");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
@@ -71,6 +78,23 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(ctx.ui.theme.name, "apex-dark");
     await commands.ui("pi", ctx);
     assert.equal(ctx.ui.theme.name, "light");
+    await commands.ui("claude", ctx);
+    assert.equal(process.env.PI_APEX_UI, "1");
+    assert.equal(process.env.PI_UI_SKIN, "claude");
+    assert.equal(ctx.ui.theme.name, "claude-dark");
+    await commands.ui("apex", ctx);
+    assert.equal(process.env.PI_APEX_UI, "1");
+    assert.equal(process.env.PI_UI_SKIN, "apex");
+    assert.equal(ctx.ui.theme.name, "apex-dark");
+    await commands.ui("pi", ctx);
+    assert.equal(process.env.PI_APEX_UI, "0");
+    assert.equal(process.env.PI_UI_SKIN, "apex");
+    assert.equal(ctx.ui.theme.name, "light");
+    const savedUi = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
+    assert.equal(savedUi.ui, "pi");
+    assert.equal(savedUi.themes.claude, "claude-dark");
+    assert.equal(savedUi.themes.apex, "apex-dark");
+    assert.equal(savedUi.themes.pi, "light");
     assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi");
     assert.ok(notices.some(text => text.includes("Stop active")));
     const catalog = [
@@ -113,7 +137,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     await emit("session_start", { reason: "resume" });
     assert.deepEqual(await emit("input", { text: "continue" }), { action: "handled" });
   } finally {
-    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: oldDir, PI_SUBAGENT: oldChild, PI_BEHAVIOR_MODE: oldMode, PI_APEX_UI: oldUi })) {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: oldDir, PI_SUBAGENT: oldChild, PI_BEHAVIOR_MODE: oldMode, PI_APEX_UI: oldUi, PI_UI_SKIN: oldSkin })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
     rmSync(dir, { recursive: true, force: true });
