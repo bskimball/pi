@@ -1327,3 +1327,155 @@ describe("dock tabs and agents pane", () => {
     assert.doesNotMatch(afterAgentsLeave[0] ?? "", /\[agents/);
   });
 });
+
+describe("fusion close backstop", () => {
+  function fireToolResult(mock: any, toolName: string, content: any[] = [{ type: "text", text: "ok" }]) {
+    const event = { toolName, content, isError: false };
+    for (const handler of mock.listeners.get("tool_result") ?? []) {
+      const out = handler(event, {});
+      if (out) return out;
+    }
+    return undefined;
+  }
+
+  async function withFusionEnv(fn: () => void | Promise<void>) {
+    const priorMode = process.env.PI_BEHAVIOR_MODE;
+    const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+    process.env.PI_BEHAVIOR_MODE = "fusion";
+    delete process.env.PI_FUSION_SIDEKICK;
+    try {
+      await fn();
+    } finally {
+      if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE;
+      else process.env.PI_BEHAVIOR_MODE = priorMode;
+      if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK;
+      else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+    }
+  }
+
+  async function writeTodos(mock: any, todos: any[]) {
+    const res = await mock.latestTool("todo_write").execute("call", { todos }, undefined, undefined, {});
+    assert.equal(res.isError, false, "plan write must succeed");
+  }
+
+  it("appends one line naming open items on task_wait/task_close", async () => {
+    await withFusionEnv(async () => {
+      const mock = createMockPi();
+      try {
+        await writeTodos(mock, [
+          { id: "a", content: "Do the work", status: "in_progress" },
+          { id: "b", content: "Verify it", status: "pending" },
+          { id: "c", content: "Done already", status: "completed" },
+        ]);
+        for (const toolName of ["task_wait", "task_close"]) {
+          const out = fireToolResult(mock, toolName);
+          assert.ok(out, `${toolName} nudges with open items`);
+          assert.equal(out.content.length, 2, "original blocks preserved");
+          assert.equal(out.content[0].text, "ok", "original text untouched");
+          const line = out.content[1].text as string;
+          assert.equal(line.includes("\n"), false, "nudge is a single line");
+          assert.match(line, /^\[fusion\] task_(wait|close) returned with 2 todo items still open:/);
+          assert.match(line, /#a in_progress/);
+          assert.match(line, /#b pending/);
+          assert.doesNotMatch(line, /#c/, "completed items are not listed");
+        }
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    });
+  });
+
+  it("returns undefined when every item is done", async () => {
+    await withFusionEnv(async () => {
+      const mock = createMockPi();
+      try {
+        await writeTodos(mock, [
+          { content: "Finished", status: "completed" },
+          { content: "Dropped", status: "cancelled" },
+          { content: "Waiting out", status: "blocked" },
+        ]);
+        assert.equal(fireToolResult(mock, "task_close"), undefined);
+        assert.equal(fireToolResult(mock, "task_wait"), undefined);
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    });
+  });
+
+  it("ignores unrelated tool results", async () => {
+    await withFusionEnv(async () => {
+      const mock = createMockPi();
+      try {
+        await writeTodos(mock, [{ content: "Open work", status: "pending" }]);
+        assert.equal(fireToolResult(mock, "read"), undefined);
+        assert.equal(fireToolResult(mock, "todo_write"), undefined);
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    });
+  });
+
+  it("stays silent outside fusion mode", async () => {
+    const priorMode = process.env.PI_BEHAVIOR_MODE;
+    const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+    process.env.PI_BEHAVIOR_MODE = "apex";
+    delete process.env.PI_FUSION_SIDEKICK;
+    try {
+      const mock = createMockPi();
+      try {
+        await writeTodos(mock, [{ content: "Open work", status: "pending" }]);
+        assert.equal(fireToolResult(mock, "task_close"), undefined);
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    } finally {
+      if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE;
+      else process.env.PI_BEHAVIOR_MODE = priorMode;
+      if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK;
+      else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+    }
+  });
+
+  it("stays silent for the sidekick itself", async () => {
+    const priorMode = process.env.PI_BEHAVIOR_MODE;
+    const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+    process.env.PI_BEHAVIOR_MODE = "fusion";
+    process.env.PI_FUSION_SIDEKICK = "1";
+    try {
+      const mock = createMockPi();
+      try {
+        await writeTodos(mock, [{ content: "Open work", status: "pending" }]);
+        assert.equal(fireToolResult(mock, "task_close"), undefined);
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    } finally {
+      if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE;
+      else process.env.PI_BEHAVIOR_MODE = priorMode;
+      if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK;
+      else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+    }
+  });
+
+  it("caps the enumeration at 8 ids with a +M more tail", async () => {
+    await withFusionEnv(async () => {
+      const mock = createMockPi();
+      try {
+        await writeTodos(
+          mock,
+          Array.from({ length: 10 }, (_, i) => ({ id: `t${i}`, content: `Work ${i}`, status: "pending" })),
+        );
+        const out = fireToolResult(mock, "task_close");
+        assert.ok(out, "nudges with many open items");
+        const line = out.content.at(-1).text as string;
+        assert.equal(line.includes("\n"), false, "nudge is a single line");
+        assert.match(line, /10 todo items still open/);
+        assert.match(line, /#t7 pending/);
+        assert.doesNotMatch(line, /#t8/, "9th id is folded into the tail");
+        assert.match(line, /\+2 more/);
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    });
+  });
+});

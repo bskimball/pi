@@ -105,6 +105,21 @@ function summarize(view: TodoListView): string {
 const READ_ITEM_CAP = 50;
 /** Cap on each serialized item line (status + content + optional note). */
 const READ_LINE_CHARS = 240;
+/** Max open items enumerated in the Fusion close nudge; the rest fold into "+M more". */
+const FUSION_CLOSE_NUDGE_IDS = 8;
+
+/**
+ * Mechanical close backstop for Fusion mode (see the tool_result hook at the
+ * end of installTodoTools): single ASCII line naming the open items.
+ * State ids/statuses are single-line and bounded on every intake path, so
+ * the line cannot leak newlines into the result.
+ */
+function fusionCloseNudge(toolName: string, open: TodoItem[]): string {
+  const shown = open.slice(0, FUSION_CLOSE_NUDGE_IDS).map(item => `#${item.id} ${item.status}`);
+  const hidden = open.length - shown.length;
+  const tail = hidden > 0 ? ` +${hidden} more` : "";
+  return `[fusion] ${toolName} returned with ${open.length} todo items still open: ${shown.join(", ")}${tail} - resolve each (completed with evidence, or blocked/pending with reason) before the final answer.`;
+}
 
 /**
  * Bounded plain-text dump of the retained list for todo_read. The model needs
@@ -798,4 +813,22 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   registerTodoWriteTool();
   registerTodoReadTool();
+
+  // Fusion close backstop: model-facing, not chrome. Registered alongside
+  // the tools so it fires under PI_APEX_UI=0 too; the handler gates on live
+  // env per call (same dynamic-read pattern as the PI_UI_SKIN glyphs) and
+  // reads this scope's plan state, so no import-boundary crossing is needed.
+  pi.on("tool_result", event => {
+    if (process.env.PI_BEHAVIOR_MODE !== "fusion") return;
+    if (process.env.PI_FUSION_SIDEKICK === "1") return;
+    if (event.toolName !== "task_wait" && event.toolName !== "task_close") return;
+    const open = (current?.items ?? []).filter(
+      item => item.status === "pending" || item.status === "in_progress",
+    );
+    if (open.length === 0) return;
+    const existing = Array.isArray(event.content) ? event.content : [];
+    return {
+      content: [...existing, { type: "text" as const, text: fusionCloseNudge(event.toolName, open) }],
+    };
+  });
 }
