@@ -20,6 +20,8 @@ Unlike Fusion, Work keeps the full existing synchronous specialist roster availa
 
 Fusion remains a closed roster: the lead, one persistent `sidekick`, and the synchronous ephemeral `librarian`, `stevedore`, `oracle`, and `picasso`. Only the sidekick may be dispatched automatically. Each other specialist requires an explicit user request to use that specialist; a general review/research/verification request, a difficult bug, or a path-triggered review gate does not authorize dispatch. The Fusion mode card overrides automatic specialist-routing instructions; the lead and sidekick perform review and verification by default. Other existing specialists remain excluded in Fusion. Its sidekick lifecycle, transcript continuity, and `task_chain`/`task_rebind` restrictions are shared with Work; its synchronous closed-roster gate is Fusion-only. Work and Apex delegation policies are unchanged.
 
+Fusion's [mode card](../../prompts/inactive/fusion.md#handoffs) owns the handoff criteria: choose complementary ownership, settle risky contracts before implementation, define observable acceptance, and integrate returned work without repeated small correction handoffs. These criteria are Fusion-only; the shared sidekick brief and runtime are unchanged.
+
 ## Presentation
 
 `/ui pi` selects default Pi presentation; `/ui apex` selects Apex; `/ui claude` selects the Claude skin on Apex; `/ui hal` selects the HAL skin on Apex. UI switching is live and idle-only, independent of behavior and models. Each UI has a separately saved theme: `dark`, `apex-dark`, `claude-dark`, or `hal-dark`. `hal-dark` and HAL rendering are owned by the Apex presentation implementation; behavior-mode plumbing only selects `PI_UI_SKIN=hal`.
