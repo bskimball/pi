@@ -13,6 +13,7 @@ import {
   claudeWorkingTonesFor,
 } from "../apex-ui.ts";
 import { SKIN_ENV_VAR } from "../internal/presentation/skin.ts";
+import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
 function withSkin<T>(value: string | undefined, run: () => T): T {
   const previous = process.env[SKIN_ENV_VAR];
@@ -48,6 +49,20 @@ const EXPECTED_MOTIFS: Record<string, string[]> = {
 };
 
 describe("working indicator skins", () => {
+  it("uses quiet square activity and neutral wording for HAL", () => {
+    withSkin("hal", () => {
+      const built = buildWorkingIndicator(stubCtx(), stubPi());
+      assert.equal(built.message, "Working...");
+      assert.equal(built.intervalMs, 400);
+      assert.equal(built.frames.length, 4);
+      assert.ok(new Set(built.frames).size > 1);
+      for (const frame of built.frames) {
+        assert.equal(safeVisibleWidth(frame), 1);
+        assert.doesNotMatch(frame, /\p{Extended_Pictographic}/u);
+      }
+    });
+  });
+
   it("keeps every motif inside the asterisk family", () => {
     assert.equal(CLAUDE_WORKING_MOTIFS.length, 4);
     for (const motif of CLAUDE_WORKING_MOTIFS) {

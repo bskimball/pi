@@ -5,6 +5,10 @@
 
 import { buildObservatory, renderObservatory, OBSERVATORY_MAX_LINES } from "./observatory.ts";
 import { fallbackVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+
+const { loadThemeFromPath } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/theme.js")).href);
 
 const ANSI = {
   accent: "\x1b[38;2;125;211;252m", // cyan
@@ -16,7 +20,9 @@ const ANSI = {
   success: "\x1b[38;2;134;239;172m",
   warning: "\x1b[38;2;253;224;71m",
 };
-const fg = (key, text) => `${ANSI[key] ?? ANSI.text}${text}\x1b[0m`;
+const hal = process.env.PI_UI_SKIN === "hal";
+const halTheme = hal ? loadThemeFromPath(fileURLToPath(new URL("../../../themes/hal-dark.json", import.meta.url)), "truecolor") : undefined;
+const fg = (key, text) => halTheme ? halTheme.fg(key, text) : `${ANSI[key] ?? ANSI.text}${text}\x1b[0m`;
 
 const cmd = (name, source, scope, description) => ({
   name,
@@ -60,6 +66,7 @@ const SCENARIOS = {
 
 const WIDTHS = process.argv.slice(2).map(Number).filter(Boolean);
 const widths = WIDTHS.length ? WIDTHS : [40, 60, 80, 100, 120, 160];
+const background = hal ? "\x1b[48;2;5;8;13m" : "\x1b[48;2;10;12;20m";
 
 let failures = 0;
 for (const [label, commands] of Object.entries(SCENARIOS)) {
@@ -73,12 +80,12 @@ for (const [label, commands] of Object.entries(SCENARIOS)) {
       `\n\x1b[7m ${label} — ${width} cols — ${lines.length} lines ` +
         `${tooTall ? "TOO TALL " : ""}${overflow.length ? "OVERFLOW " : ""}\x1b[0m`,
     );
-    console.log("\x1b[48;2;10;12;20m" + "·".repeat(width) + "\x1b[0m");
+    console.log(background + "·".repeat(width) + "\x1b[0m");
     for (const line of lines) {
       const pad = " ".repeat(Math.max(0, width - fallbackVisibleWidth(line)));
-      console.log(`\x1b[48;2;10;12;20m${line}${pad}\x1b[0m`);
+      console.log(`${background}${line}${pad}\x1b[0m`);
     }
-    console.log("\x1b[48;2;10;12;20m" + "·".repeat(width) + "\x1b[0m");
+    console.log(background + "·".repeat(width) + "\x1b[0m");
   }
 }
 

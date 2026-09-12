@@ -3,6 +3,7 @@
 // "apex" is the default skin and preserves the exact glyphs Apex has always
 // used. "claude" swaps the receipt/composer glyphs toward a Claude Code look
 // while keeping every tree shape/key so existing call sites are unchanged.
+// "hal" keeps Claude's continuation geometry with square instrument glyphs.
 // Claude header/receipt deliberately avoids Extended_Pictographic codepoints
 // (e.g. U+23FA): the emoji font overrides theme color and misreports width.
 //
@@ -13,7 +14,7 @@
 
 export const SKIN_ENV_VAR = "PI_UI_SKIN";
 
-export type SkinName = "apex" | "claude";
+export type SkinName = "apex" | "claude" | "hal";
 
 export interface SkinGlyphs {
   /** Active receipt root (tool-receipt headers, TREE.header). */
@@ -60,14 +61,23 @@ const CLAUDE_SKIN: SkinGlyphs = {
   statusActive: "\u25a0",
 };
 
+const HAL_SKIN: SkinGlyphs = {
+  ...CLAUDE_SKIN,
+  header: "\u25a0",
+  receipt: "\u25a1",
+};
+
 /** Active skin name, defaulting to apex when unset or unrecognized. */
 export function activeSkinName(): SkinName {
-  return process.env[SKIN_ENV_VAR] === "claude" ? "claude" : "apex";
+  const skin = process.env[SKIN_ENV_VAR];
+  return skin === "claude" || skin === "hal" ? skin : "apex";
 }
 
 /** Glyph set for the active skin. Read fresh on every call. */
 export function skinGlyphs(): SkinGlyphs {
-  return activeSkinName() === "claude" ? CLAUDE_SKIN : APEX_SKIN;
+  const skin = activeSkinName();
+  if (skin === "hal") return HAL_SKIN;
+  return skin === "claude" ? CLAUDE_SKIN : APEX_SKIN;
 }
 
 /** Composer prompt glyph for the active skin. */

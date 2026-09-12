@@ -146,6 +146,17 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(wrappedAgent(), /sidekick/);
     assert.doesNotMatch(wrappedAgent(), /machinist|scout|artisan/);
 
+    bus.get("pi:modes:changed")!({ mode: "work" });
+    assert.match(advertised().description, /Work sidekick/);
+    assert.match(advertised().description, /All existing synchronous specialists remain available/);
+    assert.match(agentParam(), /Work permits only its designated sidekick/);
+    const workAsync = await tools.get("task_start").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
+    assert.equal(workAsync.isError, true);
+    assert.match(workAsync.content[0].text, /Work permits task_start only for sidekick/);
+    process.env.PI_BEHAVIOR_MODE = "work";
+    const workSync = await tools.get("task").execute("call", { agent: "machinist", prompt: "do work" }, AbortSignal.abort(), undefined, ctx);
+    assert.doesNotMatch(workSync.content?.[0]?.text ?? "", /Apex-only|Synchronous task spawning is disabled/);
+
     assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "intercom", input: {} })).find(Boolean), undefined);
   } finally {
     for (const fn of handlers.get("session_shutdown") ?? []) fn({}, {});

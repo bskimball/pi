@@ -14,6 +14,7 @@ import {
   type AgentDef,
 } from "../internal/runtime/agent-discovery.ts";
 import { cleanInline } from "../internal/presentation/ui-common.ts";
+import { activeSkinName } from "../internal/presentation/skin.ts";
 import {
   SHARK_PIXELS_MID,
   SHARK_PIXELS_MID_WIDTH,
@@ -485,6 +486,17 @@ function lateralLine(art: string, fg: Fg): string {
  * banded mush.
  */
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
+  if (activeSkinName() === "hal") {
+    if (width < MINIMAL_MIN) return { rows: [fg("text", "HAL")], blockWidth: 3 };
+    const rows = [
+      "█   █   ███   █    ",
+      "█   █  █   █  █    ",
+      "█████  █████  █    ",
+      "█   █  █   █  █    ",
+      "█   █  █   █  █████",
+    ];
+    return { rows: rows.map(row => fg("text", row)), blockWidth: 19 };
+  }
   if (width < MINIMAL_MIN) {
     return { rows: [fg("accent", SHARK_MINIMAL)], blockWidth: 1 };
   }
@@ -627,6 +639,10 @@ function signalLine(view: Observatory, fg: Fg, width: number): string {
 
 /** The threshold line; shortens instead of clipping on very narrow terminals. */
 function invitation(fg: Fg, width: number): string {
+  if (activeSkinName() === "hal") {
+    const label = width >= 28 ? "What are we working on?" : "Ready";
+    return fg("accent", "> ") + fg("muted", label);
+  }
   const full = fg("accent", "❯ ") + fg("muted", "transmit an intention…");
   if (safeVisibleWidth(full) <= width) return full;
   return fg("accent", "❯ ") + fg("muted", "an intention…");
@@ -941,9 +957,13 @@ export function renderObservatory(
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
 
-  // Dense fixed chrome (no blank under the star or under the mark) so the
-  // inventory can hold all nine agents inside the line budget.
-  if (inner >= MINIMAL_MIN) {
+  // HAL uses a quiet instrument label in place of the Apex star field.
+  const hal = activeSkinName() === "hal";
+  if (hal && inner >= MINIMAL_MIN) {
+    lines.push(center(fg("dim", "OPERATIONS CONSOLE"), inner));
+  }
+  // Dense fixed chrome keeps the inventory inside the line budget.
+  if (!hal && inner >= MINIMAL_MIN) {
     const skySpan = Math.min(
       inner,
       inner >= FULL_MIN ? STARFIELD_WIDE_SPAN : STARFIELD_NARROW_SPAN,

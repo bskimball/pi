@@ -10,9 +10,9 @@ This repo layers several things on top of a stock Pi install:
 
 - **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
 - **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
-- **Slash commands and prompt templates** — `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion), `/ui` switches presentation (pi / apex / claude), and native `/orchestrate` toggles sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
+- **Slash commands and prompt templates** — `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion / Work), `/ui` switches presentation (pi / apex / claude / hal), and native `/orchestrate` toggles sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` and `/simplify` live in `agent/prompts/`.
 - **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, and MCP scripting.
-- **Themes** (`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`) selected via `agent/settings.json` (currently `claude-dark`).
+- **Themes** (`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`, `agent/themes/hal-dark.json`) selected through `/ui` or Pi's theme controls.
 - **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
 
 ## Sub-agents and Orchestration Tools
@@ -137,7 +137,7 @@ A single on-demand `lsp` tool for semantic navigation (`definition`, `references
 
 ## Slash commands
 
-`/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, sticky session-mode switching, and the behavior/presentation pickers — that plain prompt-template expansion can't do. `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion) and `/ui` switches presentation (pi / apex / claude); see `agent/extensions/prompt-commands/README.md` for Fusion/UI detail. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
+`/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, sticky session-mode switching, and the behavior/presentation pickers — that plain prompt-template expansion can't do. `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion / Work) and `/ui` switches presentation (pi / apex / claude / hal); see `agent/extensions/prompt-commands/README.md` for mode/UI detail. Work is operations-first with a persistent sidekick and the existing synchronous specialist roster; it uses its own prompt instead of the coding-first base. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
 
 Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md), [`/simplify`](agent/prompts/simplify.md)); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
 
@@ -197,11 +197,11 @@ Skills live in `agent/skills/` and are freeform directories beyond the required 
 
 ## Theme
 
-`agent/themes/apex-dark.json` and `agent/themes/claude-dark.json` are custom dark themes selected via `agent/settings.json` (`"theme"` is currently `"claude-dark"`); the active theme hot-reloads when edited. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
+`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`, and `agent/themes/hal-dark.json` are custom dark themes selected through `/ui` or Pi's theme controls; the active theme hot-reloads when edited. HAL uses cool matte surfaces, restrained cyan emphasis, and semantic status colors. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
 
 ## The shark / Observatory
 
-The configuration has one visual identity — a shark in deep space — used as the Observatory landing mark on a fresh chat, not as a live animation during work. Observatory is a blank-chat landing screen mounted by `apex/apex-ui.ts` as Pi's startup header (`ctx.ui.setHeader(...)`), not an above-editor widget, so with `quietStartup` it's the opening screen.
+Apex and Claude use a shark in deep space as the Observatory landing mark on a fresh chat, not as a live animation during work. HAL uses a static geometric HAL wordmark and a quiet operations-console label, with the same inventory and navigation. Observatory is a blank-chat landing screen mounted by `apex/apex-ui.ts` as Pi's startup header (`ctx.ui.setHeader(...)`), not an above-editor widget, so with `quietStartup` it's the opening screen.
 
 ```text
 agent/extensions/apex/observatory/

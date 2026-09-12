@@ -45,7 +45,7 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 - Apex is the only general custom-presentation extension. Its Observatory, built-in tool receipts, layout safety, and width-safe primitives live under `apex/`.
 - Apex receipts cover the Pi-owned `read`, `edit`, `grep`, and `ls` built-ins through `registerHeadlessReceipt(..., { overrideOwned: true })`; Pi keeps execution. `bash` and `write` are instead re-registered in `apex/builtin-tools.ts` because Apex wraps their execute (write captures a diff). Add chrome for a Pi-owned tool the first way unless execute genuinely needs wrapping.
-- `claude` is a skin over Apex rather than a third presentation extension: `PI_UI_SKIN` selects the glyph set in `apex/internal/presentation/skin.ts`, consumed through `TREE` in `ui-common.ts` and the composer prompt in `apex-ui.ts`. Only one extension patches `ToolExecutionComponent`, so no second prototype wrapper exists.
+- `claude` and `hal` are skins over Apex rather than separate presentation extensions: `PI_UI_SKIN` selects the glyph set in `apex/internal/presentation/skin.ts`, consumed through `TREE` in `ui-common.ts` and the composer prompt in `apex-ui.ts`. Only one extension patches `ToolExecutionComponent`, so no second prototype wrapper exists.
 - Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
 - Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
 - Todo is Apex-private (`apex/internal/todo/`): receipts and the docked above-editor panel, or stock rendering under `PI_APEX_UI=0`.
@@ -68,9 +68,9 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 
 ## Behavior-mode transitions
 
-The behavior-mode transition module in `prompt-commands/modes.ts` owns staged model/thinking selection, active tools, session choices, and global defaults. It waits for the task-owned Fusion configuration acknowledgement before persistence and announces the new mode last. Failed transitions restore the prior selection; incomplete recovery blocks input until a successful `/mode` switch. `/model` alone cannot clear that recovery block.
+The behavior-mode transition module in `prompt-commands/modes.ts` owns staged model/thinking selection, active tools, session choices, and global defaults. Fusion and Work wait for the task-owned persistent-sidekick configuration acknowledgement before persistence and announce the new mode last. They share the configured model pair and transcript lifecycle. Work uses a standalone operations-first prompt and allows the existing synchronous specialist roster; Fusion retains its closed roster. Failed transitions restore the prior selection; incomplete recovery blocks input until a successful `/mode` switch. `/model` alone cannot clear that recovery block.
 
-Presentation remains independent: `pi:ui:changed` lets each owner update its own presentation. Apex refreshes its registered todo/bash/write receipt definitions without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset; Pi still owns animation timing.
+Presentation remains independent: `pi:ui:changed` lets each owner update its own presentation. Apex refreshes its registered todo/bash/write receipt definitions without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL landing instead of the shark/star field; Pi still owns animation timing.
 
 ## Task extension
 

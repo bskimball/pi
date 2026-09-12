@@ -279,6 +279,13 @@ export function buildWorkingIndicator(
 ): { frames: string[]; intervalMs: number; message: string } {
   const leadTone = resolveWorkingLeadTone(pi);
   // Skin is read here at call time so a live /ui switch applies at once.
+  if (activeSkinName() === "hal") {
+    return {
+      frames: ["\u25a1", "\u25a7", "\u25a0", "\u25a7"].map(glyph => ctx.ui.theme.fg("accent", glyph)),
+      intervalMs: 400,
+      message: ctx.ui.theme.fg("dim", "Working..."),
+    };
+  }
   if (activeSkinName() === "claude") {
     return {
       frames: claudeWorkingFrames(ctx, leadTone),
@@ -636,6 +643,9 @@ export default function (pi: ExtensionAPI) {
     if (presentationEnabled()) {
       installPresentation();
       installLayout(pi, ctx);
+      if (ctx.hasUI && isConversationBlank(ctx.sessionManager.getEntries())) {
+        showObservatory(pi, ctx);
+      }
     } else if (ctx.hasUI) {
       ctx.ui.setEditorComponent(undefined);
       ctx.ui.setWorkingIndicator(undefined);

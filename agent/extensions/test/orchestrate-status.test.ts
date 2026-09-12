@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK } from "../prompt-commands.ts";
+import { join, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT } from "../prompt-commands.ts";
 import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
+
+const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
+const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
 
 test("legacy modes restore without adopting a new global default", () => {
   const prefs = initialPreferences(); prefs.mode = "pi";
@@ -12,10 +16,12 @@ test("legacy modes restore without adopting a new global default", () => {
   assert.equal(restoreMode([], prefs, true).mode, "pi");
   assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
 });
-test("Pi exposes built-in default tools; Fusion excludes roster dispatch but keeps coordination", () => {
-  const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
+test("Pi exposes built-in default tools; collaboration modes exclude chain/rebind while Work keeps the full roster", () => {
+  const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_rebind", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
+  const collaborationTools = ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   assert.deepEqual(toolsForMode("pi", tools), ["read", "write", "edit", "bash"]);
-  assert.deepEqual(toolsForMode("fusion", tools), ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"]);
+  assert.deepEqual(toolsForMode("fusion", tools), collaborationTools);
+  assert.deepEqual(toolsForMode("work", tools), collaborationTools);
 });
 test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));
@@ -42,7 +48,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     const pi: any = {
       registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
       on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
-      events: { emit(name: string, data: any) { if (name === "pi:modes:query-busy" && workerBusy) data.busy = true; } },
+      events: { emit(name: string, data: any) { if (name === "pi:modes:query-busy" && workerBusy) data.busy = true; if (name === "pi:fusion:configure") { data.acknowledged = true; data.promise = Promise.resolve(); } } },
       appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
       getAllTools: () => allTools.map(name => ({ name })),
       getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; }, getThinkingLevel: () => "medium", setThinkingLevel() {},
@@ -50,7 +56,15 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     promptCommands(pi);
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
     await emit("session_start", { reason: "new" });
-    const prompt = () => emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir, toolSnippets: { read: "Read files" } } });
+    const prompt = (systemPrompt = "Apex base") => emit("before_agent_start", {
+      systemPrompt,
+      systemPromptOptions: {
+        cwd: dir,
+        toolSnippets: { read: "Read files" },
+        promptGuidelines: ["Use the workspace capability contract"],
+        contextFiles: [{ path: "AGENTS.md", content: "Project boundary applies." }],
+      },
+    });
     assert.equal((await prompt()).systemPrompt, "Apex base" + REGULAR_SYSTEM_BLOCK);
     await commands.orchestrate("on", ctx);
     assert.equal((await prompt()).systemPrompt, "Apex base" + ORCHESTRATE_SYSTEM_BLOCK);
@@ -79,6 +93,40 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("pi", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    await commands.mode("work", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "work");
+    const workBaseline = buildSystemPrompt({
+      cwd: dir,
+      toolSnippets: { read: "Read files" },
+      promptGuidelines: ["Use the workspace capability contract"],
+      contextFiles: [{ path: "AGENTS.md", content: "Project boundary applies." }],
+    });
+    const workPrompt = (await prompt(workBaseline)).systemPrompt;
+    assert.match(workPrompt, /operations-first lead/);
+    assert.match(workPrompt, /Work mode \(active\)/);
+    assert.doesNotMatch(workPrompt, /Apex base|Fusion mode \(active\)/);
+    assert.match(workPrompt, /Active tool guidance[\s\S]*Read files/, "Work retains active tool snippets");
+    assert.match(workPrompt, /Active tool rules[\s\S]*Use the workspace capability contract/, "Work retains extension prompt guidelines");
+    assert.match(workPrompt, /<project_context>[\s\S]*Project boundary applies\./, "Work builder retains project context");
+    assert.match(workPrompt, /Current working directory:/, "Work builder retains prompt composition");
+    const workOptions = {
+      cwd: dir,
+      toolSnippets: { read: "Read files" },
+      promptGuidelines: ["Use the workspace capability contract"],
+      customPrompt: "Coding-first base that Work must replace.",
+      appendSystemPrompt: "Caller-provided instruction.",
+      contextFiles: [{ path: "AGENTS.md", content: "Project boundary applies." }],
+    };
+    const stockBaseline = buildSystemPrompt(workOptions);
+    const memorySuffix = "\n\n## Continual memory\nMemory-like dynamic context.";
+    const retainedDynamic = await emit("before_agent_start", { systemPrompt: stockBaseline + memorySuffix, systemPromptOptions: workOptions });
+    assert.match(retainedDynamic.systemPrompt, /Memory-like dynamic context\./, "Work retains a prior extension's dynamic suffix");
+    assert.equal(retainedDynamic.systemPrompt.split("Memory-like dynamic context.").length - 1, 1, "dynamic suffix is retained once");
+    assert.match(retainedDynamic.systemPrompt, /Caller-provided instruction\./, "Work preserves caller append instructions");
+    assert.doesNotMatch(retainedDynamic.systemPrompt, /^You are an expert coding assistant operating inside pi/, "Work does not restore the stock coding base");
+    assert.doesNotMatch(retainedDynamic.systemPrompt, /Coding-first base that Work must replace/);
+    assert.equal(WORK_SYSTEM_PROMPT.includes("operations-first lead"), true);
+    await commands.mode("pi", ctx);
     await commands.ui("pi", ctx);
     assert.equal(process.env.PI_APEX_UI, "0");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
@@ -91,6 +139,10 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(process.env.PI_APEX_UI, "1");
     assert.equal(process.env.PI_UI_SKIN, "claude");
     assert.equal(ctx.ui.theme.name, "claude-dark");
+    await commands.ui("hal", ctx);
+    assert.equal(process.env.PI_APEX_UI, "1");
+    assert.equal(process.env.PI_UI_SKIN, "hal");
+    assert.equal(ctx.ui.theme.name, "hal-dark");
     await commands.ui("apex", ctx);
     assert.equal(process.env.PI_APEX_UI, "1");
     assert.equal(process.env.PI_UI_SKIN, "apex");
@@ -102,6 +154,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     const savedUi = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
     assert.equal(savedUi.ui, "pi");
     assert.equal(savedUi.themes.claude, "claude-dark");
+    assert.equal(savedUi.themes.hal, "hal-dark");
     assert.equal(savedUi.themes.apex, "apex-dark");
     assert.equal(savedUi.themes.pi, "light");
     assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi");

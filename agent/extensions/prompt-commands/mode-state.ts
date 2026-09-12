@@ -1,21 +1,21 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
-export const MODES = ["pi", "apex", "apex-orchestrate", "fusion"] as const;
+export const MODES = ["pi", "apex", "apex-orchestrate", "fusion", "work"] as const;
 export type Mode = typeof MODES[number];
 export type ModelChoice = { provider: string; modelId: string; thinking: string };
 export type FusionPair = { lead: ModelChoice; sidekick: ModelChoice };
 export type ModeState = { mode: Mode; models: Partial<Record<Mode, ModelChoice>>; fusion?: FusionPair };
-export type UiPresentation = "pi" | "apex" | "claude";
-export type Preferences = ModeState & { ui: UiPresentation; themes: { pi: string; apex: string; claude: string } };
+export type UiPresentation = "pi" | "apex" | "claude" | "hal";
+export type Preferences = ModeState & { ui: UiPresentation; themes: { pi: string; apex: string; claude: string; hal: string } };
 export const isMode = (value: unknown): value is Mode => MODES.includes(value as Mode);
 export function initialPreferences(): Preferences {
-  return { mode: "apex", models: {}, ui: "apex", themes: { pi: "dark", apex: "apex-dark", claude: "claude-dark" } };
+  return { mode: "apex", models: {}, ui: "apex", themes: { pi: "dark", apex: "apex-dark", claude: "claude-dark", hal: "hal-dark" } };
 }
 export function readPreferences(path: string): Preferences {
   try {
     const data = JSON.parse(readFileSync(path, "utf8"));
-    if (!isMode(data.mode) || !data.models || !["pi", "apex", "claude"].includes(data.ui)) throw new Error("Invalid mode preferences");
+    if (!isMode(data.mode) || !data.models || !["pi", "apex", "claude", "hal"].includes(data.ui)) throw new Error("Invalid mode preferences");
     return { ...initialPreferences(), ...data, themes: { ...initialPreferences().themes, ...data.themes } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return initialPreferences();
@@ -40,6 +40,6 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
 }
 export function toolsForMode(mode: Mode, names: string[]): string[] {
   if (mode === "pi") return names.filter(name => ["read", "bash", "edit", "write"].includes(name));
-  if (mode === "fusion") return names.filter(name => !["task_chain", "task_rebind"].includes(name));
+  if (mode === "fusion" || mode === "work") return names.filter(name => !["task_chain", "task_rebind"].includes(name));
   return names;
 }

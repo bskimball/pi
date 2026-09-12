@@ -674,22 +674,23 @@ Available agents:
 ${agentList}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartFusionDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
+  const taskStartPersistentDescription = (mode: "fusion" | "work") => `Start the ${mode === "work" ? "Work" : "Fusion"} sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done. ${mode === "fusion" ? "One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool." : "All existing synchronous specialists remain available through the task tool."}
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartDescription = (fusionMode: boolean) => fusionMode && sidekickDef ? taskStartFusionDescription : taskStartFullDescription;
-  const taskStartAgentDescription = (fusionMode: boolean) => fusionMode && sidekickDef
-    ? "Agent to run. One of: sidekick. Fusion permits only its designated sidekick."
+  const persistentSidekickMode = (): "fusion" | "work" | undefined => behaviorMode === "fusion" || behaviorMode === "work" ? behaviorMode : undefined;
+  const taskStartDescription = (mode = persistentSidekickMode()) => mode && sidekickDef ? taskStartPersistentDescription(mode) : taskStartFullDescription;
+  const taskStartAgentDescription = (mode = persistentSidekickMode()) => mode && sidekickDef
+    ? `Agent to run. One of: sidekick. ${mode === "work" ? "Work" : "Fusion"} permits only its designated sidekick on task_start.`
     : agentParamDescription(agents);
-  const applyTaskStartAdvertisement = (fusionMode: boolean) => {
-    taskStartToolDef.description = taskStartDescription(fusionMode);
+  const applyTaskStartAdvertisement = (mode = persistentSidekickMode()) => {
+    taskStartToolDef.description = taskStartDescription(mode);
     const properties = (taskStartToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
     taskStartToolDef.parameters = Type.Object({
       ...properties,
-      agent: Type.String({ description: taskStartAgentDescription(fusionMode) }),
+      agent: Type.String({ description: taskStartAgentDescription(mode) }),
     }) as typeof taskStartToolDef.parameters;
     // registerTool() is the public path that re-wraps; wrapToolDefinition snapshots
     // description/parameters, and setActiveTools only looks up the existing wrap.
@@ -1774,7 +1775,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
 
   const taskStartParams = Type.Object({
     agent: Type.String({
-      description: taskStartAgentDescription(behaviorMode === "fusion"),
+      description: taskStartAgentDescription(),
     }),
     prompt: Type.String({
       description:
@@ -1807,7 +1808,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const taskStartToolDef: ToolDefinition<typeof taskStartParams> = {
     name: "task_start",
     label: "Task Start",
-    description: taskStartDescription(behaviorMode === "fusion"),
+    description: taskStartDescription(),
     promptSnippet:
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
@@ -1831,9 +1832,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
-      if (behaviorMode === "fusion") {
-        if (process.env.PI_FUSION_SIDEKICK === "1") return textResult("Fusion sidekick cannot spawn workers.", true);
-        if (params.agent !== "sidekick") return textResult("Fusion permits task_start only for sidekick.", true);
+      const sidekickMode = persistentSidekickMode();
+      if (sidekickMode) {
+        if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`${sidekickMode === "work" ? "Work" : "Fusion"} sidekick cannot spawn workers.`, true);
+        if (params.agent !== "sidekick") return textResult(`${sidekickMode === "work" ? "Work" : "Fusion"} permits task_start only for sidekick.`, true);
         const outcome = await fusionLifecycle.reuse(
           params.prompt,
           {
@@ -1844,13 +1846,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           },
           PROMPT_ACCEPT_TIMEOUT_MS,
         );
-        if (outcome.kind === "active") return textResult(`${outcome.worker.id} is already the active Fusion sidekick.`, true);
+        const sidekickLabel = sidekickMode === "work" ? "Work" : "Fusion";
+        if (outcome.kind === "active") return textResult(`${outcome.worker.id} is already the active ${sidekickLabel} sidekick.`, true);
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
-        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} Fusion sidekick context (generation ${outcome.worker.generation ?? "?"}).`);
+        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}).`);
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
         // "parked" falls through to transcript-resume spawn below; "none"
         // needs a configured pair before spawning.
-        if (!fusionLifecycle.configured) return textResult("Fusion sidekick configuration is unavailable.", true);
+        if (!fusionLifecycle.configured) return textResult(`${sidekickMode === "work" ? "Work" : "Fusion"} sidekick configuration is unavailable.`, true);
       }
       if (!runtime.canStart()) {
         return textResult(
@@ -1888,7 +1891,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
 
       const parentSessionId = ctx.sessionManager?.getSessionId?.();
-      const savedFusion = behaviorMode === "fusion"
+      const savedFusion = sidekickMode !== undefined
         ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.())
         : undefined;
       const { worker, error } = await spawnWorker(def, {
@@ -1897,7 +1900,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         modelOverride: params.model?.trim() || undefined,
         reportSchema,
         forkSessionFile,
-        fusion: behaviorMode === "fusion",
+        fusion: sidekickMode !== undefined,
         fusionParentSessionId: parentSessionId,
         resumeSessionFile: savedFusion?.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
       });
@@ -1905,8 +1908,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         // Persist the transcript even when prompt acceptance failed: the failed
         // generation settles but the session file stays resumable.
         if (!parentSessionId || ctx.sessionManager?.getSessionId?.() !== parentSessionId) {
-          closeWorker(worker, "Fusion parent session changed before transcript persistence", "sync");
-          return textResult("Fusion transcript was not persisted because the parent session changed.", true);
+          closeWorker(worker, `${sidekickMode === "work" ? "Work" : "Fusion"} parent session changed before transcript persistence`, "sync");
+          return textResult(`${sidekickMode === "work" ? "Work" : "Fusion"} transcript was not persisted because the parent session changed.`, true);
         }
         try {
           pi.appendEntry("fusion-sidekick-session", {
@@ -1916,8 +1919,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             cwd,
           } satisfies FusionSessionEntry);
         } catch (cause) {
-          closeWorker(worker, "Fusion transcript persistence failed", "sync");
-          return textResult(`Fusion transcript persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`, true);
+          closeWorker(worker, `${sidekickMode === "work" ? "Work" : "Fusion"} transcript persistence failed`, "sync");
+          return textResult(`${sidekickMode === "work" ? "Work" : "Fusion"} transcript persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`, true);
         }
       }
       if (error || !worker) {
@@ -2510,8 +2513,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true, sendDetails("rejected", "unknown worker"));
       }
-      if (behaviorMode === "fusion" && !worker.fusion) {
-        return textResult("Fusion task_send targets only the designated sidekick.", true, sendDetails("rejected", "not Fusion sidekick"));
+      if (persistentSidekickMode() && !worker.fusion) {
+        const mode = persistentSidekickMode()!;
+        return textResult(`${mode === "work" ? "Work" : "Fusion"} task_send targets only the designated sidekick.`, true, sendDetails("rejected", "not persistent sidekick"));
       }
       if (worker.closed || worker.lifecycle === "closed") {
         return textResult(`${id} is closed.`, true, sendDetails("rejected", "worker closed"));
@@ -3611,8 +3615,8 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     const event = payload as { mode?: string; fusion?: FusionPair };
     behaviorMode = event.mode ?? "pi";
     fusionLifecycle.trackPair(event.fusion);
-    applyTaskStartAdvertisement(behaviorMode === "fusion");
-    if (behaviorMode !== "fusion") {
+    applyTaskStartAdvertisement();
+    if (behaviorMode !== "fusion" && behaviorMode !== "work") {
       fusionLifecycle.parkForModeLeave();
     }
   });
@@ -3629,7 +3633,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       ? fusionLifecycle.gateSidekick(event.toolName)
       : undefined;
     if (sidekickReason) return { block: true, reason: sidekickReason };
-    if (behaviorMode !== "fusion") return;
+    if (behaviorMode !== "fusion" && behaviorMode !== "work") return;
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
       (event.input as { id?: string } | undefined)?.id,
@@ -3637,7 +3641,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     if (leadReason) return { block: true, reason: leadReason };
   });
   pi.on("agent_end", async event => {
-    if (behaviorMode !== "fusion") return;
+    if (behaviorMode !== "fusion" && behaviorMode !== "work") return;
     const last = event.messages.at(-1) as { role?: string; stopReason?: string } | undefined;
     if (last?.role === "assistant" && (last.stopReason === "aborted" || last.stopReason === "error")) {
       const worker = fusionWorker();
@@ -3665,7 +3669,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     }
     fusionLifecycle.isolateSession(ctx?.sessionManager?.getSessionId?.());
     if (ctx?.hasUI) removeFusionInputListener = ctx.ui.onTerminalInput(data => {
-      if (data === "\u001b" && behaviorMode === "fusion") {
+      if (data === "\u001b" && persistentSidekickMode()) {
         const worker = fusionWorker();
         if (worker && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") void abortWorkerAndEscalate(worker);
       }

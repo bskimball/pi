@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
+import { renderObservatory, OBSERVATORY_MAX_LINES } from "../observatory/observatory.ts";
 import { installBuiltinReceipts } from "../internal/presentation/builtin-receipts.ts";
 import {
   intercomMessageLines,
@@ -22,6 +25,8 @@ import {
   skinGlyphs,
 } from "../internal/presentation/skin.ts";
 import { TREE } from "../internal/presentation/ui-common.ts";
+
+const { loadThemeFromPath } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/theme.js")).href);
 
 // Pre-change apex literals, pinned so any visual regression fails loudly.
 const APEX_GLYPHS = {
@@ -124,6 +129,30 @@ describe("apex presentation skins", () => {
     });
   });
 
+  it("renders HAL receipts and a bounded HAL landing with the real theme", () => {
+    withSkin("hal", () => {
+      const theme = loadThemeFromPath(fileURLToPath(new URL("../../../themes/hal-dark.json", import.meta.url)), "truecolor");
+      assert.equal(activeSkinName(), "hal");
+      assert.equal(TREE.header, "■");
+      assert.equal(TREE.receipt, "□");
+      assert.equal(TREE.rail, "⎿");
+      assert.equal(composerPromptGlyph(), ">");
+      assert.match(todoText(), /□/);
+      assert.match(todoText(), /■/);
+      const view = {
+        signal: "WORKSPACE", hasProject: true, seed: "hal", pathways: [], specialists: [],
+        promptCount: 0, skillCount: 0, agentCount: 0,
+      };
+      for (const width of [1, 8, 19, 20, 40, 62, 80, 120, 160]) {
+        const lines = renderObservatory(view, (key, text) => theme.fg(key, text), width);
+        assert.ok(lines.length <= OBSERVATORY_MAX_LINES);
+        for (const line of lines) assert.ok(safeVisibleWidth(line) <= width);
+        if (width >= 20) assert.match(lines.join("\n"), /OPERATIONS CONSOLE/);
+        else if (width >= 3) assert.match(lines.join("\n"), /HAL/);
+      }
+    });
+  });
+
   it("falls back to apex for unrecognized skin values", () => {
     for (const value of ["banana", "", "CLAUDE", "Claude"]) {
       withSkin(value, () => {
@@ -144,7 +173,7 @@ describe("apex presentation skins", () => {
     assert.equal(safeVisibleWidth("●"), 1);
     assert.equal(safeVisibleWidth("⎿"), 1);
     assert.equal(safeVisibleWidth("● test ⎿"), 8);
-    for (const skin of [undefined, "claude"]) {
+    for (const skin of [undefined, "claude", "hal"]) {
       withSkin(skin, () => {
         assert.equal(safeVisibleWidth(TREE.branch), 2);
         assert.equal(safeVisibleWidth(TREE.last), 2);

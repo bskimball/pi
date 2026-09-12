@@ -13,6 +13,16 @@ observatory/
 └── sky-preview.mjs       star-field-only harness
 ```
 
+## HAL skin
+
+`/ui hal` uses the same landing inventory and keyboard navigation with a static geometric HAL wordmark and an `OPERATIONS CONSOLE` label instead of the shark and star field. Below 20 columns it reduces to plain `HAL`. The wordmark stays neutral so Pi's shared theme roles never confuse identity crimson with status or ordinary message labels. `hal-dark` supplies cool near-black surfaces, cyan emphasis, and semantic green/amber/red. No Work source or desktop runtime is imported.
+
+Preview with the real HAL theme and the same bounds checks:
+
+```bash
+PI_UI_SKIN=hal node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs 8 19 20 40 62 80 120 160
+```
+
 ## Shark Wordmark
 
 A hand-authored side-profile great white swimming left over a quiet star field (`logoBlock` in `observatory.ts`). Tiers, widest first:
