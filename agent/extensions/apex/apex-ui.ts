@@ -264,6 +264,165 @@ function claudeWorkingFrames(ctx: ExtensionContext, leadTone: string): string[] 
   return frames;
 }
 
+// HAL skin: candidate working indicators, each one motion idea with uniform
+// glyph metrics so every frame of a candidate shares one visible width and
+// centered ink. The old indicator mixed U+25A1/U+25A7/U+25A0 box glyphs from
+// different families, so ink volume and box metrics changed per frame and the
+// mark jittered instead of animating. Every candidate below stays inside one
+// family per frame (braille or block elements) and carries the thinking-level
+// leadTone on its peak beat, decaying through muted/dim like the other skins.
+export const HAL_INDICATOR_FRAME_COUNT = 128;
+
+// Braille sensor breathing: density swells from a center dot to full field
+// and releases. Peak (full field) carries the thinking hue.
+function halLensFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats = ["000010000", "010101010", "111111111", "010101010", "000010000"];
+  const tones = ["dim", "muted", leadTone, "muted", "dim"];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (let beat = 0; beat < beats.length; beat++) {
+      frames.push(ctx.ui.theme.fg(tones[beat] as any, renderWorkingDots(beats[beat])));
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+// Scan bar crossing a 3-column field and back, with a fading tail: the bar
+// reads brightest at the turnaround edge, dimmest mid-field.
+function halSweepFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats = ["100100100", "010010010", "001001001", "010010010"];
+  const tones = [leadTone, "muted", "dim", "muted"];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (let beat = 0; beat < beats.length; beat++) {
+      frames.push(ctx.ui.theme.fg(tones[beat] as any, renderWorkingDots(beats[beat])));
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+// Single-cell readout bar rising and falling like a VU meter. One cell wide
+// is the most stable mark possible; lower blocks align to the cell bottom so
+// the motion reads as a rising level, never a shift.
+function halReadoutFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂"];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (const glyph of beats) {
+      const tone = glyph === "█" ? leadTone : glyph === "▆" || glyph === "▇" ? "muted" : "dim";
+      frames.push(ctx.ui.theme.fg(tone as any, glyph));
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+// One telemetry blip walking the 3x3 perimeter. Lead beat carries the
+// thinking hue; the trail decays, mirroring the apex skin's convention.
+function halOrbitFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats = [
+    "100000000",
+    "010000000",
+    "001000000",
+    "000001000",
+    "000000001",
+    "000000010",
+    "000000100",
+    "000100000",
+  ];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (let beat = 0; beat < beats.length; beat++) {
+      const tone = beat === 0 ? leadTone : beat % 2 === 0 ? "muted" : "dim";
+      frames.push(ctx.ui.theme.fg(tone as any, renderWorkingDots(beats[beat])));
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+// Breathing crimson core in an instrument frame: the landing-orb analogue.
+// Static lead-tone rails (thinking level) hold a center cell that swells
+// through brand into dim. Rails never move, so only the core's density
+// changes — nothing to jitter.
+function halCoreFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats: Array<[string, string]> = [
+    ["█", "brand"],
+    ["▓", "brand"],
+    ["▒", "brandDim"],
+    ["░", "dim"],
+    ["▒", "brandDim"],
+    ["▓", "brand"],
+  ];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (const [glyph, tone] of beats) {
+      frames.push(
+        ctx.ui.theme.fg(leadTone as any, "▌") +
+        ctx.ui.theme.fg(tone as any, glyph) +
+        ctx.ui.theme.fg(leadTone as any, "▐"),
+      );
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+export interface HalIndicatorCandidate {
+  name: string;
+  description: string;
+  intervalMs: number;
+  build: (ctx: ExtensionContext, leadTone: string) => string[];
+}
+
+export const HAL_INDICATOR_CANDIDATES: HalIndicatorCandidate[] = [
+  { name: "lens", description: "Braille sensor breathing: density swells and releases", intervalMs: 150, build: halLensFrames },
+  { name: "sweep", description: "Scan bar crossing a 3-column field with a fading tail", intervalMs: 120, build: halSweepFrames },
+  { name: "readout", description: "Single-cell level bar rising and falling like a VU meter", intervalMs: 140, build: halReadoutFrames },
+  { name: "orbit", description: "One telemetry blip walking the field perimeter", intervalMs: 100, build: halOrbitFrames },
+  { name: "core", description: "Breathing crimson core in a static instrument frame", intervalMs: 220, build: halCoreFrames },
+];
+
+// Swap the default by naming another registry entry; the preview harness
+// (preview-indicator.mjs) renders every candidate by name.
+export const HAL_DEFAULT_CANDIDATE = "core";
+
+function halCandidate(): HalIndicatorCandidate {
+  return HAL_INDICATOR_CANDIDATES.find((candidate) => candidate.name === HAL_DEFAULT_CANDIDATE) ?? HAL_INDICATOR_CANDIDATES[0]!;
+}
+
+// Mission-control register: dry, competent, faintly ominous. Deliberately
+// not the film's lines, and never an apology or refusal that could read as
+// the agent declining the run. Picked once per run; Pi owns the clock.
+export const HAL_WORKING_MESSAGES = [
+  "Running diagnostics",
+  "Computing trajectory",
+  "Realigning the array",
+  "Parsing telemetry",
+  "Recalibrating sensors",
+  "Charting the course",
+  "Verifying systems",
+  "Scanning the horizon",
+  "Plotting the maneuver",
+  "Checking guidance",
+  "Testing the circuits",
+  "Aligning the dish",
+  "Checking instruments",
+  "Warming the reactor",
+  "Balancing the load",
+  "Triangulating position",
+  "Decoding the signal",
+  "Holding the orbit",
+  "Surveying the terrain",
+  "Logging the anomaly",
+];
+
+function halWorkingMessage(): string {
+  return HAL_WORKING_MESSAGES[Math.floor(Math.random() * HAL_WORKING_MESSAGES.length)];
+}
+
 export function resolveWorkingLeadTone(pi: ExtensionAPI): string {
   try {
     return THINKING_TONES[String(pi.getThinkingLevel())] ?? "accent";
@@ -280,10 +439,11 @@ export function buildWorkingIndicator(
   const leadTone = resolveWorkingLeadTone(pi);
   // Skin is read here at call time so a live /ui switch applies at once.
   if (activeSkinName() === "hal") {
+    const candidate = halCandidate();
     return {
-      frames: ["\u25a1", "\u25a7", "\u25a0", "\u25a7"].map(glyph => ctx.ui.theme.fg("accent", glyph)),
-      intervalMs: 400,
-      message: ctx.ui.theme.fg("dim", "Working..."),
+      frames: candidate.build(ctx, leadTone),
+      intervalMs: candidate.intervalMs,
+      message: ctx.ui.theme.fg("dim", `${halWorkingMessage()}...`),
     };
   }
   if (activeSkinName() === "claude") {

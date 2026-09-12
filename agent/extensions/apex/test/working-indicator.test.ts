@@ -6,6 +6,9 @@ import {
   CLAUDE_WORKING_MESSAGES,
   CLAUDE_WORKING_MOTIFS,
   CLAUDE_WORKING_WEIGHTS,
+  HAL_DEFAULT_CANDIDATE,
+  HAL_INDICATOR_CANDIDATES,
+  HAL_WORKING_MESSAGES,
   RANDOM_INDICATOR_FRAME_COUNT,
   RANDOM_INDICATOR_INTERVAL_MS,
   WORKING_MESSAGES,
@@ -49,17 +52,86 @@ const EXPECTED_MOTIFS: Record<string, string[]> = {
 };
 
 describe("working indicator skins", () => {
-  it("uses quiet square activity and neutral wording for HAL", () => {
+  it("draws the HAL label from its own mission-control pool and varies it", () => {
+    withSkin("hal", () => {
+      assert.ok(HAL_WORKING_MESSAGES.length >= 18, "pool has room to vary");
+      for (const phrase of HAL_WORKING_MESSAGES) {
+        assert.match(phrase, /^[A-Za-z ]+$/, `plain ASCII wording, saw ${JSON.stringify(phrase)}`);
+        assert.ok(phrase.length <= 22, `short enough to not wrap, saw ${JSON.stringify(phrase)}`);
+      }
+      assert.equal(new Set(HAL_WORKING_MESSAGES).size, HAL_WORKING_MESSAGES.length, "no duplicates");
+      const first = buildWorkingIndicator(stubCtx(), stubPi());
+      assert.match(first.message, /\.\.\.$/);
+      assert.ok(
+        HAL_WORKING_MESSAGES.includes(first.message.replace(/\.\.\.$/, "")),
+        `hal label drawn from HAL_WORKING_MESSAGES, saw ${JSON.stringify(first.message)}`,
+      );
+      const seen = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        seen.add(buildWorkingIndicator(stubCtx(), stubPi()).message);
+      }
+      assert.ok(seen.size > 1, "hal label varies across runs");
+    });
+  });
+
+  it("keeps every HAL candidate frame at one visible width (anti-jitter)", () => {
+    // Regression test for the old mixed-family square: U+25A1/U+25A7/U+25A0
+    // changed ink volume and box metrics per frame, so the mark shifted
+    // instead of animating. Every frame of every candidate must measure the
+    // same once ANSI styling is discounted.
+    assert.ok(HAL_INDICATOR_CANDIDATES.length >= 4, "offers real options");
+    for (const candidate of HAL_INDICATOR_CANDIDATES) {
+      const frames = candidate.build(stubCtx(), "thinkingHigh");
+      assert.ok(frames.length > 0, `${candidate.name}: non-empty`);
+      const widths = new Set(frames.map((frame) => safeVisibleWidth(frame)));
+      assert.equal(widths.size, 1, `${candidate.name}: frames share one width`);
+      for (const frame of frames) {
+        assert.doesNotMatch(frame, /\p{Extended_Pictographic}/u, `${candidate.name}: ${frame}`);
+      }
+    }
+  });
+
+  it("carries the thinking level in every HAL candidate", () => {
+    for (const candidate of HAL_INDICATOR_CANDIDATES) {
+      for (const level of ["low", "high"]) {
+        const seen: string[] = [];
+        const ctx = stubCtx((key, text) => {
+          seen.push(key);
+          return text;
+        });
+        const lead = level === "low" ? "thinkingLow" : "thinkingHigh";
+        candidate.build(ctx, lead);
+        assert.ok(seen.includes(lead), `${candidate.name}: ${level} run carries ${lead}`);
+      }
+    }
+    // End to end: different thinking levels produce different lead tones in
+    // the wired default's frames.
+    withSkin("hal", () => {
+      const tonesFor = (level: string): Set<string> => {
+        const seen = new Set<string>();
+        buildWorkingIndicator(
+          stubCtx((key, text) => {
+            seen.add(key);
+            return text;
+          }),
+          stubPi(level),
+        );
+        return seen;
+      };
+      assert.ok(tonesFor("low").has("thinkingLow"), "low run carries thinkingLow");
+      assert.ok(tonesFor("high").has("thinkingHigh"), "high run carries thinkingHigh");
+      assert.ok(!tonesFor("low").has("thinkingHigh"), "low run never carries thinkingHigh");
+    });
+  });
+
+  it("keeps a working HAL default wired to one named candidate", () => {
+    const candidate = HAL_INDICATOR_CANDIDATES.find((entry) => entry.name === HAL_DEFAULT_CANDIDATE);
+    assert.ok(candidate, `default ${JSON.stringify(HAL_DEFAULT_CANDIDATE)} names a registry entry`);
     withSkin("hal", () => {
       const built = buildWorkingIndicator(stubCtx(), stubPi());
-      assert.equal(built.message, "Working...");
-      assert.equal(built.intervalMs, 400);
-      assert.equal(built.frames.length, 4);
-      assert.ok(new Set(built.frames).size > 1);
-      for (const frame of built.frames) {
-        assert.equal(safeVisibleWidth(frame), 1);
-        assert.doesNotMatch(frame, /\p{Extended_Pictographic}/u);
-      }
+      assert.equal(built.frames.length, candidate!.build(stubCtx(), "thinkingMedium").length);
+      assert.equal(built.intervalMs, candidate!.intervalMs);
+      assert.ok(new Set(built.frames).size > 1, "default animates");
     });
   });
 
