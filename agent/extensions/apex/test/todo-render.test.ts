@@ -25,9 +25,14 @@ function createMockPi(apexUi = "1") {
     const shortcuts = new Map<string, any>();
     const commands = new Map<string, any>();
     const listeners = new Map<string, Array<(event: any, ctx: any) => void>>();
+    const eventListeners = new Map<string, Array<(...args: any[]) => void>>();
 
     const pi = {
-      events: { on() {} },
+      events: { on(name: string, fn: (...args: any[]) => void) {
+        const list = eventListeners.get(name) ?? [];
+        list.push(fn);
+        eventListeners.set(name, list);
+      } },
       registerTool(definition: any) {
         tools.push(definition);
       },
@@ -55,6 +60,15 @@ function createMockPi(apexUi = "1") {
         for (const handler of listeners.get(event) ?? []) {
           handler(eventData, ctx);
         }
+      },
+      emitEvent(name: string, ...args: any[]) {
+        for (const handler of eventListeners.get(name) ?? []) {
+          handler(...args);
+        }
+      },
+      latestTool(name: string) {
+        const matches = tools.filter((tool) => tool.name === name);
+        return matches[matches.length - 1];
       },
     };
   } finally {
@@ -245,20 +259,17 @@ describe("apex todo receipts and tools", () => {
     assert.equal(read.renderCall, undefined, "read renderCall undefined");
     assert.equal(read.renderResult, undefined, "read renderResult undefined");
 
-    assert.equal(
-      mock.shortcuts.has("alt+t"),
-      false,
-      "alt+t not registered when presentation off",
-    );
-    assert.equal(
-      mock.commands.has("todos"),
-      false,
-      "todos command not registered when presentation off",
-    );
+    // Controls stay registered (the SDK has no unregister) but refuse while
+    // presentation is disabled, keeping the plain widget as the sole surface.
+    assert.equal(mock.shortcuts.has("alt+t"), true, "alt+t registered");
+    assert.equal(mock.shortcuts.has("alt+a"), true, "alt+a registered");
+    assert.equal(mock.commands.has("todos"), true, "todos registered");
+    assert.equal(mock.commands.has("agents"), true, "agents registered");
 
     let mountedKey: string | undefined;
     let mountedComponent: any;
     let mountedOptions: any;
+    const notices: string[] = [];
     const tuiCtx = {
       mode: "tui",
       hasUI: true,
@@ -268,9 +279,20 @@ describe("apex todo receipts and tools", () => {
           mountedComponent = component;
           mountedOptions = options;
         },
-        notify() {},
+        notify(message: string) {
+          notices.push(message);
+        },
       },
     } as any;
+
+    // Gated controls refuse while disabled instead of touching the panel.
+    await mock.commands.get("todos").handler("", tuiCtx);
+    await mock.commands.get("agents").handler("", tuiCtx);
+    mock.shortcuts.get("alt+t").handler(tuiCtx);
+    mock.shortcuts.get("alt+a").handler(tuiCtx);
+    assert.equal(notices.length, 4, "each gated control notifies");
+    assert.ok(notices.every((text) => /inactive while Apex presentation is disabled/.test(text)));
+    assert.equal(mountedComponent, undefined, "gated controls mount nothing");
 
     // Prior to any todo state, no widget is mounted
     assert.equal(mountedComponent, undefined, "no widget mounted before state exists");
@@ -355,6 +377,97 @@ describe("apex todo receipts and tools", () => {
     assert.match(readRes.content[0].text, /1\/2 done/);
     assert.match(readRes.content[0].text, /\[completed\] Headless step/);
     assert.match(readRes.content[0].text, /\[in_progress\] Follow-up step · active/);
+  });
+
+  it("re-registers todo receipts on live presentation switches without losing the plan", async () => {
+    const mock = createMockPi("1");
+    const previous = process.env.PI_APEX_UI;
+    const ctx = { mode: "noninteractive", hasUI: false } as any;
+    try {
+      const write = mock.latestTool("todo_write");
+      assert.equal(typeof write.renderCall, "function", "Apex chrome attached while enabled");
+      await write.execute(
+        "call_1",
+        { todos: [{ content: "Surviving step", status: "in_progress" }] },
+        undefined,
+        undefined,
+        ctx,
+      );
+
+      process.env.PI_APEX_UI = "0";
+      mock.emitEvent("pi:ui:changed");
+      const stripped = mock.latestTool("todo_write");
+      assert.equal(stripped.renderShell, undefined, "receipt stripped when disabled live");
+      assert.equal(stripped.renderCall, undefined, "call chrome stripped when disabled live");
+      assert.equal(stripped.renderResult, undefined, "result chrome stripped when disabled live");
+      assert.equal(mock.latestTool("todo_read").renderCall, undefined, "read chrome stripped too");
+
+      process.env.PI_APEX_UI = "1";
+      mock.emitEvent("pi:ui:changed");
+      const restored = mock.latestTool("todo_write");
+      assert.equal(typeof restored.renderCall, "function", "chrome restored on re-enable");
+      assert.equal(typeof restored.renderResult, "function", "result chrome restored on re-enable");
+
+      const readAfter = await mock.latestTool("todo_read").execute("r", {}, undefined, undefined, ctx);
+      assert.match(readAfter.content[0].text, /Surviving step/, "plan survives re-registration");
+    } finally {
+      if (previous === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previous;
+      mock.emit("session_shutdown", {}, ctx);
+    }
+  });
+
+  it("drops the agents pane to plain todos on a live switch to disabled", async () => {
+    resetDockAgents();
+    const mock = createMockPi("1");
+    const previous = process.env.PI_APEX_UI;
+    const notices: string[] = [];
+    let mountedComponent: any;
+    const tuiCtx = {
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        setWidget(_key: string, component: any) {
+          mountedComponent = component;
+        },
+        notify(message: string) {
+          notices.push(message);
+        },
+      },
+    } as any;
+    const renderMounted = (width = 80): string[] => {
+      const comp = typeof mountedComponent === "function" ? mountedComponent(null, theme) : mountedComponent;
+      return comp?.render ? comp.render(width) : [];
+    };
+    try {
+      mock.emit("session_start", { reason: "new" }, tuiCtx);
+      await mock.latestTool("todo_write").execute(
+        "call_1",
+        { todos: [{ content: "Plain fallback step", status: "in_progress" }] },
+        undefined,
+        undefined,
+        tuiCtx,
+      );
+      publishDockAgents([{ id: "task_1", agent: "scout", lifecycle: "running", createdAt: Date.now() }]);
+      await mock.commands.get("agents").handler("", tuiCtx);
+      assert.match(renderMounted().join("\n"), /scout/, "agents pane active while enabled");
+
+      process.env.PI_APEX_UI = "0";
+      mock.emitEvent("pi:ui:changed");
+      const plain = renderMounted();
+      assert.match(plain.join("\n"), /Plain fallback step/, "dock falls back to the plan");
+      assert.ok(plain.every((line: string) => !/\u001b\[/.test(line)), "no styled chrome while disabled");
+      assert.doesNotMatch(plain.join("\n"), /scout/, "agents pane cleared while disabled");
+
+      await mock.commands.get("agents").handler("", tuiCtx);
+      assert.match(notices[notices.length - 1], /inactive while Apex presentation is disabled/);
+      assert.match(renderMounted().join("\n"), /Plain fallback step/, "gated switch leaves the plain list");
+    } finally {
+      if (previous === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previous;
+      publishDockAgents([]);
+      mock.emit("session_shutdown", {}, tuiCtx);
+    }
   });
 });
 

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
   CLAUDE_INDICATOR_FRAME_COUNT,
   CLAUDE_WORKING_INTERVAL_MS,
-  CLAUDE_WORKING_MESSAGE,
+  CLAUDE_WORKING_MESSAGES,
   CLAUDE_WORKING_MOTIFS,
   CLAUDE_WORKING_WEIGHTS,
   RANDOM_INDICATOR_FRAME_COUNT,
@@ -86,17 +86,25 @@ describe("working indicator skins", () => {
     }
   });
 
-  it("chains motifs within a single run with a steady label", () => {
+  it("chains motifs within a single run with a per-run Claude verb label", () => {
     withSkin("claude", () => {
       const first = buildWorkingIndicator(stubCtx(), stubPi());
       assert.equal(first.frames.length, CLAUDE_INDICATOR_FRAME_COUNT);
       assert.equal(CLAUDE_INDICATOR_FRAME_COUNT, 128);
       assert.equal(first.intervalMs, 180);
       assert.equal(CLAUDE_WORKING_INTERVAL_MS, 180);
-      assert.equal(first.message, `${CLAUDE_WORKING_MESSAGE}...`);
-      // The label never varies across runs: no random pool pick.
-      const second = buildWorkingIndicator(stubCtx(), stubPi());
-      assert.equal(second.message, first.message);
+      // The label is one verb phrase per build, drawn from the Claude-code
+      // verb pool; the message is set once per run and never rotated mid-run.
+      assert.ok(
+        CLAUDE_WORKING_MESSAGES.includes(first.message.replace(/\.\.\.$/, "")),
+        `claude label drawn from CLAUDE_WORKING_MESSAGES, saw ${JSON.stringify(first.message)}`,
+      );
+      // The pool varies across runs instead of fixing on one phrase.
+      const seen = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        seen.add(buildWorkingIndicator(stubCtx(), stubPi()).message);
+      }
+      assert.ok(seen.size > 1, "claude label varies across runs");
       // Alternation within the run: more distinct glyphs than any one
       // motif holds (4), plus the bloom signature ✾ shows up.
       const distinct = new Set(first.frames);
@@ -218,5 +226,15 @@ describe("working indicator skins", () => {
         );
       });
     }
+  });
+
+  it("keeps the claude verb pool narrow, plain-text, and gerund-shaped", () => {
+    assert.ok(CLAUDE_WORKING_MESSAGES.length >= 8, "pool has room to vary");
+    assert.ok(CLAUDE_WORKING_MESSAGES.includes("Thinking"), "keeps the prior default");
+    for (const verb of CLAUDE_WORKING_MESSAGES) {
+      assert.match(verb, /^[A-Za-z]+ing$/, `plain ASCII gerund, saw ${JSON.stringify(verb)}`);
+      assert.doesNotMatch(verb, /[\u0080-\uFFFF]/, `no non-ASCII, saw ${JSON.stringify(verb)}`);
+    }
+    assert.equal(new Set(CLAUDE_WORKING_MESSAGES).size, CLAUDE_WORKING_MESSAGES.length, "no duplicates");
   });
 });

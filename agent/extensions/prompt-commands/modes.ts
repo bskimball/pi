@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
-import { MODES, isMode, readPreferences, restoreMode, savePreferences, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair } from "./mode-state.ts";
+import { MODES, isMode, readPreferences, restoreMode, savePreferences, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
 
 // Resolve the installed builder rather than maintaining a divergent copy of Pi's prompt.
@@ -18,6 +18,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   const availableTools = () => pi.getAllTools().map(tool => tool.name);
   const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools()));
   let modelBlocked = false;
+  // Set when a mode switch fails and its compensation is incomplete: input
+  // stays blocked until a later /mode succeeds. Deliberately separate from
+  // modelBlocked so /model and thinking selection cannot clear it.
+  let recoveryBlocked: string | false = false;
   const persist = (setDefault = false) => {
     pi.appendEntry("behavior-mode", structuredClone(state));
     const latest = readPreferences(preferencePath);
@@ -65,33 +69,115 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       if (!pair) return;
     }
     if (!idle(ctx)) return;
-    const previous = structuredClone(state);
-    const previousModel = current(ctx);
+    const nextFusion = pair ?? state.fusion;
+    if (mode === "fusion" && !nextFusion) {
+      ctx.ui.notify("Fusion sidekick configuration is unavailable.", "error");
+      return;
+    }
+    // Stage the full next state and every handle needed to restore coherent
+    // behavior. Nothing observable applies until the sequence below runs:
+    // announce (tool advertisement, sidekick parking, env) stays last.
+    const prevState = structuredClone(state);
+    const prevModel = current(ctx);
+    const prevActiveTools = [...pi.getActiveTools()];
+    // The prefs file must be readable before mutation: recovery rewrites our
+    // default from this snapshot, and an unreadable file aborts the switch.
+    let prevPrefs: Preferences;
+    try {
+      prevPrefs = readPreferences(preferencePath);
+    } catch (prefsError) {
+      ctx.ui.notify(`Mode preferences unreadable (${prefsError instanceof Error ? prefsError.message : String(prefsError)}); switch aborted before any change.`, "error");
+      return;
+    }
+    const nextState = structuredClone(state);
+    if (prevModel && !recoveryBlocked) nextState.models[nextState.mode] = structuredClone(prevModel);
+    if (!nextState.models[mode] && prevModel) nextState.models[mode] = structuredClone(prevModel);
+    nextState.mode = mode;
+    nextState.fusion = structuredClone(nextFusion);
+    const targetModel = mode === "fusion" ? nextFusion?.lead : nextState.models[mode];
+    let persisted = false;
+    let rollback: (() => Promise<void>) | undefined;
+    const prevBlocked = recoveryBlocked;
     changing = true;
     try {
-      if (previousModel) state.models[state.mode] = previousModel;
-      if (!state.models[mode] && previousModel) state.models[mode] = previousModel;
-      const fusion = pair ?? state.fusion;
-      await applyModel(ctx, mode === "fusion" ? fusion?.lead : state.models[mode]);
-      if (mode === "fusion" && fusion) {
-        const request: { fusion: FusionPair; error?: string; promise?: Promise<void> } = { fusion };
+      // Apply to a staged copy and record the actual (possibly clamped) Pi
+      // thinking level, so persisted state agrees with reality.
+      const stagedTarget = targetModel ? structuredClone(targetModel) : undefined;
+      await applyModel(ctx, stagedTarget);
+      if (stagedTarget) {
+        if (mode === "fusion" && nextState.fusion) nextState.fusion.lead.thinking = stagedTarget.thinking;
+        else if (nextState.models[mode]) nextState.models[mode]!.thinking = stagedTarget.thinking;
+      }
+      rollback = undefined;
+      if (mode === "fusion" && nextFusion) {
+        // Explicit handshake: the bus swallows listener exceptions, so a
+        // missing synchronous acknowledgement is itself a failure.
+        const request: { fusion: FusionPair; acknowledged?: boolean; error?: string; promise?: Promise<void>; rollback?: () => Promise<void> } = { fusion: structuredClone(nextState.fusion!) };
         pi.events.emit("pi:fusion:configure", request);
-        await request.promise;
+        if (!request.acknowledged) throw new Error("Fusion runtime did not acknowledge configuration. Retry or choose a replacement.");
+        rollback = request.rollback;
+        if (request.promise) await request.promise;
         if (request.error) throw new Error(request.error);
       }
-      state.mode = mode;
-      state.fusion = fusion;
+      state = nextState;
       applyModeTools(mode);
+      persist(true);
+      persisted = true;
       announce();
       modelBlocked = false;
-      persist(true);
+      recoveryBlocked = false;
       ctx.ui.setStatus("mode", labels[mode]);
       ctx.ui.notify(`Mode: ${labels[mode]}. Default for new sessions updated.`, "info");
     } catch (error) {
-      state = previous;
-      await applyModel(ctx, previousModel).catch(() => {});
-      announce();
-      ctx.ui.notify(String(error), "error");
+      const message = error instanceof Error ? error.message : String(error);
+      // Compensate in reverse order. Every step reports; none fail silently.
+      const failures: string[] = [];
+      try { await rollback?.(); }
+      catch (rollbackError) { failures.push(`sidekick rollback: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`); }
+      // Repair from the persisted desired lead, not the possibly
+      // half-applied actual model: current() may reflect a failed apply.
+      const repairTarget = prevState.mode === "fusion" ? prevState.fusion?.lead : prevState.models[prevState.mode];
+      try { await applyModel(ctx, repairTarget ? structuredClone(repairTarget) : (prevModel ? structuredClone(prevModel) : undefined)); }
+      catch (modelError) { failures.push(`model restore: ${modelError instanceof Error ? modelError.message : String(modelError)}`); }
+      try { pi.setActiveTools(prevActiveTools); }
+      catch (toolsError) { failures.push(`tool restore: ${toolsError instanceof Error ? toolsError.message : String(toolsError)}`); }
+      state = prevState;
+      try { announce(); }
+      catch (announceError) { failures.push(`announce: ${announceError instanceof Error ? announceError.message : String(announceError)}`); }
+      // Compensation branch entry so the session reflects restored reality.
+      // The prefs file saves atomically (tmp+rename), so it is either fully
+      // updated or untouched: rewrite our default only when our save landed,
+      // re-reading latest first to preserve unrelated concurrent changes.
+      try { pi.appendEntry("behavior-mode", structuredClone(prevState)); }
+      catch (entryError) { failures.push(`session entry: ${entryError instanceof Error ? entryError.message : String(entryError)}`); }
+      if (persisted) {
+        try {
+          const latest = readPreferences(preferencePath);
+          latest.mode = prevPrefs.mode;
+          if (prevPrefs.models[mode] !== undefined) latest.models[mode] = structuredClone(prevPrefs.models[mode]) as ModelChoice;
+          else delete latest.models[mode];
+          if (mode === "fusion") {
+            if (prevPrefs.fusion !== undefined) latest.fusion = structuredClone(prevPrefs.fusion);
+            else delete latest.fusion;
+          }
+          savePreferences(preferencePath, latest);
+        } catch (prefsError) { failures.push(`preferences restore: ${prefsError instanceof Error ? prefsError.message : String(prefsError)}`); }
+      }
+      // A preexisting block survives until a SUCCESSFUL switch, not merely a
+      // cleanly compensated failure.
+      if (failures.length) {
+        recoveryBlocked = `Mode switch to ${labels[mode]} failed (${message}) and recovery is incomplete: ${failures.join("; ")}. Retry /mode when ready.`;
+      } else if (prevBlocked) {
+        recoveryBlocked = prevBlocked;
+      } else {
+        recoveryBlocked = false;
+      }
+      try { ctx.ui.setStatus("mode", labels[prevState.mode]); } catch { /* cosmetic */ }
+      let note = `Mode switch to ${labels[mode]} failed (${message}); restored ${labels[prevState.mode]}.`;
+      if (typeof recoveryBlocked === "string") {
+        note = failures.length ? recoveryBlocked : `${note} Prior recovery block still in effect: ${recoveryBlocked}`;
+      }
+      ctx.ui.notify(note, "error");
     } finally { changing = false; }
   }
   pi.registerCommand("mode", {
@@ -144,12 +230,17 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   });
   pi.on("session_start", async (event, ctx) => {
     preferences = readPreferences(preferencePath);
+    recoveryBlocked = false;
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
     state = restoreMode(entries, preferences, fresh);
     changing = true;
     modelBlocked = state.mode === "fusion" && !state.fusion;
-    try { await applyModel(ctx, state.mode === "fusion" ? state.fusion?.lead : state.models[state.mode]); }
+    // Restore through a clone: applyModel records the actual (possibly
+    // clamped) Pi level on its input, which must not overwrite the stored
+    // desired choice that a later switch recovery repairs from.
+    const restoreChoice = state.mode === "fusion" ? state.fusion?.lead : state.models[state.mode];
+    try { await applyModel(ctx, restoreChoice ? structuredClone(restoreChoice) : undefined); }
     catch (error) { modelBlocked = true; ctx.ui.notify(String(error), "error"); }
     finally { changing = false; }
     applyModeTools(state.mode);
@@ -184,6 +275,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
   });
   pi.on("input", (_event, ctx) => {
+    if (recoveryBlocked) {
+      ctx.ui.notify(recoveryBlocked, "error");
+      return { action: "handled" as const };
+    }
     if (modelBlocked) {
       ctx.ui.notify("Selected model unavailable. Retry /mode or explicitly choose a replacement before continuing.", "error");
       return { action: "handled" as const };

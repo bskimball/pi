@@ -160,6 +160,12 @@ function registerBuiltin(
     },
   });
 
+  // Renderer slots snapshot at registration, so re-register on every live
+  // presentation switch. The execute closure, cwd cache, and theme capture
+  // live in this scope and survive re-registration; the SDK refresh keeps
+  // the current active set and only adds brand-new tool names, so hidden
+  // tools stay hidden.
+  function register(): void {
   pi.registerTool({
     name,
     label: base.label,
@@ -222,6 +228,9 @@ function registerBuiltin(
       },
     }),
   });
+  }
+  register();
+  pi.events.on("pi:ui:changed", () => register());
 }
 
 export function installBuiltinTools(pi: ExtensionAPI): void {
@@ -232,8 +241,8 @@ export function installBuiltinTools(pi: ExtensionAPI): void {
 /**
  * The session todo dock (tools, above-editor panel, alt+t / `/todos`, alt+a /
  * `/agents`) must be installed even under PI_APEX_UI=0. The dock keeps an
- * unstyled plain todo widget mounted in that mode; styled chrome and triggers
- * drop out.
+ * unstyled plain todo widget mounted in that mode; styled chrome drops out
+ * and the registered controls remain inactive until presentation is enabled.
  */
 export function installApexOwnedTools(pi: ExtensionAPI): void {
   installTodoTools(pi);

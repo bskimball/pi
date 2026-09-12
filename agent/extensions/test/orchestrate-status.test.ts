@@ -152,3 +152,374 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("mode switch failure after tool change restores prior tools, model, env, and prefs", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-recovery-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    const setModelCalls: any[] = [];
+    let failToolsOnce = false;
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit() {} },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { if (failToolsOnce) { failToolsOnce = false; throw new Error("tools unavailable"); } active = names; },
+      getThinkingLevel: () => "medium", setThinkingLevel() {},
+      setModel: async (model: any) => { setModelCalls.push(model); return true; },
+    };
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    await emit("session_start", { reason: "new" });
+    await commands.mode("pi", ctx);
+    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
+    failToolsOnce = true;
+    await commands.mode("apex", ctx);
+    assert.match(notices[notices.length - 1], /Mode switch to Apex failed.*restored Pi/);
+    assert.deepEqual(active, ["read", "write", "edit", "bash"], "prior Pi tool set restored");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "mode env restored");
+    const prompt = await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir } });
+    assert.match(prompt.systemPrompt, /^You are an expert coding assistant operating inside pi/, "still Pi prompt");
+    const lastEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
+    assert.equal(lastEntry.data.mode, "pi", "compensation entry reflects restored state");
+    assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi", "prefs default untouched");
+    assert.equal(await emit("input", { text: "go" }), undefined, "clean recovery does not block input");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed fusion configure runs sidekick rollback and restores the lead", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-rollback-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    const thinkingLevels: string[] = [];
+    const fusionHandlers: Array<(request: any) => void> = [];
+    let rollbackCalls = 0;
+    const pair = { lead: { provider: "configured", modelId: "lead", thinking: "high" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } };
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit(name: string, data: any) { if (name === "pi:fusion:configure") for (const fn of fusionHandlers) fn(data); }, on(name: string, fn: any) { if (name === "pi:fusion:configure") fusionHandlers.push(fn); } },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
+      getThinkingLevel: () => thinkingLevels[thinkingLevels.length - 1] ?? "medium",
+      setThinkingLevel(level: string) { thinkingLevels.push(level); },
+      setModel: async () => true,
+    };
+    // Fake task side of the handshake: acknowledge, attach rollback, then fail.
+    fusionHandlers.push((request: any) => {
+      request.acknowledged = true;
+      request.rollback = async () => { rollbackCalls += 1; };
+      request.promise = Promise.reject(new Error("sidekick down"));
+    });
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "apex", models: {}, fusion: pair } });
+    await emit("session_start", { reason: "resume" });
+    await commands.mode("fusion", ctx);
+    assert.equal(rollbackCalls, 1, "sidekick rollback ran");
+    assert.match(notices[notices.length - 1], /Mode switch to Fusion failed.*sidekick down.*restored Apex/);
+    assert.deepEqual(active, allTools, "prior Apex tool set restored");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex");
+    assert.equal(thinkingLevels[thinkingLevels.length - 1], "medium", "lead thinking restored");
+    const prompt = await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir } });
+    assert.equal(prompt.systemPrompt, "Apex base" + REGULAR_SYSTEM_BLOCK, "still Regular prompt");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("missing fusion acknowledgement fails without applying anything", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-handshake-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    let configureSeen = 0;
+    const pair = { lead: { provider: "configured", modelId: "lead", thinking: "high" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } };
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit(name: string) { if (name === "pi:fusion:configure") configureSeen += 1; }, on() {} },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
+      getThinkingLevel: () => "medium", setThinkingLevel() {},
+      setModel: async () => true,
+    };
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "apex", models: {}, fusion: pair } });
+    await emit("session_start", { reason: "resume" });
+    const before = [...active];
+    await commands.mode("fusion", ctx);
+    assert.equal(configureSeen, 1);
+    assert.match(notices[notices.length - 1], /did not acknowledge/);
+    assert.deepEqual(active, before, "tools untouched");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("incomplete recovery blocks input until a later /mode succeeds; /model cannot clear it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-blocked-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    let toolsBroken = false;
+    let failOnce = false;
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit() {} },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { if (toolsBroken || failOnce) { failOnce = false; throw new Error("tools unavailable"); } active = names; },
+      getThinkingLevel: () => "medium", setThinkingLevel() {},
+      setModel: async () => true,
+    };
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    await emit("session_start", { reason: "new" });
+    toolsBroken = true;
+    await commands.mode("pi", ctx);
+    assert.match(notices[notices.length - 1], /recovery is incomplete/);
+    assert.deepEqual(await emit("input", { text: "go" }), { action: "handled" }, "input blocked");
+    assert.match(notices[notices.length - 1], /recovery is incomplete/);
+    await emit("model_select", { model: { provider: "configured", id: "other" }, source: "user" });
+    assert.deepEqual(await emit("input", { text: "go" }), { action: "handled" }, "/model does not clear recovery block");
+    failOnce = true;
+    toolsBroken = false;
+    await commands.mode("pi", ctx);
+    assert.match(notices[notices.length - 1], /still in effect/, "cleanly compensated failure preserves the block");
+    assert.deepEqual(await emit("input", { text: "go" }), { action: "handled" }, "block still enforced");
+    await commands.mode("pi", ctx);
+    assert.equal(await emit("input", { text: "go" }), undefined, "successful /mode clears the block");
+    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("mode recovery repairs the persisted desired lead, not the half-applied actual model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-repair-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    const thinkingLevels: string[] = [];
+    const fusionHandlers: Array<(request: any) => void> = [];
+    const pair = { lead: { provider: "configured", modelId: "lead", thinking: "high" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } };
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit(name: string, data: any) { if (name === "pi:fusion:configure") for (const fn of fusionHandlers) fn(data); }, on(name: string, fn: any) { if (name === "pi:fusion:configure") fusionHandlers.push(fn); } },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
+      getThinkingLevel: () => "medium",
+      setThinkingLevel(level: string) { thinkingLevels.push(level); },
+      setModel: async () => true,
+    };
+    fusionHandlers.push((request: any) => {
+      request.acknowledged = true;
+      request.promise = Promise.reject(new Error("sidekick down"));
+    });
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    // Stored desired Apex lead wants "low"; the live session actually runs "medium".
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "apex", models: { apex: { provider: "configured", modelId: "lead", thinking: "low" } }, fusion: pair } });
+    await emit("session_start", { reason: "resume" });
+    await commands.mode("fusion", ctx);
+    assert.equal(thinkingLevels[thinkingLevels.length - 1], "low", "recovery repairs the desired lead, not the actual model");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("successful switch records the actual Pi thinking level in staged state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-clamp-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    const fusionHandlers: Array<(request: any) => void> = [];
+    // Pair asks for "high" but Pi clamps to "medium" (getThinkingLevel).
+    const pair = { lead: { provider: "configured", modelId: "lead", thinking: "high" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } };
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit(name: string, data: any) { if (name === "pi:fusion:configure") for (const fn of fusionHandlers) fn(data); }, on(name: string, fn: any) { if (name === "pi:fusion:configure") fusionHandlers.push(fn); } },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
+      getThinkingLevel: () => "medium",
+      setThinkingLevel() {},
+      setModel: async () => true,
+    };
+    fusionHandlers.push((request: any) => { request.acknowledged = true; request.promise = Promise.resolve(); });
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "apex", models: {}, fusion: pair } });
+    await emit("session_start", { reason: "resume" });
+    await commands.mode("fusion", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
+    const lastEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
+    assert.equal(lastEntry.data.fusion.lead.thinking, "medium", "persisted lead matches actual clamped level");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unreadable mode preferences abort the switch before any change", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-modes-prefs-"));
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, sub: process.env.PI_SUBAGENT, mode: process.env.PI_BEHAVIOR_MODE };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const entries: any[] = [];
+    let active: string[] = [];
+    const allTools = ["read", "write", "edit", "bash", "task_start", "task"];
+    const notices: string[] = [];
+    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true,
+      model: { provider: "configured", id: "lead" },
+      modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit() {} },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => allTools.map(name => ({ name })),
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
+      getThinkingLevel: () => "medium", setThinkingLevel() {},
+      setModel: async () => true,
+    };
+    promptCommands(pi);
+    const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
+    await emit("session_start", { reason: "new" });
+    writeFileSync(join(dir, "mode-settings.json"), "{broken");
+    const before = [...active];
+    await commands.mode("pi", ctx);
+    assert.match(notices[notices.length - 1], /preferences unreadable/);
+    assert.deepEqual(active, before, "tools untouched");
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex", "env untouched");
+  } finally {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

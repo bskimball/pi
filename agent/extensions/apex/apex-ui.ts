@@ -80,7 +80,35 @@ export const CLAUDE_WORKING_MOTIFS: ClaudeWorkingMotif[] = [
 ];
 export const CLAUDE_INDICATOR_FRAME_COUNT = 128;
 export const CLAUDE_WORKING_INTERVAL_MS = 180;
-export const CLAUDE_WORKING_MESSAGE = "Thinking";
+// Subset of Claude Code 2.1.42 verbs, independently documented at
+// https://codingcocoon.com/posts/claude-code-all-spinner-verbs/
+// Pick once per run; Pi owns the animation clock.
+export const CLAUDE_WORKING_MESSAGES = [
+  "Thinking",
+  "Cogitating",
+  "Pondering",
+  "Ruminating",
+  "Musing",
+  "Mulling",
+  "Deliberating",
+  "Contemplating",
+  "Ideating",
+  "Noodling",
+  "Puzzling",
+  "Tinkering",
+  "Brewing",
+  "Percolating",
+  "Simmering",
+  "Concocting",
+  "Synthesizing",
+  "Orchestrating",
+  "Spelunking",
+  "Wrangling",
+];
+
+function claudeWorkingMessage(): string {
+  return CLAUDE_WORKING_MESSAGES[Math.floor(Math.random() * CLAUDE_WORKING_MESSAGES.length)];
+}
 
 // Brightness tracks glyph weight, not frame position: motifs peak wherever
 // their heaviest glyph sits. Weights ascend with codepoint within a family.
@@ -255,7 +283,7 @@ export function buildWorkingIndicator(
     return {
       frames: claudeWorkingFrames(ctx, leadTone),
       intervalMs: CLAUDE_WORKING_INTERVAL_MS,
-      message: ctx.ui.theme.fg("dim", `${CLAUDE_WORKING_MESSAGE}...`),
+      message: ctx.ui.theme.fg("dim", `${claudeWorkingMessage()}...`),
     };
   }
   return {
@@ -319,7 +347,10 @@ export default function (pi: ExtensionAPI) {
   // not reuse the same pseudo-random loop. This is event-driven only; Pi owns
   // the animation clock.
   };
-  installPresentation();
+  // A disabled startup installs no presentation wrap: receipts, render
+  // safety, and layout apply on the first live switch to an enabled UI.
+  // Crash containment for the process itself stays with crash-logger.
+  if (presentationEnabled()) installPresentation();
   pi.on("agent_start", (_event, ctx) => {
     if (presentationEnabled()) applyRandomWorkingIndicator(pi, ctx);
   });

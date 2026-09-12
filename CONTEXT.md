@@ -64,7 +64,13 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 | `alt+a` | Toggle Todos / Agents when chrome is on. |
 | `/agents` | Switch to Agents. |
 | Last live worker settles | Drop the Agents tab; clear the dock if no todo list remains. |
-| `PI_APEX_UI=0` | Plain todo list only. No tabs, no `alt+t` / `alt+a` / `/todos` / `/agents`. |
+| `PI_APEX_UI=0` | Plain todo list only. No tabs; `alt+t` / `alt+a` / `/todos` / `/agents` stay registered but inactive, so a later live switch can enable them. |
+
+## Behavior-mode transitions
+
+The behavior-mode transition module in `prompt-commands/modes.ts` owns staged model/thinking selection, active tools, session choices, and global defaults. It waits for the task-owned Fusion configuration acknowledgement before persistence and announces the new mode last. Failed transitions restore the prior selection; incomplete recovery blocks input until a successful `/mode` switch. `/model` alone cannot clear that recovery block.
+
+Presentation remains independent: `pi:ui:changed` lets each owner update its own presentation. Apex refreshes its registered todo/bash/write receipt definitions without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset; Pi still owns animation timing.
 
 ## Task extension
 
@@ -77,11 +83,13 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 
 Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
+The **Fusion sidekick lifecycle module** (`task/runtime/fusion-lifecycle.ts`) owns the configured pair, designated-worker reuse, configuration acknowledgement/rollback, parking, parent-session isolation, and tool gates. `async-task.ts` retains process spawn and RPC framing; `worker-runtime.ts` enforces Fusion's idle-timeout exemption through every generation/event path. Rejected prompts settle; unknown prompt acceptance requires abort/closure before releasing the single-writer gate. Saved transcripts are parent-scoped; a missing saved file is an error, never a silent context reset.
+
 ### `/dispatch <request>`
 
 Command for steering the active parent orchestrator with concurrent requests or priority shifts while workers run:
 
-- **Target & Scope**: Directs additional work to the **same orchestrator** session. The command itself assigns no worker; the orchestrator routes the request under the active delegation policy (Regular inline-by-default vs strict-orchestrator specialist-first) — delegating via `task_start` with the correct specialist (artisan for visual/UI, machinist for code, scribe for prose) when it outgrows trivial glue. It preserves active work, steers existing workers, or delegates in isolated worktrees. Substantial inline work ahead of running workers is out of scope. Ordinary chat messages remain unchanged.
+- **Target & Scope**: Directs additional work to the **same orchestrator** session. The command itself assigns no worker; the orchestrator routes the request under the active delegation policy (Apex inline-by-default, Apex Orchestrate specialist-first, Fusion through its designated sidekick) — delegating via `task_start` with the correct specialist (artisan for visual/UI, machinist for code, scribe for prose) when it outgrows trivial glue. It preserves active work, steers existing workers, or delegates in isolated worktrees. Substantial inline work ahead of running workers is out of scope. Ordinary chat messages remain unchanged.
 - **Recording & Delivery**: Records an `async-task-dispatch` entry in the session log and requests steering via hidden custom message (`deliverAs: "steer"`, `triggerTurn: true`).
 - **Interruption Semantics**:
   - Active `task_wait` yields immediately on dispatch without aborting the worker and without applying a timeout or cooldown. The orchestrator absorbs the dispatch and can reconnect later via `task_wait`.

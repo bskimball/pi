@@ -106,6 +106,11 @@ export interface RuntimeWorker extends CapWorker {
   idleTimer?: NodeJS.Timeout;
   hardTimer?: NodeJS.Timeout;
   abortTimer?: NodeJS.Timeout;
+  /**
+   * Persistent workers (Fusion sidekick) track phase but never arm an idle
+   * kill timer. Defaults to normal bounded-idle behavior when unset.
+   */
+  disableIdleTimeout?: boolean;
   fallbackEpoch: number;
   fallbackInProgress: boolean;
   fallbackAwaitingAgentStart: boolean;
@@ -374,6 +379,16 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
       worker.lifecycle === "starting"
     ) {
       worker.phase = "none";
+      return;
+    }
+    if (worker.disableIdleTimeout) {
+      // Persistent workers track phase for status without ever arming an
+      // idle kill timer. Every entry point (startGeneration, handleEvent,
+      // steering) funnels through here, so the exemption cannot be bypassed.
+      if (worker.lifecycle === "retrying") worker.phase = "retry";
+      else if (worker.lifecycle === "compacting") worker.phase = "compacting";
+      else if (worker.lifecycle === "aborting") worker.phase = "none";
+      else worker.phase = worker.ledger.hasActiveTools() ? "tool" : "model";
       return;
     }
     if (worker.lifecycle === "retrying" || worker.lifecycle === "compacting") {

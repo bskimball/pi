@@ -314,6 +314,34 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
+  it("exempts persistent workers from idle kill timers while tracking phase", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker({ disableIdleTimeout: true });
+    runtime.armIdle(item);
+    assert.equal(item.idleTimer, undefined);
+    assert.equal(item.phase, "model");
+    item.ledger.start("bash", "test", "call");
+    runtime.armIdle(item);
+    assert.equal(item.idleTimer, undefined);
+    assert.equal(item.phase, "tool");
+    item.ledger.end("call");
+    // Every runtime entry point funnels through armIdle: generation start
+    // and event handling must not arm a timer behind the flag either.
+    runtime.startGeneration(item);
+    assert.equal(item.idleTimer, undefined);
+    assert.equal(item.lifecycle, "running");
+    runtime.handleEvent(item, { type: "turn_start" }, hooks());
+    assert.equal(item.idleTimer, undefined);
+    assert.equal(item.turns, 1);
+    runtime.handleEvent(item, { type: "agent_end" }, hooks());
+    assert.equal(item.idleTimer, undefined);
+    // Default policy is unchanged: normal workers still arm.
+    const normal = worker();
+    runtime.armIdle(normal);
+    assert.notEqual(normal.idleTimer, undefined);
+    runtime.clearIdle(normal);
+  });
+
   it("derives idle phase from the activity ledger", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker();

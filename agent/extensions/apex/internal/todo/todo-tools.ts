@@ -3,8 +3,13 @@
 //
 // Presentation is pure and lives in ./todo-view.ts. Everything here is
 // registration and state: no render timers, no pi-tui Text/Markdown/Container.
-// Tool registration and execution are unconditional; only the receipt and
-// widget chrome pass through the Apex presentation gate.
+// Todo panel controls are always registered: the SDK offers no unregister,
+// so install-time gating would leave a live off->on switch without commands
+// and a live on->off switch with handlers still executing. The handlers
+// below gate on the live presentation flag instead. Tool registration and
+// execution are unconditional; receipts and widget chrome follow the
+// presentation gate, and tool renderers are re-registered on live switches
+// because renderer slots snapshot at registration time.
 
 import { Type } from "typebox";
 import type {
@@ -373,6 +378,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   function togglePanel(ctx: ExtensionContext): void {
     currentCtx = ctx;
+    if (!presentationEnabled) {
+      ctx.ui.notify("Todo panel controls are inactive while Apex presentation is disabled.", "info");
+      return;
+    }
     if (!dockHasSurface()) {
       ctx.ui.notify("No todo list for this session yet.", "info");
       return;
@@ -383,6 +392,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   function switchPane(ctx: ExtensionContext, pane: DockPane): void {
     currentCtx = ctx;
+    if (!presentationEnabled) {
+      ctx.ui.notify("Todo panel controls are inactive while Apex presentation is disabled.", "info");
+      return;
+    }
     if (pane === "agents" && liveAgents.length === 0) {
       ctx.ui.notify("No live agents.", "info");
       return;
@@ -405,7 +418,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
     if (currentCtx) renderPanel();
   });
 
-  if (presentationEnabled) {
+  // Always registered (no SDK unregister exists); togglePanel/switchPane
+  // refuse while presentation is disabled, keeping the plain widget mounted.
+  {
     pi.registerShortcut("alt+t", {
       description: "Collapse or expand the todo panel",
       handler: (ctx) => togglePanel(ctx),
@@ -427,6 +442,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   pi.events.on("pi:ui:changed", () => {
     presentationEnabled = apexPresentationEnabled();
+    // Disabled mode is a plain todo list: never leave the dock on agents.
+    if (!presentationEnabled && dockPane === "agents") dockPane = "todos";
+    registerTodoWriteTool();
+    registerTodoReadTool();
     renderPanel();
   });
   pi.events.on("pi:modes:changed", () => renderPanel());
@@ -464,6 +483,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
     unsubscribeFleet();
   });
 
+  // Renderer slots snapshot at registration, so both tools re-register on
+  // every live presentation switch (see pi:ui:changed above). The closures
+  // below share this scope's plan state, which survives re-registration.
+  function registerTodoWriteTool(): void {
   pi.registerTool({
     name: "todo_write",
     label: "Todo Write",
@@ -677,10 +700,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return textResult(summarize(current), false, { view: current });
     },
   });
+  }
 
   // The plan is otherwise write-only: after compaction the lead agent has no way
   // to recover what it committed to, which makes the list easy to abandon
   // mid-task. This makes it durable state that can be read back.
+  function registerTodoReadTool(): void {
   pi.registerTool({
     name: "todo_read",
     label: "Todo Read",
@@ -769,4 +794,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return textResult(serializeForRead(current), false, { view: current });
     },
   });
+  }
+
+  registerTodoWriteTool();
+  registerTodoReadTool();
 }
