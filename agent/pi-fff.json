@@ -1,0 +1,4 @@
+{
+  "$schema": "./npm/node_modules/@ff-labs/pi-fff/pi-fff.schema.json",
+  "mode": "override"
+}
