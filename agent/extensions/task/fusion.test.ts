@@ -270,11 +270,13 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its designated sidekick.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its designated sidekick.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined);
-  assert.equal(h.lifecycle.gateLead("edit", undefined), "Wait for or stop the Fusion sidekick before taking over workspace writes.");
+  assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed while worker is live");
+  assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed while worker is live");
   settled.lifecycle = "settled";
   live.lifecycle = "settled";
   foreign.lifecycle = "settled";
-  assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "settled sidekick releases the write gate");
+  assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed after settle");
+  assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed after settle");
 });
 
 test("FusionLifecycle configure applies sequentially and rolls back through one path", async () => {

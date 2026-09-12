@@ -519,6 +519,9 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
 
   /**
    * Lead-side gates while in Fusion mode. Returns the block reason, if any.
+   * The lead retains full tools (edit, write, bash, powershell) to work in
+   * parallel with the sidekick; parallelism is governed by brief-scoped path
+   * ownership rather than runtime tool blocks.
    */
   gateLead(toolName: string, inputId: string | undefined): string | undefined {
     if (
@@ -535,20 +538,6 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       const designated = this.find();
       if (!designated || inputId !== designated.id) {
         return "Fusion task operations are scoped to its designated sidekick.";
-      }
-    }
-    if (
-      toolName === "edit" ||
-      toolName === "write" ||
-      toolName === "bash" ||
-      toolName === "powershell"
-    ) {
-      const worker = this.find();
-      if (
-        worker &&
-        !["settled", "failed", "closed"].includes(worker.lifecycle)
-      ) {
-        return "Wait for or stop the Fusion sidekick before taking over workspace writes.";
       }
     }
     return undefined;
