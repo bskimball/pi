@@ -44,10 +44,11 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.equal(chain.isError, true);
     const busy = { busy: true }; bus.get("pi:modes:query-busy")!(busy); assert.equal(busy.busy, true);
     const idle = { busy: false }; bus.get("pi:modes:query-busy")!(idle); assert.equal(idle.busy, false);
-    for (const toolName of ["task", "task_chain", "task_rebind", "intercom"]) {
+    for (const toolName of ["task", "task_chain", "task_rebind"]) {
       const result = handlers.get("tool_call")!.map(fn => fn({ toolName, input: {} })).find(Boolean);
       assert.equal(result.block, true);
     }
+    assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "intercom", input: {} })).find(Boolean), undefined);
   } finally {
     for (const fn of handlers.get("session_shutdown") ?? []) fn({}, {});
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;

@@ -3565,11 +3565,11 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   pi.on("tool_call", event => {
     if (process.env.PI_FUSION_SIDEKICK === "1" && (event.toolName.startsWith("task") || event.toolName === "todo_write" || event.toolName === "intercom")) {
-      return { block: true, reason: "Fusion sidekick cannot dispatch agents or write the lead's plan." };
+      return { block: true, reason: "Fusion sidekick cannot dispatch agents, write the lead's plan, or coordinate peer sessions." };
     }
     if (behaviorMode !== "fusion") return;
     const worker = fusionWorker();
-    if (event.toolName === "task" || event.toolName === "task_chain" || event.toolName === "task_rebind" || event.toolName === "intercom") return { block: true, reason: "Fusion permits only its designated sidekick." };
+    if (event.toolName === "task" || event.toolName === "task_chain" || event.toolName === "task_rebind") return { block: true, reason: "Fusion permits only its designated sidekick." };
     if (event.toolName.startsWith("task_") && event.toolName !== "task_start" && event.toolName !== "task_list") {
       const input = event.input as { id?: string };
       if (!worker || input.id !== worker.id) return { block: true, reason: "Fusion task operations are scoped to its designated sidekick." };
