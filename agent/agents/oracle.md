@@ -4,9 +4,8 @@ description: Deep independent code reviewer and debugger for difficult bugs, con
 model: local-proxy/gpt-6-astra
 fallbackModels:
   - local-proxy/grok-4.6
-  - local-proxy/claude-fable-5
   - local-proxy/gemini-pro-agent
-  - 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
+  - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp, web_search, fetch_content, get_search_content
 inheritSkills: true
