@@ -15,7 +15,11 @@ observatory/
 
 ## HAL skin
 
-`/ui hal` uses the same landing inventory and keyboard navigation with a static geometric HAL wordmark and an `OPERATIONS CONSOLE` label instead of the shark and star field. Below 20 columns it reduces to plain `HAL`. The wordmark stays neutral so Pi's shared theme roles never confuse identity crimson with status or ordinary message labels. `hal-dark` supplies cool near-black surfaces, cyan emphasis, and semantic green/amber/red. No Work source or desktop runtime is imported.
+`/ui hal` uses the same landing inventory and keyboard navigation with a crimson HAL wordmark, a small crimson orb above it, and an `OPERATIONS CONSOLE` label instead of the shark and star field. Below 20 columns it reduces to plain `HAL`. This deliberately mirrors the HAL Desktop app: desktop brand crimson `#9e1b32`, the titlebar's 2:1 solid-to-translucent horizontal banding, and the `HalHeroOrb` crimson-core/cyan-instrument language (crimson core, cyan frame — never an eye). No Work source or desktop runtime is imported.
+
+- The wordmark is 6 rows × 19 columns of block glyphs striped per-row via `HAL_WORDMARK_KEYS` — the terminal translation of the desktop stripe ratio at row granularity. The two `brandDim` rows fall below the letterform crossbar so the banding never cuts the crossbar itself; row count, `HAL_WORDMARK_WIDTH`, and the key tuple must change together.
+- The orb is 3 rows × 8 columns: a solid `brand` core band with a cyan `accent` rim and limbs.
+- Why identity crimson is safe here: it lives only on dedicated `brand`/`brandDim` theme keys in `hal-dark.json` (`brandDim` ≈ the translucent desktop stripe composited over the near-black field), never on `error`/`red`/`warning`. Status semantics stay unambiguous because the two vocabularies share no keys.
 
 Preview with the real HAL theme and the same bounds checks:
 

@@ -18,10 +18,14 @@
     "green": "#69c39a",
     "amber": "#e4b75e",
     "red": "#ef766f",
-    "errorSurface": "#29191e"
+    "errorSurface": "#29191e",
+    "brand": "#9e1b32",
+    "brandDim": "#3a1019"
   },
   "colors": {
     "accent": "cyan",
+    "brand": "brand",
+    "brandDim": "brandDim",
     "border": "border",
     "borderAccent": "cyanDim",
     "borderMuted": "borderMuted",

@@ -399,6 +399,47 @@ const SHARK_COMPACT_KEYS: readonly (string | null)[] = [
 const SHARK_MINIMAL = "▴";
 
 /**
+ * HAL wordmark: block-capitals HAL, 6 rows × 19 columns, every row exactly
+ * 19 cells wide. Striping is per-row colour, not gradient fill: rows repeat
+ * brand, brand, brandDim to reproduce the desktop titlebar's 2:1
+ * solid-to-translucent banding at row granularity. Glyphs are narrow BMP
+ * blocks only; HAL_WORDMARK_WIDTH must stay equal to the real visible
+ * width or indent()/center() mis-centers the composition.
+ */
+const HAL_WORDMARK: readonly string[] = [
+  "█   █   ███   █    ",
+  "█   █  █   █  █    ",
+  "█████  █████  █    ",
+  "█   █  █   █  █    ",
+  "█   █  █   █  █    ",
+  "█   █  █   █  █████",
+];
+const HAL_WORDMARK_WIDTH = 19;
+const HAL_WORDMARK_KEYS: readonly [string, string, string, string, string, string] = [
+  "brand",
+  "brand",
+  "brand",
+  "brandDim",
+  "brand",
+  "brandDim",
+];
+
+/**
+ * HAL orb: the terminal analogue of the desktop HalHeroOrb, 3 rows × 8
+ * columns. A solid crimson core band (no stroke, no ring, no gap — never
+ * an eye) with a cyan instrument frame: cyan top/bottom rims and cyan
+ * limb cells closing the middle row. Every glyph is narrow BMP.
+ */
+const HAL_ORB_WIDTH = 8;
+function halOrb(fg: Fg): string[] {
+  return [
+    fg("accent", " ▄████▄ "),
+    fg("accent", "█") + fg("brand", "██████") + fg("accent", "█"),
+    fg("accent", " ▀████▀ "),
+  ];
+}
+
+/**
  * Leading marker and filled glyph for the focused constellation entry. The
  * pointer is U+25B8 rather than the composer's `❯`: it is unambiguously
  * single-cell, so the two-column pointer gutter measures the same whether the
@@ -488,14 +529,8 @@ function lateralLine(art: string, fg: Fg): string {
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
   if (activeSkinName() === "hal") {
     if (width < MINIMAL_MIN) return { rows: [fg("text", "HAL")], blockWidth: 3 };
-    const rows = [
-      "█   █   ███   █    ",
-      "█   █  █   █  █    ",
-      "█████  █████  █    ",
-      "█   █  █   █  █    ",
-      "█   █  █   █  █████",
-    ];
-    return { rows: rows.map(row => fg("text", row)), blockWidth: 19 };
+    const rows = HAL_WORDMARK.map((row, index) => fg(HAL_WORDMARK_KEYS[index] ?? "brand", row));
+    return { rows, blockWidth: HAL_WORDMARK_WIDTH };
   }
   if (width < MINIMAL_MIN) {
     return { rows: [fg("accent", SHARK_MINIMAL)], blockWidth: 1 };
@@ -957,10 +992,15 @@ export function renderObservatory(
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
 
-  // HAL uses a quiet instrument label in place of the Apex star field.
+  // HAL uses a quiet instrument label in place of the Apex star field,
+  // with the crimson orb riding directly above the striped wordmark.
+  // The label stays: the skin test pins it at width >= 20, and the signal
+  // line below the mark already carries the workspace state, so the label
+  // reads as console chrome rather than duplicating it.
   const hal = activeSkinName() === "hal";
   if (hal && inner >= MINIMAL_MIN) {
     lines.push(center(fg("dim", "OPERATIONS CONSOLE"), inner));
+    for (const row of halOrb(fg)) lines.push(indent(row, HAL_ORB_WIDTH, inner));
   }
   // Dense fixed chrome keeps the inventory inside the line budget.
   if (!hal && inner >= MINIMAL_MIN) {

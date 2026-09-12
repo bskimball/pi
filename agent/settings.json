@@ -21,7 +21,7 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "claude-dark",
+  "theme": "hal-dark",
   "tuiMode": "fullscreen",
   "enabledModels": [
     "local-proxy/*",
