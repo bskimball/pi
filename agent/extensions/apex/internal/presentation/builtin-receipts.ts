@@ -26,12 +26,29 @@ import {
 
 export const BUILTIN_READ_TOOL = "read";
 export const BUILTIN_EDIT_TOOL = "edit";
+export const BUILTIN_GREP_TOOL = "grep";
+export const BUILTIN_LS_TOOL = "ls";
 
 type PathArgs = {
   path?: string | null;
   offset?: number;
   limit?: number;
   edits?: unknown[];
+};
+
+type GrepArgs = {
+  pattern?: string;
+  path?: string | null;
+  glob?: string;
+  ignoreCase?: boolean;
+  literal?: boolean;
+  context?: number;
+  limit?: number;
+};
+
+type LsArgs = {
+  path?: string | null;
+  limit?: number;
 };
 
 type ReceiptTheme = {
@@ -160,11 +177,142 @@ export const builtinEditReceiptRenderers = {
   },
 };
 
+function finiteInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.floor(value)
+    : undefined;
+}
+
+function resultDetails(result: any): Record<string, unknown> {
+  return result?.details && typeof result.details === "object"
+    ? (result.details as Record<string, unknown>)
+    : {};
+}
+
+/** Counts above ~9 digits stay bounded: fall back to a plain token. */
+function boundedCount(value: number | undefined): number | undefined {
+  if (value === undefined || value < 0 || value > 999_999_999) return undefined;
+  return value;
+}
+
+/**
+ * Terse stats signal for Pi's TruncationResult details object. Returns ""
+ * when truncation is absent, malformed, or did not occur. Never throws on
+ * unexpected shapes: details is `any` at runtime.
+ */
+function truncationToken(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "";
+  const info = raw as Record<string, unknown>;
+  if (info.truncated !== true) return "";
+  if (info.truncatedBy === "lines") {
+    const total = boundedCount(finiteInt(info.totalLines));
+    return total !== undefined ? `truncated ${total} lines` : "truncated";
+  }
+  if (info.truncatedBy === "bytes") {
+    const total = boundedCount(finiteInt(info.totalBytes));
+    return total !== undefined ? `truncated ${total} bytes` : "truncated";
+  }
+  return "truncated";
+}
+
+/**
+ * Compact header for content greps:
+ * `pattern [path] [glob] [ignore-case] [literal] [ctx N] [limit N]`
+ */
+export function builtinGrepReceiptArg(
+  args: GrepArgs | undefined,
+  budget: number,
+): string {
+  const pattern = cleanInline(args?.pattern, 80);
+  const path = cleanInline(args?.path ?? "", 80).replace(/\\/g, "/");
+  const glob = cleanInline(args?.glob ?? "", 80);
+
+  const extras: string[] = [];
+  if (args?.ignoreCase === true) extras.push("ignore-case");
+  if (args?.literal === true) extras.push("literal");
+  const context = finiteInt(args?.context);
+  if (context !== undefined && context > 0) extras.push(`ctx ${context}`);
+  const limit = finiteInt(args?.limit);
+  if (limit !== undefined) extras.push(`limit ${limit}`);
+
+  const parts = [pattern || "grep", path, glob, extras.join(" ")].filter(
+    Boolean,
+  );
+  return cleanInline(parts.join(" "), Math.max(8, budget));
+}
+
+/** Compact header for directory listings: `path [limit N]`. */
+export function builtinLsReceiptArg(
+  args: LsArgs | undefined,
+  budget: number,
+): string {
+  const rawPath =
+    typeof args?.path === "string" ? cleanInline(args.path, 240) : "";
+  const path = rawPath ? shortenPath(rawPath, Math.max(8, budget)) : ".";
+  const limit = finiteInt(args?.limit);
+  const text = limit !== undefined ? `${path} limit ${limit}` : path;
+  return cleanInline(text, Math.max(8, budget));
+}
+
+export const builtinGrepReceiptRenderers = toolRenderers<GrepArgs>({
+  surface: BUILTIN_GREP_TOOL,
+  title: BUILTIN_GREP_TOOL,
+  arg: builtinGrepReceiptArg,
+  stats(result) {
+    const details = resultDetails(result);
+    const parts: string[] = [];
+    const matchLimit = finiteInt(details.matchLimitReached);
+    if (matchLimit !== undefined) parts.push(`limit ${matchLimit}`);
+    if (details.linesTruncated === true) parts.push("truncated");
+    const signal = truncationToken(details.truncation);
+    if (signal && !parts.includes(signal)) {
+      // A specific signal supersedes the generic flag; never repeat it.
+      const generic = signal === "truncated" ? -1 : parts.indexOf("truncated");
+      if (generic >= 0) parts.splice(generic, 1);
+      parts.push(signal);
+    }
+    return parts.join(" · ");
+  },
+  preview(output) {
+    return output ? boundedOutput(output, 3, 1200) : [];
+  },
+  body(output) {
+    return output ? boundedOutput(output, 80) : [];
+  },
+});
+
+export const builtinLsReceiptRenderers = toolRenderers<LsArgs>({
+  surface: BUILTIN_LS_TOOL,
+  title: BUILTIN_LS_TOOL,
+  arg: builtinLsReceiptArg,
+  stats(result) {
+    const details = resultDetails(result);
+    const parts: string[] = [];
+    const entryLimit = finiteInt(details.entryLimitReached);
+    if (entryLimit !== undefined) parts.push(`limit ${entryLimit}`);
+    const signal = truncationToken(details.truncation);
+    if (signal && !parts.includes(signal)) parts.push(signal);
+    return parts.join(" · ");
+  },
+  preview(output) {
+    return output ? boundedOutput(output, 3, 1200) : [];
+  },
+  body(output) {
+    return output ? boundedOutput(output, 80) : [];
+  },
+});
+
 export function installBuiltinReceipts(): void {
   registerHeadlessReceipt(BUILTIN_READ_TOOL, builtinReadReceiptRenderers, {
     overrideOwned: true,
   });
   registerHeadlessReceipt(BUILTIN_EDIT_TOOL, builtinEditReceiptRenderers, {
+    overrideOwned: true,
+  });
+  registerHeadlessReceipt(BUILTIN_GREP_TOOL, builtinGrepReceiptRenderers, {
+    overrideOwned: true,
+  });
+  registerHeadlessReceipt(BUILTIN_LS_TOOL, builtinLsReceiptRenderers, {
     overrideOwned: true,
   });
   installHeadlessReceipts();
