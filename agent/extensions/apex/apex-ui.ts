@@ -27,7 +27,10 @@ import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installSkillInvocationChrome } from "./internal/presentation/skill-invocation.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
-import { composerPromptGlyph } from "./internal/presentation/skin.ts";
+import {
+  activeSkinName,
+  composerPromptGlyph,
+} from "./internal/presentation/skin.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import {
   WidthText,
@@ -55,12 +58,26 @@ import {
 } from "./observatory/observatory-orb.ts";
 import { runFeaturedExtensionCommand } from "./internal/runtime/featured-commands.ts";
 
-const RANDOM_INDICATOR_FRAME_COUNT = 256;
-const RANDOM_INDICATOR_INTERVAL_MS = 120;
+export const RANDOM_INDICATOR_FRAME_COUNT = 256;
+export const RANDOM_INDICATOR_INTERVAL_MS = 120;
+
+// Claude skin breathes through a star weight ramp (these dingbats are all
+// Extended_Pictographic-free, so the emoji font never badges them).
+export const CLAUDE_WORKING_GLYPHS = ["\u2736", "\u273b", "\u273d", "\u273a", "\u273d", "\u273b"];
+export const CLAUDE_WORKING_INTERVAL_MS = 180;
+export const CLAUDE_WORKING_MESSAGE = "Thinking";
+
+// Brightness tracks glyph weight, mirroring the apex braille trail decay:
+// the heaviest pair carries the thinking hue, the rest fall off.
+export function claudeWorkingToneAt(index: number, leadTone: string): string {
+  if (index === 2 || index === 3) return leadTone;
+  if (index === 1 || index === 4) return "muted";
+  return "dim";
+}
 
 // One message is picked at random per run. The indicator is event-driven only:
 // no extension-owned timer rewrites it mid-run.
-const WORKING_MESSAGES = [
+export const WORKING_MESSAGES = [
   "Thinking through it",
   "Tracing the next move",
   "Exploring the code",
@@ -175,22 +192,48 @@ function randomWorkingFrames(ctx: ExtensionContext, leadTone: string): string[] 
   return frames;
 }
 
+export function resolveWorkingLeadTone(pi: ExtensionAPI): string {
+  try {
+    return THINKING_TONES[String(pi.getThinkingLevel())] ?? "accent";
+  } catch {
+    // Keep the default accent hue.
+    return "accent";
+  }
+}
+
+export function buildWorkingIndicator(
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+): { frames: string[]; intervalMs: number; message: string } {
+  const leadTone = resolveWorkingLeadTone(pi);
+  // Skin is read here at call time so a live /ui switch applies at once.
+  if (activeSkinName() === "claude") {
+    return {
+      frames: CLAUDE_WORKING_GLYPHS.map((glyph, index) =>
+        ctx.ui.theme.fg(claudeWorkingToneAt(index, leadTone) as any, glyph),
+      ),
+      intervalMs: CLAUDE_WORKING_INTERVAL_MS,
+      message: ctx.ui.theme.fg("dim", `${CLAUDE_WORKING_MESSAGE}...`),
+    };
+  }
+  return {
+    frames: randomWorkingFrames(ctx, leadTone),
+    intervalMs: RANDOM_INDICATOR_INTERVAL_MS,
+    message: ctx.ui.theme.fg("dim", `${workingMessage()}...`),
+  };
+}
+
 function applyRandomWorkingIndicator(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
 ): void {
   if (!ctx.hasUI) return;
-  let leadTone = "accent";
-  try {
-    leadTone = THINKING_TONES[String(pi.getThinkingLevel())] ?? "accent";
-  } catch {
-    // Keep the default accent hue.
-  }
+  const built = buildWorkingIndicator(ctx, pi);
   ctx.ui.setWorkingVisible(true);
-  ctx.ui.setWorkingMessage(ctx.ui.theme.fg("dim", `${workingMessage()}...`));
+  ctx.ui.setWorkingMessage(built.message);
   ctx.ui.setWorkingIndicator({
-    frames: randomWorkingFrames(ctx, leadTone),
-    intervalMs: RANDOM_INDICATOR_INTERVAL_MS,
+    frames: built.frames,
+    intervalMs: built.intervalMs,
   });
 }
 

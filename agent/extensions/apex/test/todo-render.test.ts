@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
 const { installTodoTools } = await import("../internal/todo/todo-tools.ts");
@@ -16,7 +16,10 @@ const {
 
 function createMockPi(apexUi = "1") {
   const previousApexUi = process.env.PI_APEX_UI;
+  const previousSkin = process.env.PI_UI_SKIN;
   process.env.PI_APEX_UI = apexUi;
+  // Pin the apex skin so a leaked PI_UI_SKIN=claude never changes assertions.
+  delete process.env.PI_UI_SKIN;
   try {
     const tools: any[] = [];
     const shortcuts = new Map<string, any>();
@@ -57,6 +60,8 @@ function createMockPi(apexUi = "1") {
   } finally {
     if (previousApexUi === undefined) delete process.env.PI_APEX_UI;
     else process.env.PI_APEX_UI = previousApexUi;
+    if (previousSkin === undefined) delete process.env.PI_UI_SKIN;
+    else process.env.PI_UI_SKIN = previousSkin;
   }
 }
 
@@ -64,6 +69,20 @@ const theme = {
   fg: (_key: string, text: string) => text,
   bg: (_key: string, text: string) => text,
 };
+
+// Pin the apex skin for every test in this file: the live shell may export
+// PI_UI_SKIN=claude, but these assertions target apex chrome (●/○). Glyphs
+// are read dynamically at render time, so the pin must span the test body,
+// not just tool installation. Saved/restored around each test.
+let previousSkin: string | undefined;
+beforeEach(() => {
+  previousSkin = process.env.PI_UI_SKIN;
+  delete process.env.PI_UI_SKIN;
+});
+afterEach(() => {
+  if (previousSkin === undefined) delete process.env.PI_UI_SKIN;
+  else process.env.PI_UI_SKIN = previousSkin;
+});
 
 function context(args: any, overrides: Record<string, unknown> = {}): any {
   return {

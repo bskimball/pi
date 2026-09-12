@@ -110,11 +110,12 @@ describe("apex presentation skins", () => {
   it("swaps receipt and composer glyphs for the claude skin", () => {
     withSkin("claude", () => {
       assert.equal(activeSkinName(), "claude");
-      assert.equal(skinGlyphs().header, "⏺");
-      assert.equal(skinGlyphs().receipt, "⏺");
+      assert.equal(skinGlyphs().header, "●");
+      assert.equal(skinGlyphs().receipt, "●");
       assert.equal(skinGlyphs().rail, "⎿");
       assert.equal(composerPromptGlyph(), ">");
-      assert.equal(TREE.header, "⏺");
+      assert.equal(TREE.header, "●");
+      assert.equal(TREE.receipt, "●");
       assert.equal(TREE.rail, "⎿");
       // Unspecified tree edges keep their apex geometry.
       assert.equal(TREE.branch, APEX_GLYPHS.branch);
@@ -136,13 +137,13 @@ describe("apex presentation skins", () => {
   it("keeps every skin glyph code point narrow", () => {
     // Receipt/tree glyphs flow through safeVisibleWidth budgets, so each
     // code point must be width 1. Multi-char edges total one per code point.
-    for (const glyph of ["●", "○", "■", "□", "⏺", "⎿", "│", "├", "─", "╰", ">"]) {
+    for (const glyph of ["●", "○", "■", "□", "⎿", "│", "├", "─", "╰", ">"]) {
       assert.equal(safeVisibleWidth(glyph), 1, glyph);
     }
-    // Load-bearing rendering-safety assertions for the new glyphs.
-    assert.equal(safeVisibleWidth("⏺"), 1);
+    // Load-bearing rendering-safety assertions for the skin glyphs.
+    assert.equal(safeVisibleWidth("●"), 1);
     assert.equal(safeVisibleWidth("⎿"), 1);
-    assert.equal(safeVisibleWidth("⏺ test ⎿"), 8);
+    assert.equal(safeVisibleWidth("● test ⎿"), 8);
     for (const skin of [undefined, "claude"]) {
       withSkin(skin, () => {
         assert.equal(safeVisibleWidth(TREE.branch), 2);
@@ -171,23 +172,28 @@ describe("apex presentation skins", () => {
         stubUi() as any,
         process.cwd(),
       );
+      // The call row carries the idle receipt root; the settled result row
+      // carries the active header root (● in both skins).
+      const call = component.render(80).join("\n");
       component.markExecutionStarted();
       component.updateResult({
         content: [{ type: "text", text: "src/skin.ts:1:skin" }],
         isError: false,
       });
-      return component.render(80).join("\n");
+      return { call, result: component.render(80).join("\n") };
     };
     try {
       process.env.PI_APEX_UI = "1";
       process.env[SKIN_ENV_VAR] = "claude";
       const claude = renderGrep();
-      assert.match(claude, /⏺/);
-      assert.doesNotMatch(claude, /●/);
+      assert.match(claude.call, /●/);
+      assert.doesNotMatch(claude.call, /○/);
+      assert.match(claude.result, /●/);
       delete process.env[SKIN_ENV_VAR];
       const apex = renderGrep();
-      assert.match(apex, /●/);
-      assert.doesNotMatch(apex, /⏺/);
+      assert.match(apex.call, /○/);
+      assert.doesNotMatch(apex.call, /●/);
+      assert.match(apex.result, /●/);
     } finally {
       if (previousApex === undefined) delete process.env.PI_APEX_UI;
       else process.env.PI_APEX_UI = previousApex;
@@ -262,11 +268,28 @@ describe("apex presentation skins", () => {
     }
   });
 
+  it("keeps every skin glyph free of Extended_Pictographic codepoints", () => {
+    // Emoji-font codepoints ignore theme color and misreport width, so no
+    // skin glyph may carry the Extended_Pictographic property.
+    for (const skin of [undefined, "claude"]) {
+      withSkin(skin, () => {
+        for (const [key, value] of Object.entries(skinGlyphs())) {
+          assert.doesNotMatch(
+            value,
+            /\p{Extended_Pictographic}/u,
+            `${skin ?? "apex"}.${key}`,
+          );
+        }
+      });
+    }
+  });
+
   it("re-reads the skin dynamically without re-import", () => {
     const previous = process.env[SKIN_ENV_VAR];
     try {
       process.env[SKIN_ENV_VAR] = "claude";
-      assert.equal(TREE.header, "⏺");
+      assert.equal(TREE.header, "●");
+      assert.equal(TREE.receipt, "●");
       assert.equal(composerPromptGlyph(), ">");
       process.env[SKIN_ENV_VAR] = "apex";
       assert.equal(TREE.header, "●");

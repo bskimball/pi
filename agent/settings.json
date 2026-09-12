@@ -21,7 +21,7 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "apex-dark",
+  "theme": "claude-dark",
   "tuiMode": "fullscreen",
   "enabledModels": [
     "local-proxy/*",

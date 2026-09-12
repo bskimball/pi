@@ -3,6 +3,8 @@
 // "apex" is the default skin and preserves the exact glyphs Apex has always
 // used. "claude" swaps the receipt/composer glyphs toward a Claude Code look
 // while keeping every tree shape/key so existing call sites are unchanged.
+// Claude header/receipt deliberately avoids Extended_Pictographic codepoints
+// (e.g. U+23FA): the emoji font overrides theme color and misreports width.
 //
 // Selection reads PI_UI_SKIN dynamically at call time (never captured at
 // module load), matching how PI_APEX_UI is re-read, so a live /ui switch
@@ -47,11 +49,11 @@ const APEX_SKIN: SkinGlyphs = {
 };
 
 const CLAUDE_SKIN: SkinGlyphs = {
-  header: "\u23fa",
+  header: "\u25cf",
   branch: "\u251c\u2500",
   last: "\u2570\u2500",
   rail: "\u23bf",
-  receipt: "\u23fa",
+  receipt: "\u25cf",
   hang: "   ",
   prompt: ">",
   statusIdle: "\u25a1",
