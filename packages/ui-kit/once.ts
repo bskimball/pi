@@ -34,8 +34,35 @@ export function uiKitShared(): SharedBag {
   return bag();
 }
 
+/**
+ * `api.getFlag` calls assertActive (loader.js createExtensionAPI). After
+ * `/reload` or session replacement the previous runtime is invalidate()d, so
+ * probing the stored claimant throws and this generation may re-claim.
+ * Live claimants must still dedupe apex/claude/hal on one runtime.
+ */
+function claimantIsStale(pi: ExtensionAPI | undefined): boolean {
+  if (!pi) return true;
+  try {
+    pi.getFlag("__pi_ui_kit_probe");
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Drop generation-scoped once-flags when the stored `pi` is gone or stale. Keep hosts/landings. */
+export function releaseStaleUiKitClaimant(): void {
+  const shared = bag();
+  if (!claimantIsStale(shared.toolsPi)) return;
+  if (!shared.toolsPi && !shared.presentation && !shared.hostListeners) return;
+  shared.toolsPi = undefined;
+  shared.presentation = false;
+  shared.hostListeners = false;
+}
+
 /** True once: first caller registers kit tools/shortcuts/commands on its `pi`. */
 export function claimSharedTools(pi: ExtensionAPI): boolean {
+  releaseStaleUiKitClaimant();
   const shared = bag();
   if (shared.toolsPi) return false;
   shared.toolsPi = pi;

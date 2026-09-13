@@ -1481,48 +1481,53 @@ describe("fusion close backstop", () => {
 });
 
 describe("installUiHost once-owner across skins", () => {
+  function mockPi() {
+    const tools = new Map<string, unknown>();
+    const shortcuts = new Map<string, unknown>();
+    const commands = new Map<string, unknown>();
+    const events = { on() {} };
+    return {
+      tools,
+      shortcuts,
+      commands,
+      events,
+      on() {},
+      registerTool(def: { name: string }) {
+        tools.set(def.name, def);
+      },
+      registerShortcut(key: string, def: unknown) {
+        shortcuts.set(key, def);
+      },
+      registerCommand(name: string, def: unknown) {
+        commands.set(name, def);
+      },
+      getCommands() {
+        return [];
+      },
+      getFlag() {
+        return undefined;
+      },
+      sendUserMessage() {},
+      registerMessageRenderer() {},
+    };
+  }
+
+  const dummyLanding = {
+    prelude() { return []; },
+    logo() { return { rows: [], blockWidth: 0 }; },
+    invitation() { return ""; },
+  };
+  const noopIndicator = () => ({ frames: ["·"], intervalMs: 1000, message: "" });
+
   it("registers shared tools and shortcuts on only the first pi", async () => {
     const previousSkin = process.env.PI_UI_SKIN;
     delete process.env.PI_UI_SKIN;
     const { resetUiKitInstallForTests, installUiHost, registerObservatoryLanding } = await import("@pi/ui-kit");
     resetUiKitInstallForTests();
-    function mockPi() {
-      const tools = new Map<string, unknown>();
-      const shortcuts = new Map<string, unknown>();
-      const commands = new Map<string, unknown>();
-      const events = { on() {} };
-      return {
-        tools,
-        shortcuts,
-        commands,
-        events,
-        on() {},
-        registerTool(def: { name: string }) {
-          tools.set(def.name, def);
-        },
-        registerShortcut(key: string, def: unknown) {
-          shortcuts.set(key, def);
-        },
-        registerCommand(name: string, def: unknown) {
-          commands.set(name, def);
-        },
-        getCommands() {
-          return [];
-        },
-        sendUserMessage() {},
-        registerMessageRenderer() {},
-      };
-    }
     const apex = mockPi();
     const claude = mockPi();
     const hal = mockPi();
-    const noopIndicator = () => ({ frames: ["·"], intervalMs: 1000, message: "" });
     try {
-      const dummyLanding = {
-        prelude() { return []; },
-        logo() { return { rows: [], blockWidth: 0 }; },
-        invitation() { return ""; },
-      };
       registerObservatoryLanding("apex", dummyLanding as any);
       registerObservatoryLanding("claude", dummyLanding as any);
       registerObservatoryLanding("hal", dummyLanding as any);
@@ -1549,6 +1554,47 @@ describe("installUiHost once-owner across skins", () => {
       assert.ok(bag?.toolsPi, "process bag claimed by first skin");
       assert.equal(bag.hosts.size, 3, "later skins still join the hosts map");
       assert.equal(bag.landings.size, 3, "later skins still join the landings map");
+    } finally {
+      resetUiKitInstallForTests();
+      if (previousSkin === undefined) delete process.env.PI_UI_SKIN;
+      else process.env.PI_UI_SKIN = previousSkin;
+    }
+  });
+
+  it("re-claims tools and shortcuts after the first pi is invalidated", async () => {
+    const previousSkin = process.env.PI_UI_SKIN;
+    delete process.env.PI_UI_SKIN;
+    const { resetUiKitInstallForTests, installUiHost, registerObservatoryLanding } = await import("@pi/ui-kit");
+    resetUiKitInstallForTests();
+    const first = mockPi();
+    const next = mockPi();
+    const later = mockPi();
+    try {
+      registerObservatoryLanding("apex", dummyLanding as any);
+      registerObservatoryLanding("claude", dummyLanding as any);
+      registerObservatoryLanding("hal", dummyLanding as any);
+      installUiHost(first as any, { skin: "apex", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      first.getFlag = () => {
+        throw new Error("stale after reload");
+      };
+      installUiHost(next as any, { skin: "claude", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      installUiHost(later as any, { skin: "hal", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      for (const name of ["todo_write", "todo_read", "bash", "write"]) {
+        assert.ok(next.tools.has(name), `${name} on reclaimed pi`);
+        assert.equal(later.tools.has(name), false, `${name} not re-registered on later skin`);
+      }
+      for (const key of ["alt+t", "alt+a", "alt+o"]) {
+        assert.ok(next.shortcuts.has(key), `${key} on reclaimed pi`);
+        assert.equal(later.shortcuts.has(key), false);
+      }
+      for (const name of ["todos", "agents", "observatory"]) {
+        assert.ok(next.commands.has(name), `${name} on reclaimed pi`);
+        assert.equal(later.commands.has(name), false);
+      }
+      const bag = (process as any)[Symbol.for("pi.ui-kit.shared")];
+      assert.equal(bag?.toolsPi, next, "bag claimant is the new generation");
+      assert.equal(bag.hostListeners, true);
+      assert.equal(bag.hosts.size, 3, "hosts map kept and re-populated");
     } finally {
       resetUiKitInstallForTests();
       if (previousSkin === undefined) delete process.env.PI_UI_SKIN;

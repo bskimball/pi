@@ -33,7 +33,7 @@ import {
   type SkinName,
 } from "./index.ts";
 import { runFeaturedExtensionCommand } from "./internal/runtime/featured-commands.ts";
-import { uiKitShared } from "./once.ts";
+import { releaseStaleUiKitClaimant, uiKitShared } from "./once.ts";
 
 export interface UiHostOptions {
   skin: SkinName;
@@ -56,6 +56,7 @@ function activeHost(): UiHostOptions | undefined {
 }
 
 export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
+  releaseStaleUiKitClaimant();
   const shared = uiKitShared();
   hostsMap().set(options.skin, options);
   installSharedTools(pi);
