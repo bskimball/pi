@@ -114,7 +114,7 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Preview: `node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs`.
 - Pure passive string rendering; no timers or Pi TUI Text/Markdown/Container.
 - Cell measurement uses Apex-owned `apex/internal/presentation/safe-text-layout.ts`.
-- `shark-art.ts` is generated and must not be hand-edited.
+- `shark-art.ts` and `hal-art.ts` are generated and must not be hand-edited.
 
 ## Feature ownership
 

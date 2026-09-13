@@ -23,6 +23,14 @@ import {
   SHARK_PIXELS_WIDE,
   SHARK_PIXELS_WIDE_WIDTH,
 } from "./shark-art.ts";
+import {
+  HAL_PIXELS_MID,
+  HAL_PIXELS_MID_WIDTH,
+  HAL_PIXELS_ULTRA,
+  HAL_PIXELS_ULTRA_WIDTH,
+  HAL_PIXELS_WIDE,
+  HAL_PIXELS_WIDE_WIDTH,
+} from "./hal-art.ts";
 import { TRUECOLOR, pixelRows } from "./pixel-art.ts";
 import { starFieldRow } from "./star-field.ts";
 import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
@@ -334,6 +342,11 @@ const PIXEL_ULTRA_MIN = SHARK_PIXELS_ULTRA_WIDTH + 2;
 const PIXEL_WIDE_MIN = SHARK_PIXELS_WIDE_WIDTH + 2;
 const PIXEL_MID_MIN = SHARK_PIXELS_MID_WIDTH + 2;
 
+/** Same gates for the HAL mark, whose tiers are encoded at their own widths. */
+const HAL_ULTRA_MIN = HAL_PIXELS_ULTRA_WIDTH + 2;
+const HAL_WIDE_MIN = HAL_PIXELS_WIDE_WIDTH + 2;
+const HAL_MID_MIN = HAL_PIXELS_MID_WIDTH + 2;
+
 /**
  * The centrepiece: a hand-authored side-profile great white, 7 rows × 56
  * columns, swimming left. Half blocks (▀ ▄) double the vertical resolution, so
@@ -425,10 +438,10 @@ const HAL_WORDMARK_KEYS: readonly [string, string, string, string, string, strin
 ];
 
 /**
- * HAL orb: the terminal analogue of the desktop HalHeroOrb, 3 rows × 8
- * columns. A solid crimson core band (no stroke, no ring, no gap — never
- * an eye) with a cyan instrument frame: cyan top/bottom rims and cyan
- * limb cells closing the middle row. Every glyph is narrow BMP.
+ * HAL orb: the glyph-tier analogue of the desktop HalHeroOrb, 3 rows × 8
+ * columns, used only when the terminal cannot carry the truecolor bitmap. A
+ * solid crimson core band (no stroke, no ring, no gap — never an eye) with a
+ * cyan instrument frame. Every glyph is narrow BMP.
  */
 const HAL_ORB_WIDTH = 8;
 function halOrb(fg: Fg): string[] {
@@ -437,6 +450,28 @@ function halOrb(fg: Fg): string[] {
     fg("accent", "█") + fg("brand", "██████") + fg("accent", "█"),
     fg("accent", " ▀████▀ "),
   ];
+}
+
+/**
+ * The HAL mark, sized to the terminal.
+ *
+ * Three truecolor bitmap tiers carry the orb-and-wordmark lockup at full
+ * fidelity; without 24-bit colour the shaded sphere would band into mush, so
+ * those terminals fall back to the glyph orb stacked over the striped
+ * wordmark. Returns undefined when no bitmap tier fits.
+ */
+function halPixelBlock(width: number): Block | undefined {
+  if (!TRUECOLOR) return undefined;
+  if (width >= HAL_ULTRA_MIN) {
+    return { rows: pixelRows(HAL_PIXELS_ULTRA), blockWidth: HAL_PIXELS_ULTRA_WIDTH };
+  }
+  if (width >= HAL_WIDE_MIN) {
+    return { rows: pixelRows(HAL_PIXELS_WIDE), blockWidth: HAL_PIXELS_WIDE_WIDTH };
+  }
+  if (width >= HAL_MID_MIN) {
+    return { rows: pixelRows(HAL_PIXELS_MID), blockWidth: HAL_PIXELS_MID_WIDTH };
+  }
+  return undefined;
 }
 
 /**
@@ -529,6 +564,8 @@ function lateralLine(art: string, fg: Fg): string {
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
   if (activeSkinName() === "hal") {
     if (width < MINIMAL_MIN) return { rows: [fg("text", "HAL")], blockWidth: 3 };
+    const pixels = halPixelBlock(width);
+    if (pixels) return pixels;
     const rows = HAL_WORDMARK.map((row, index) => fg(HAL_WORDMARK_KEYS[index] ?? "brand", row));
     return { rows, blockWidth: HAL_WORDMARK_WIDTH };
   }
@@ -992,15 +1029,19 @@ export function renderObservatory(
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
 
-  // HAL uses a quiet instrument label in place of the Apex star field,
-  // with the crimson orb riding directly above the striped wordmark.
+  // HAL uses a quiet instrument label in place of the Apex star field.
   // The label stays: the skin test pins it at width >= 20, and the signal
   // line below the mark already carries the workspace state, so the label
   // reads as console chrome rather than duplicating it.
+  //
+  // The truecolor tiers draw the orb and the wordmark as one lockup, so the
+  // separate glyph orb is emitted only for the glyph fallback.
   const hal = activeSkinName() === "hal";
   if (hal && inner >= MINIMAL_MIN) {
     lines.push(center(fg("dim", "OPERATIONS CONSOLE"), inner));
-    for (const row of halOrb(fg)) lines.push(indent(row, HAL_ORB_WIDTH, inner));
+    if (!halPixelBlock(inner)) {
+      for (const row of halOrb(fg)) lines.push(indent(row, HAL_ORB_WIDTH, inner));
+    }
   }
   // Dense fixed chrome keeps the inventory inside the line budget.
   if (!hal && inner >= MINIMAL_MIN) {
@@ -1028,14 +1069,13 @@ export function renderObservatory(
       ? 1 /* meta */ + 1 /* blank */ + 1 /* invitation */ + 1 /* blank */ + 1 /* horizon */
       : 1 /* invitation */;
   const maxConstellationRows = Math.max(0, OBSERVATORY_MAX_LINES - lines.length - trailing);
-  const constellations = constellationBlock(
-    view,
-    fg,
-    inner,
-    span,
-    maxConstellationRows,
-    selection,
-  );
+  // HAL's landing is the mark alone: no prompt or agent inventory. The same
+  // entries stay reachable through the interactive orb and /observatory, which
+  // render the constellation regardless of skin.
+  const constellations =
+    hal && !selection
+      ? undefined
+      : constellationBlock(view, fg, inner, span, maxConstellationRows, selection);
   if (constellations) {
     for (const row of constellations.rows) {
       lines.push(indent(row, constellations.blockWidth, inner));

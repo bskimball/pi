@@ -150,6 +150,34 @@ describe("apex presentation skins", () => {
         if (width >= 20) assert.match(lines.join("\n"), /OPERATIONS CONSOLE/);
         else if (width >= 3) assert.match(lines.join("\n"), /HAL/);
       }
+
+      // The HAL landing is the mark alone: inventory headings belong to the
+      // interactive orb and /observatory, never to the passive splash.
+      const populated = {
+        ...view,
+        pathways: [
+          { name: "plan", label: "plan", description: "", source: "prompt" as const, path: "/tmp/plan.md", custom: true },
+        ],
+        specialists: [
+          { name: "scout", label: "scout", description: "", source: "agent" as const, path: "/tmp/scout.md", custom: true },
+        ],
+        promptCount: 1, agentCount: 1,
+      };
+      for (const width of [40, 62, 80, 120, 160]) {
+        const passive = renderObservatory(populated, (key, text) => theme.fg(key, text), width).join("\n");
+        assert.doesNotMatch(passive, /CUSTOM PROMPTS/, `width ${width}`);
+        assert.doesNotMatch(passive, /CUSTOM AGENTS/, `width ${width}`);
+        assert.doesNotMatch(passive, /\bplan\b/, `width ${width}`);
+        // Selection mode is the orb; it still offers the full inventory.
+        const selected = renderObservatory(
+          populated,
+          (key, text) => theme.fg(key, text),
+          width,
+          { index: 0, active: true },
+        ).join("\n");
+        assert.match(selected, /CUSTOM PROMPTS/, `width ${width}`);
+        assert.match(selected, /scout/, `width ${width}`);
+      }
     });
   });
 
