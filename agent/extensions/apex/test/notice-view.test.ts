@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   noticeLines,
   type NoticeRow,
-} from "../internal/presentation/notice-view.ts";
+} from "@pi/ui-kit/internal/presentation/notice-view.ts";
 import {
   BG_PROCESS_SETTLED_TYPE,
   BG_SETTLED_HINT,
   bgProcessNoticeRows,
   bgStatusKind,
   installBgProcessReceipts,
-} from "../internal/presentation/bg-process-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/bg-process-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

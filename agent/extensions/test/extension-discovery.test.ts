@@ -68,6 +68,8 @@ describe("extension discovery layout", () => {
 
     for (const required of [
       "apex/apex-ui.ts",
+      "claude/claude-ui.ts",
+      "hal/hal-ui.ts",
       "lsp/index.ts",
       "task/amp-task.ts",
       "task/async-task.ts",

@@ -1,20 +1,19 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installUiHost } from "@pi/ui-kit";
-import { registerApexLanding } from "./landing.ts";
+import { registerHalLanding } from "./landing.ts";
 import { buildWorkingIndicator } from "./working.ts";
 
 export {
-  RANDOM_INDICATOR_FRAME_COUNT,
-  RANDOM_INDICATOR_INTERVAL_MS,
-  WORKING_MESSAGES,
+  HAL_DEFAULT_CANDIDATE,
+  HAL_INDICATOR_CANDIDATES,
+  HAL_WORKING_MESSAGES,
   buildWorkingIndicator,
-  resolveWorkingLeadTone,
 } from "./working.ts";
 
 export default function (pi: ExtensionAPI) {
-  registerApexLanding();
+  registerHalLanding();
   installUiHost(pi, {
-    skin: "apex",
+    skin: "hal",
     thinkingLabel: "\u00b7 thinking",
     buildWorkingIndicator,
   });

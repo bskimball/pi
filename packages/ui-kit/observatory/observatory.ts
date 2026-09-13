@@ -15,24 +15,7 @@ import {
 } from "../internal/runtime/agent-discovery.ts";
 import { cleanInline } from "../internal/presentation/ui-common.ts";
 import { activeSkinName } from "../internal/presentation/skin.ts";
-import {
-  SHARK_PIXELS_MID,
-  SHARK_PIXELS_MID_WIDTH,
-  SHARK_PIXELS_ULTRA,
-  SHARK_PIXELS_ULTRA_WIDTH,
-  SHARK_PIXELS_WIDE,
-  SHARK_PIXELS_WIDE_WIDTH,
-} from "./shark-art.ts";
-import {
-  HAL_PIXELS_MID,
-  HAL_PIXELS_MID_WIDTH,
-  HAL_PIXELS_ULTRA,
-  HAL_PIXELS_ULTRA_WIDTH,
-  HAL_PIXELS_WIDE,
-  HAL_PIXELS_WIDE_WIDTH,
-} from "./hal-art.ts";
-import { TRUECOLOR, pixelRows } from "./pixel-art.ts";
-import { starFieldRow } from "./star-field.ts";
+import { observatoryLandingFor } from "./landing.ts";
 import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
 /**
@@ -327,6 +310,7 @@ export function listInventory(
   return sortPool(matches, scopeOf);
 }
 
+
 /**
  * Optical cap for the whole composition. A mark that stretches to 200
  * columns stops reading as a mark, so the block stays dense and centered.
@@ -336,143 +320,6 @@ const PORTAL_MAX_SPAN = 64;
 const FULL_MIN = 62;
 /** Below this only the minimal dorsal-fin mark, the signal and the threshold remain. */
 const MINIMAL_MIN = 20;
-
-/** Width gates for the purpose-built truecolor tiers. */
-const PIXEL_ULTRA_MIN = SHARK_PIXELS_ULTRA_WIDTH + 2;
-const PIXEL_WIDE_MIN = SHARK_PIXELS_WIDE_WIDTH + 2;
-const PIXEL_MID_MIN = SHARK_PIXELS_MID_WIDTH + 2;
-
-/** Same gates for the HAL mark, whose tiers are encoded at their own widths. */
-const HAL_ULTRA_MIN = HAL_PIXELS_ULTRA_WIDTH + 2;
-const HAL_WIDE_MIN = HAL_PIXELS_WIDE_WIDTH + 2;
-const HAL_MID_MIN = HAL_PIXELS_MID_WIDTH + 2;
-
-/**
- * The centrepiece: a hand-authored side-profile great white, 7 rows × 56
- * columns, swimming left. Half blocks (▀ ▄) double the vertical resolution, so
- * the silhouette is drawn on a 14 × 56 sub-grid: pointed snout at column 1,
- * eye notch, dropped open jaw, three gill slits, a long torpedo trunk that is
- * deepest under the dorsal, a tall triangular dorsal about a third back from
- * the snout, a pectoral fin raked down and back, a long rear taper into a
- * visibly narrow peduncle, and a large asymmetric crescent tail whose long
- * swept upper lobe overhangs the short lower one across a deep notch.
- *
- * Counter-shading is carried by colour rather than by glyph noise: the back is
- * violet, the lateral line burns violet→cyan→violet, the belly is pale. Every
- * glyph is narrow BMP block art (█ ▓ ▒ ▀ ▄), so the block is exactly 56 cells
- * wide on every terminal. Row 0 rides the star field, row 6 carries the fins.
- */
-const SHARK_LOGO: readonly string[] = [
-  "                  ▄██▄                              ▄███",
-  "                ▄██████▄                         ▄████▀ ",
-  "     ▄▄▄▄█████████████████████████▄▄▄▄        ▄█████▀   ",
-  " ▄▓██▒█████▓█▓█▓████████████████████████▄▄▄▄▄▄██████    ",
-  "  ▀▀ ▓▓▓▓██████████████████████▀▀▀▀▀▀▀▀         ▄████   ",
-  "      ▀▀▀▀███████▀▀▀▀                             ▀███▀ ",
-  "             ▀▀██▄▄                                     ",
-];
-const SHARK_LOGO_WIDTH = 56;
-/**
- * Per-row colour: dark back → luminous flank → pale belly → wake. `null` marks
- * the lateral line, the one row that takes the horizontal gradient.
- */
-const SHARK_LOGO_KEYS: readonly (string | null)[] = [
-  "customMessageLabel",
-  "customMessageLabel",
-  "customMessageLabel",
-  null,
-  "text",
-  "text",
-  "muted",
-];
-
-/**
- * Narrow-terminal shark: the same silhouette cut down to the cues that still
- * read at 18 columns — triangular dorsal, tapered snout, thick trunk, raked
- * pectoral and crescent tail — at 4 rows × 18 columns.
- */
-const SHARK_COMPACT: readonly string[] = [
-  "     ▄██▄       ▄█",
-  " ▄▄███████▄▄▄▄▄██▀",
-  "▀████████████▀▀██▄",
-  "  ▀▀▀▀███       ▀█",
-];
-const SHARK_COMPACT_WIDTH = 18;
-const SHARK_COMPACT_KEYS: readonly (string | null)[] = [
-  "customMessageLabel",
-  null,
-  "text",
-  "muted",
-];
-
-/**
- * Sub-minimal mark for terminals too narrow for any block art: a lone dorsal
- * fin breaking the surface. Single-cell BMP, like {@link SELECTION_POINTER}.
- */
-const SHARK_MINIMAL = "▴";
-
-/**
- * HAL wordmark: block-capitals HAL, 6 rows × 19 columns, every row exactly
- * 19 cells wide. Striping is per-row colour, not gradient fill: rows repeat
- * brand, brand, brandDim to reproduce the desktop titlebar's 2:1
- * solid-to-translucent banding at row granularity. Glyphs are narrow BMP
- * blocks only; HAL_WORDMARK_WIDTH must stay equal to the real visible
- * width or indent()/center() mis-centers the composition.
- */
-const HAL_WORDMARK: readonly string[] = [
-  "█   █   ███   █    ",
-  "█   █  █   █  █    ",
-  "█████  █████  █    ",
-  "█   █  █   █  █    ",
-  "█   █  █   █  █    ",
-  "█   █  █   █  █████",
-];
-const HAL_WORDMARK_WIDTH = 19;
-const HAL_WORDMARK_KEYS: readonly [string, string, string, string, string, string] = [
-  "brand",
-  "brand",
-  "brand",
-  "brandDim",
-  "brand",
-  "brandDim",
-];
-
-/**
- * HAL orb: the glyph-tier analogue of the desktop HalHeroOrb, 3 rows × 8
- * columns, used only when the terminal cannot carry the truecolor bitmap. A
- * solid crimson core band (no stroke, no ring, no gap — never an eye) with a
- * cyan instrument frame. Every glyph is narrow BMP.
- */
-const HAL_ORB_WIDTH = 8;
-function halOrb(fg: Fg): string[] {
-  return [
-    fg("accent", " ▄████▄ "),
-    fg("accent", "█") + fg("brand", "██████") + fg("accent", "█"),
-    fg("accent", " ▀████▀ "),
-  ];
-}
-
-/**
- * The HAL mark, sized to the terminal.
- *
- * Three truecolor bitmap tiers carry the orb-and-wordmark lockup at full
- * fidelity; without 24-bit colour the shaded sphere would band into mush, so
- * those terminals fall back to the glyph orb stacked over the striped
- * wordmark. Returns undefined when no bitmap tier fits.
- */
-function halPixelBlock(width: number): Block | undefined {
-  if (!TRUECOLOR) return undefined;
-  if (width >= HAL_ULTRA_MIN) {
-    return { rows: pixelRows(HAL_PIXELS_ULTRA), blockWidth: HAL_PIXELS_ULTRA_WIDTH };
-  }
-  if (width >= HAL_WIDE_MIN) {
-    return { rows: pixelRows(HAL_PIXELS_WIDE), blockWidth: HAL_PIXELS_WIDE_WIDTH };
-  }
-  if (width >= HAL_MID_MIN) {
-    return { rows: pixelRows(HAL_PIXELS_MID), blockWidth: HAL_PIXELS_MID_WIDTH };
-  }
-  return undefined;
-}
 
 /**
  * Leading marker and filled glyph for the focused constellation entry. The
@@ -487,9 +334,6 @@ const SELECTED_GLYPH = "◆";
  * The sky is as wide as the mark it frames, so the constellation reads as one
  * composition with the shark rather than a full-width band behind it.
  */
-const STARFIELD_WIDE_SPAN = 42;
-const STARFIELD_NARROW_SPAN = 20;
-
 /**
  * Center a styled row on the composition's single optical axis, which is the column
  * the shark's dorsal fin occupies: `floor((width - 1) / 2)`.
@@ -538,76 +382,6 @@ function evenSpan(span: number): number {
   return span % 2 === 0 ? span : span - 1;
 }
 
-/**
- * The lateral line's horizontal gradient: violet at the snout and the tail,
- * cyan through the core, so the flank reads as luminous rather than as a flat
- * slab. The cyan core also sits where a shark's countershading actually
- * catches the light.
- */
-function lateralLine(art: string, fg: Fg): string {
-  const edge = Math.max(1, Math.round(art.length * 0.22));
-  return (
-    fg("customMessageLabel", art.slice(0, edge)) +
-    fg("accent", art.slice(edge, art.length - edge)) +
-    fg("customMessageLabel", art.slice(art.length - edge))
-  );
-}
-
-/**
- * The shark mark, sized to the terminal.
- *
- * Five tiers, widest first: three purpose-built truecolor bitmaps, then the
- * hand-authored glyph shark, then a lone dorsal fin. The bitmap tiers are
- * skipped entirely without 24-bit colour so the mark never degrades into
- * banded mush.
- */
-function logoBlock(fg: Fg, width: number, active: boolean): Block {
-  if (activeSkinName() === "hal") {
-    if (width < MINIMAL_MIN) return { rows: [fg("text", "HAL")], blockWidth: 3 };
-    const pixels = halPixelBlock(width);
-    if (pixels) return pixels;
-    const rows = HAL_WORDMARK.map((row, index) => fg(HAL_WORDMARK_KEYS[index] ?? "brand", row));
-    return { rows, blockWidth: HAL_WORDMARK_WIDTH };
-  }
-  if (width < MINIMAL_MIN) {
-    return { rows: [fg("accent", SHARK_MINIMAL)], blockWidth: 1 };
-  }
-  if (TRUECOLOR && width >= PIXEL_ULTRA_MIN) {
-    return {
-      rows: pixelRows(SHARK_PIXELS_ULTRA),
-      blockWidth: SHARK_PIXELS_ULTRA_WIDTH,
-    };
-  }
-  if (TRUECOLOR && width >= PIXEL_WIDE_MIN) {
-    return {
-      rows: pixelRows(SHARK_PIXELS_WIDE),
-      blockWidth: SHARK_PIXELS_WIDE_WIDTH,
-    };
-  }
-  if (TRUECOLOR && width >= PIXEL_MID_MIN) {
-    return {
-      rows: pixelRows(SHARK_PIXELS_MID),
-      blockWidth: SHARK_PIXELS_MID_WIDTH,
-    };
-  }
-  const full = width >= FULL_MIN;
-  const art = full ? SHARK_LOGO : SHARK_COMPACT;
-  const keys = full ? SHARK_LOGO_KEYS : SHARK_COMPACT_KEYS;
-  const rows = art.map((row, index) => {
-    const key = keys[index];
-    if (key !== null && key !== undefined) return fg(key, row);
-    // Focused: the lateral line burns to a single live accent instead of the
-    // resting violet→cyan gradient. Colour only; the geometry never moves.
-    return active ? fg("accent", row) : lateralLine(row, fg);
-  });
-  return { rows, blockWidth: full ? SHARK_LOGO_WIDTH : SHARK_COMPACT_WIDTH };
-}
-
-
-
-/**
- * The signal, letter-spaced into a small-caps feel when there is room for it.
- */
 function letterSpace(text: string): string {
   return [...text].join(" ");
 }
@@ -709,15 +483,16 @@ function signalLine(view: Observatory, fg: Fg, width: number): string {
   return fg(key, safeTruncateToWidth(head, width));
 }
 
-/** The threshold line; shortens instead of clipping on very narrow terminals. */
+function logoBlock(fg: Fg, width: number, active: boolean): Block {
+  const landing = observatoryLandingFor();
+  if (!landing) return { rows: [], blockWidth: 0 };
+  return landing.logo(fg, width, active);
+}
+
 function invitation(fg: Fg, width: number): string {
-  if (activeSkinName() === "hal") {
-    const label = width >= 28 ? "What are we working on?" : "Ready";
-    return fg("accent", "> ") + fg("muted", label);
-  }
-  const full = fg("accent", "❯ ") + fg("muted", "transmit an intention…");
-  if (safeVisibleWidth(full) <= width) return full;
-  return fg("accent", "❯ ") + fg("muted", "an intention…");
+  const landing = observatoryLandingFor();
+  if (!landing) return "";
+  return landing.invitation(fg, width);
 }
 
 interface Block {
@@ -1028,33 +803,11 @@ export function renderObservatory(
   const inner = Math.max(1, width);
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
+  const landing = observatoryLandingFor();
+  const hideInventory = activeSkinName() === "hal" && !selection;
 
-  // HAL uses a quiet instrument label in place of the Apex star field.
-  // The label stays: the skin test pins it at width >= 20, and the signal
-  // line below the mark already carries the workspace state, so the label
-  // reads as console chrome rather than duplicating it.
-  //
-  // The truecolor tiers draw the orb and the wordmark as one lockup, so the
-  // separate glyph orb is emitted only for the glyph fallback.
-  const hal = activeSkinName() === "hal";
-  if (hal && inner >= MINIMAL_MIN) {
-    lines.push(center(fg("dim", "OPERATIONS CONSOLE"), inner));
-    if (!halPixelBlock(inner)) {
-      for (const row of halOrb(fg)) lines.push(indent(row, HAL_ORB_WIDTH, inner));
-    }
-  }
-  // Dense fixed chrome keeps the inventory inside the line budget.
-  if (!hal && inner >= MINIMAL_MIN) {
-    const skySpan = Math.min(
-      inner,
-      inner >= FULL_MIN ? STARFIELD_WIDE_SPAN : STARFIELD_NARROW_SPAN,
-    );
-    lines.push(
-      center(
-        starFieldRow(fg, skySpan, view.seed, view.contextFill),
-        inner,
-      ),
-    );
+  if (landing) {
+    for (const row of landing.prelude(fg, inner, view)) lines.push(row);
   }
 
   const logo = logoBlock(fg, inner, active);
@@ -1073,7 +826,7 @@ export function renderObservatory(
   // entries stay reachable through the interactive orb and /observatory, which
   // render the constellation regardless of skin.
   const constellations =
-    hal && !selection
+    hideInventory
       ? undefined
       : constellationBlock(view, fg, inner, span, maxConstellationRows, selection);
   if (constellations) {

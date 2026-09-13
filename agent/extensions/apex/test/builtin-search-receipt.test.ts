@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   BUILTIN_GREP_TOOL,
   BUILTIN_LS_TOOL,
@@ -13,7 +13,7 @@ import {
   builtinLsReceiptArg,
   builtinLsReceiptRenderers,
   installBuiltinReceipts,
-} from "../internal/presentation/builtin-receipts.ts";
+} from "@pi/ui-kit/internal/presentation/builtin-receipts.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

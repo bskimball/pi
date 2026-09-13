@@ -1,20 +1,22 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installUiHost } from "@pi/ui-kit";
-import { registerApexLanding } from "./landing.ts";
+import { registerClaudeLanding } from "./landing.ts";
 import { buildWorkingIndicator } from "./working.ts";
 
 export {
-  RANDOM_INDICATOR_FRAME_COUNT,
-  RANDOM_INDICATOR_INTERVAL_MS,
-  WORKING_MESSAGES,
+  CLAUDE_INDICATOR_FRAME_COUNT,
+  CLAUDE_WORKING_INTERVAL_MS,
+  CLAUDE_WORKING_MESSAGES,
+  CLAUDE_WORKING_MOTIFS,
+  CLAUDE_WORKING_WEIGHTS,
   buildWorkingIndicator,
-  resolveWorkingLeadTone,
+  claudeWorkingTonesFor,
 } from "./working.ts";
 
 export default function (pi: ExtensionAPI) {
-  registerApexLanding();
+  registerClaudeLanding();
   installUiHost(pi, {
-    skin: "apex",
+    skin: "claude",
     thinkingLabel: "\u00b7 thinking",
     buildWorkingIndicator,
   });

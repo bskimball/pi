@@ -59,7 +59,9 @@ Custom TUI and orchestration extensions live in `agent/extensions/`. Pi discover
 
 ```text
 agent/extensions/
-├── apex/            → apex-ui.ts          UI layer (Observatory, tool receipts, edit, todo)
+├── apex/            → apex-ui.ts          Apex UI
+├── claude/          → claude-ui.ts        Claude UI
+├── hal/             → hal-ui.ts           HAL UI
 ├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
 ├── lsp/             → index.ts            language-server navigation
 ├── bg-process.ts    + bg-process/         bg_start/status/list/kill
@@ -77,29 +79,17 @@ agent/extensions/
 └── test/                                  cross-extension tests
 ```
 
-`apex/package.json`, `task/package.json`, and `lsp/package.json` each declare their entry points (`apex-ui.ts`; `amp-task.ts` + `async-task.ts`; `index.ts`).
+`apex/package.json`, `claude/package.json`, `hal/package.json`, `task/package.json`, and `lsp/package.json` declare their entry points. Shared UI presentation is `packages/ui-kit` (`@pi/ui-kit`), not `agent/extensions/shared`.
 
-This is enforced structurally, not just by convention: every extension's import closure must stay inside its own directory (Node built-ins, Pi's public packages, and declared dependencies are the only exceptions). There is **no `extensions/shared/`** — small helpers that look shareable (width-safe text layout, terminal-restore, process-tree-kill, agent discovery, segmenter safety, and similar) are duplicated per owner on purpose, because deleting an extension directory plus its entry file must remove the feature cleanly with no dangling imports elsewhere.
+Relative imports in an extension entry must stay inside that extension's directory. Node built-ins, Pi public packages, and declared npm dependencies (including `@pi/ui-kit`) are the exceptions. Headless helpers remain duplicated per owner so deleting an extension directory plus its entry file removes that feature.
 
-### Apex is the UI
+### Installable UIs
 
-`apex/` is the only general custom-presentation extension. Every other extension is headless (Pi's stock tool renderer) or renders a small amount of its own chrome.
+Apex, Claude, and HAL are separately discovered UI extensions. The kit owns TREE receipts, layout, todo tools/dock, and the single `ToolExecutionComponent` wrap. Each UI owns landing, glyphs, working indicator, and theme. `/ui` selects among installed UIs; `pi` is stock chrome-off. `PI_APEX_UI=0` strips custom chrome while kit tools stay registered; the todo dock remains a plain list. Settlement of a background job is a kit notice (`bg-process-settled`).
 
-```text
-apex/apex-ui.ts
-├── builtin-tools.ts
-├── internal/edit/               disabled legacy unified edit implementation
-├── internal/todo/               todo_write / todo_read + docked todos/agents panel
-├── internal/presentation/       receipts, diffs, headless-tool wraps, the PI_APEX_UI=0 gate
-├── internal/runtime/            segmenter shield, last-phase, terminal-restore, agent discovery
-└── observatory/                 blank-chat landing screen (see below)
-```
+`task/` renders delegated-worker activity cards through `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0`.
 
-Apex owns the Observatory startup header, styled chrome for Pi's `read`, `edit`, and skill invocation surfaces, receipts for the builtin `bash`/`write` tools, the session todo dock (`todo_write`/`todo_read`, plus live async workers as an Agents tab), and receipt chrome for the otherwise-headless `graphify`, `web_search`, `fetch_content`, `get_search_content`, `bg_start`, `bg_status`, `bg_list`, and `bg_kill` tools. Pi retains execution and lifecycle ownership for `read`, `edit`, and skills; Apex replaces only their interactive presentation. Settlement of a background job is shown as an Apex notice (`bg-process-settled`) rather than a raw custom-type block. `todo_write` replaces the whole list on each call and allows at most one `in_progress` item; the tools are lead-only. `PI_APEX_UI=0` is the installation-wide presentation opt-out: Apex-owned tools stay registered and executable, but custom chrome, receipts, and render hooks are stripped in favor of Pi's stock boxed renderer. The one exception is the todo dock, which stays mounted but switches to a plain, uncolored list with no Agents tab.
-
-`task/` renders its own delegated-worker activity cards through a separate gate, `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0` so they never paint their own chrome.
-
-Headless extensions own execute only: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. Apex attaches receipt/notice chrome on top unless `PI_APEX_UI=0`.
+Headless extensions own execute only: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. The kit attaches receipt/notice chrome unless `PI_APEX_UI=0`.
 
 There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publish status text into it via `ctx.ui.setStatus(...)`.
 
@@ -214,7 +204,7 @@ agent/extensions/apex/observatory/
 └── sky-preview.mjs       star-field-only harness
 ```
 
-The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `agent/extensions/apex/observatory/shark-art.ts` — regenerate it with `python tools/shark-art/emit-ts.py`, never hand-edit that file. `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
+The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `packages/ui-kit/observatory/shark-art.ts` — regenerate it with `python tools/shark-art/emit-ts.py`, never hand-edit that file. `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
 
 Two facts ride on the mark: the Observatory splash (`observatory.ts`) shows the full mark on a fresh chat only; the star field (`star-field.ts`) encodes the *shape* from the workspace path (so every project has its own constellation, stable across launches) and the *density* from context usage (stars burn out faintest-first as the window fills).
 

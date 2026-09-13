@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   CONTACT_SUPERVISOR_TOOL,
   INTERCOM_MESSAGE_TYPE,
@@ -16,7 +16,7 @@ import {
   intercomReceiptArg,
   intercomReceiptRenderers,
   parseIntercomMessage,
-} from "../internal/presentation/intercom-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/intercom-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

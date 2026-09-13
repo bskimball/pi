@@ -7,18 +7,21 @@
 
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { safeTruncateToWidth } from "../presentation/safe-text-layout.ts";
+import {
+  cleanInline,
+  safeTruncateToWidth,
+  withApexPresentation,
+  type ToolRenderContext,
+} from "@pi/ui-kit";
 import {
   formatDiffStats,
   renderDiffLines,
   resultDiff,
-} from "../presentation/edit-diff.ts";
+} from "@pi/ui-kit/internal/presentation/edit-diff.ts";
 import {
   toolRenderers,
   type ToolRenderState,
-} from "../presentation/tool-receipt.ts";
-import { withApexPresentation } from "../presentation/presentation.ts";
-import { cleanInline, type ToolRenderContext } from "../presentation/ui-common.ts";
+} from "@pi/ui-kit/internal/presentation/tool-receipt.ts";
 import {
   TOOL_DESCRIPTION,
   TOOL_PROMPT_GUIDELINES,

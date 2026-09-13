@@ -6,25 +6,25 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { renderObservatory, OBSERVATORY_MAX_LINES } from "../observatory/observatory.ts";
-import { installBuiltinReceipts } from "../internal/presentation/builtin-receipts.ts";
 import {
-  intercomMessageLines,
-  parseIntercomMessage,
-} from "../internal/presentation/intercom-receipt.ts";
-import { noticeLines } from "../internal/presentation/notice-view.ts";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
-import {
-  buildTodoList,
-  renderTodoList,
-} from "../internal/todo/todo-view.ts";
-import {
+  OBSERVATORY_MAX_LINES,
   SKIN_ENV_VAR,
+  TREE,
   activeSkinName,
+  buildTodoList,
   composerPromptGlyph,
+  installBuiltinReceipts,
+  intercomMessageLines,
+  noticeLines,
+  parseIntercomMessage,
+  renderObservatory,
+  renderTodoList,
+  safeVisibleWidth,
   skinGlyphs,
-} from "../internal/presentation/skin.ts";
-import { TREE } from "../internal/presentation/ui-common.ts";
+} from "@pi/ui-kit";
+import { registerApexLanding } from "../landing.ts";
+import { registerClaudeLanding } from "../../claude/landing.ts";
+import { registerHalLanding } from "../../hal/landing.ts";
 
 const { loadThemeFromPath } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/theme.js")).href);
 
@@ -90,6 +90,10 @@ function withSkin<T>(value: string | undefined, run: () => T): T {
     else process.env[SKIN_ENV_VAR] = previous;
   }
 }
+
+registerApexLanding();
+registerClaudeLanding();
+registerHalLanding();
 
 describe("apex presentation skins", () => {
   it("defaults to the apex skin when PI_UI_SKIN is unset", () => {

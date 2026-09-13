@@ -3,8 +3,10 @@
 // Renders every scenario at several widths with apex-dark colors approximated,
 // so composition can be judged without launching the TUI.
 
-import { buildObservatory, renderObservatory, OBSERVATORY_MAX_LINES } from "./observatory.ts";
-import { fallbackVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { OBSERVATORY_MAX_LINES, buildObservatory, renderObservatory } from "@pi/ui-kit";
+import { fallbackVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
+import { registerApexLanding } from "../landing.ts";
+registerApexLanding();
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 

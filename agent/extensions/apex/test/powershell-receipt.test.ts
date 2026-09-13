@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
 const {
   POWERSHELL_RECEIPT_TOOL,
@@ -13,10 +13,10 @@ const {
   powershellOwnsPresentation,
   powershellReceiptArg,
   powershellReceiptRenderers,
-} = await import("../internal/presentation/powershell-receipt.ts");
+} = await import("@pi/ui-kit/internal/presentation/powershell-receipt.ts");
 
 const { getHeadlessReceiptState, HEADLESS_WRAPPER_VERSION } = await import(
-  "../internal/presentation/headless-receipts.ts"
+  "@pi/ui-kit/internal/presentation/headless-receipts.ts"
 );
 
 const theme = {

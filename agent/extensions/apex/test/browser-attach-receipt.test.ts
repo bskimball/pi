@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   BROWSER_ATTACH_TOOL,
   browserAttachConnectExcerpt,
@@ -12,7 +12,7 @@ import {
   browserAttachReceiptArg,
   browserAttachReceiptRenderers,
   installBrowserAttachReceipts,
-} from "../internal/presentation/browser-attach-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/browser-attach-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

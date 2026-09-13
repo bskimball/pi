@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
 const {
   LSP_RECEIPT_TOOL,
@@ -13,7 +13,7 @@ const {
   lspReceiptArg,
   lspReceiptRenderers,
   shortLspPath,
-} = await import("../internal/presentation/lsp-receipt.ts");
+} = await import("@pi/ui-kit/internal/presentation/lsp-receipt.ts");
 
 const theme = {
   fg: (_key: string, text: string) => text,

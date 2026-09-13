@@ -10,7 +10,7 @@ import {
   SAFE_TEXT_MAX_CHARS,
   installRenderSafety,
   normalizeRenderedLines,
-} from "../internal/presentation/render-safety.ts";
+} from "@pi/ui-kit/internal/presentation/render-safety.ts";
 
 describe("apex expand-all render safety", () => {
   it("caps compositor line arrays so ctrl+o cannot dump unbounded output", () => {

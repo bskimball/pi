@@ -4,7 +4,7 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   bgKillReceiptArg,
   bgListReceiptArg,
@@ -14,7 +14,7 @@ import {
   bgStatusReceiptArg,
   bgStatusReceiptRenderers,
   installBgProcessReceipts,
-} from "../internal/presentation/bg-process-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/bg-process-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

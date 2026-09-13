@@ -1,7 +1,7 @@
 // Preview harness for the HAL working-indicator candidates.
-//   node --experimental-transform-types agent/extensions/apex/preview-indicator.mjs
-//   node --experimental-transform-types agent/extensions/apex/preview-indicator.mjs --animate core
-//   node --experimental-transform-types agent/extensions/apex/preview-indicator.mjs --animate-all
+//   node --experimental-transform-types agent/extensions/hal/preview-indicator.mjs
+//   node --experimental-transform-types agent/extensions/hal/preview-indicator.mjs --animate core
+//   node --experimental-transform-types agent/extensions/hal/preview-indicator.mjs --animate-all
 // Static filmstrip by default so every option compares at a glance. Timers
 // here are fine: this is a standalone CLI preview, not the extension render
 // path (which stays event-driven per the no-timer rule).
@@ -10,7 +10,7 @@ import {
   HAL_DEFAULT_CANDIDATE,
   HAL_INDICATOR_CANDIDATES,
   HAL_WORKING_MESSAGES,
-} from "./apex-ui.ts";
+} from "./working.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -40,7 +40,7 @@ function filmstrip() {
   console.log("\n\x1b[1mphrases\x1b[0m (sample of 8):");
   for (const phrase of sample) console.log(`  ${phrase}...`);
   console.log(
-    `\nAnimate one: node --experimental-transform-types agent/extensions/apex/preview-indicator.mjs --animate <name>\nNames: ${HAL_INDICATOR_CANDIDATES.map((candidate) => candidate.name).join(", ")}`,
+    `\nAnimate one: node --experimental-transform-types agent/extensions/hal/preview-indicator.mjs --animate <name>\nNames: ${HAL_INDICATOR_CANDIDATES.map((candidate) => candidate.name).join(", ")}`,
   );
 }
 

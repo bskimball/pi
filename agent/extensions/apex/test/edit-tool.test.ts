@@ -11,11 +11,11 @@ import {
   getMarkdownTheme,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
 const { installEditTool } = await import("../internal/edit/edit-tool.ts");
-const { installBuiltinReceipts } = await import("../internal/presentation/builtin-receipts.ts");
-const { installSkillInvocationChrome } = await import("../internal/presentation/skill-invocation.ts");
+const { installBuiltinReceipts } = await import("@pi/ui-kit/internal/presentation/builtin-receipts.ts");
+const { installSkillInvocationChrome } = await import("@pi/ui-kit/internal/presentation/skill-invocation.ts");
 
 function registeredTool(apexUi = "1"): any {
   const previousApexUi = process.env.PI_APEX_UI;

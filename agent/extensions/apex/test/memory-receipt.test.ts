@@ -4,14 +4,14 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   MEMORY_LIST_TOOL,
   MEMORY_WRITE_TOOL,
   installMemoryReceipts,
   memoryListReceiptRenderers,
   memoryWriteReceiptRenderers,
-} from "../internal/presentation/memory-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/memory-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

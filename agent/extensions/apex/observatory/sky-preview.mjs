@@ -1,7 +1,7 @@
 // Preview harness for the star field.
 //   node --experimental-transform-types agent/extensions/apex/observatory/sky-preview.mjs
 
-import { starFieldRow } from "./star-field.ts";
+import { starFieldRow } from "@pi/ui-kit";
 
 const ANSI = {
   accent: "\x1b[38;2;125;211;252m",

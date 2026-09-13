@@ -29,7 +29,9 @@ Pi discovers extensions two ways: a bare `*.ts` file in `agent/extensions/`, or 
 
 ```text
 agent/extensions/
-├── apex/            → apex-ui.ts          the UI layer (Observatory, tool receipts, edit, todo)
+├── apex/            → apex-ui.ts          Apex UI (shark Observatory, braille indicator)
+├── claude/          → claude-ui.ts        Claude UI (star motifs, Claude verbs)
+├── hal/             → hal-ui.ts           HAL UI (orb landing, square glyphs)
 ├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
 ├── lsp/             → index.ts            language-server navigation
 ├── bg-process.ts    + bg-process/         bg_start/status/list/kill
@@ -51,22 +53,22 @@ agent/extensions/
 
 This is the load-bearing invariant, enforced by `extensions/test/extension-discovery.test.ts`:
 
-- **No cross-extension source imports.** Every file in an entry point's import closure must live under that extension's own directory. Shared-looking helpers (`safe-text-layout.ts`, `ui-common.ts`, `last-phase.ts`, `terminal-restore.ts`, `process-tree-kill.ts`, `tool-result.ts`, `agent-discovery.ts`, `segmenter-safety.ts`) are **intentionally duplicated** per owner. Do not refactor them into a `shared/` directory — the test asserts `extensions/shared` does not exist.
+- **No cross-extension source imports.** Every relative import in an entry point's closure must stay under that extension's own directory. Shared UI presentation lives in `packages/ui-kit` (`@pi/ui-kit`), not `agent/extensions/shared` — the test still asserts `extensions/shared` does not exist. Headless helpers (`last-phase.ts`, `terminal-restore.ts`, `process-tree-kill.ts`, `agent-discovery.ts`, `segmenter-safety.ts`) stay duplicated per owner.
 - **One entry point per extension, discovered once.** Support code lives in `internal/`, `runtime/`, `presentation/`, `observatory/`, or `test/` so it is never loaded as a second extension.
 - **Deleting an extension directory + its entry file removes the feature cleanly**, with no dangling imports elsewhere.
 
 When editing a duplicated helper, decide deliberately whether the change belongs to one owner or all of them, and apply it per owner.
 
-### Apex Is The UI
+### Three installable UIs
 
-`apex/` owns the interactive presentation layer; every other extension is either headless or renders its own chrome locally. Receipt modules for headless tools live under `apex/internal/presentation/`; see `CONTEXT.md` for presentation ownership detail.
+`apex/`, `claude/`, and `hal/` are separately discovered UI extensions. Shared receipts, layout, todo tools, and the single `ToolExecutionComponent` wrap live in `packages/ui-kit`. Deleting one UI directory uninstalls that look. See `CONTEXT.md` for presentation ownership.
 
-- `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables Apex styling, chrome, and custom render hooks. Apex-owned tools remain registered and executable — execution and tool registration are unaffected. The one deliberate exception is the todo panel: it stays mounted and falls back to a plain, uncolored list instead of disappearing.
-- `/ui` selects `pi` (stock Pi), `apex`, `claude`, or `hal`. Claude and HAL are **skins over Apex**, not separate UI extensions: they keep `PI_APEX_UI=1` and set `PI_UI_SKIN` to their name. Claude uses round receipts and `claude-dark`; HAL uses square receipts, a truecolor orb+wordmark landing lockup with a glyph fallback, quiet activity, and `hal-dark`. Both use `⎿` continuations and a `>` composer. `PI_APEX_UI=0` applies only to `pi`. Skin glyphs live in `apex/internal/presentation/skin.ts` and are read dynamically at call time, so `/ui` switches take effect without a restart; an unset or unrecognized `PI_UI_SKIN` falls back to the apex glyphs.
+- `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables custom styling, chrome, and render hooks. Kit-owned tools remain registered and executable. The todo panel stays mounted as a plain, uncolored list.
+- `/ui` selects `pi` (stock Pi) or an **installed** UI (`apex`, `claude`, `hal`). Missing UI directories fail closed. Installed custom UIs set `PI_APEX_UI=1` and `PI_UI_SKIN` to their name. Claude uses round receipts and `claude-dark`; HAL uses square receipts, a truecolor orb+wordmark landing, quiet activity, and `hal-dark`. Glyphs are read at call time so a live `/ui` switch applies without a restart; unset `PI_UI_SKIN` falls back to Apex glyphs.
 - `/mode work` is operations-first and uses its own prompt rather than the coding-first `agent/SYSTEM.md`. It shares Fusion's persistent sidekick lifecycle and configured model pair but keeps the existing synchronous specialist roster available. Business workflows and integrations remain owned by their project; custom work agents are not bundled into this mode.
 - Live async workers share that same above-editor dock as an Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
 - `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task children are spawned with `PI_APEX_UI=0` so workers never paint chrome.
-- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`, `prompt-commands` (`browser_attach`). Apex attaches receipt chrome to several of these, skipped entirely when `PI_APEX_UI=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; Apex owns their interactive chrome.
+- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_APEX_UI=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
 - There is no custom footer. Pi owns the footer.
 
 ### Rendering Constraints
@@ -74,7 +76,7 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 These come from real Windows Terminal failures and still apply to any custom rendering:
 
 - No presentation timers: no `setInterval()` render loops, no `tui.requestRender()` on a timer. Pi owns render scheduling.
-- Measure and truncate with the owning extension's `safe-text-layout.ts`, never `.length` and never Pi TUI `visibleWidth()`/`truncateToWidth()` in high-frequency custom rendering.
+- Measure and truncate with kit `safe-text-layout.ts` (or the owning extension's copy for headless helpers), never `.length` and never Pi TUI `visibleWidth()`/`truncateToWidth()` in high-frequency custom rendering.
 - Keep tool and task output bounded in both line count and character count.
 - Sanitize dynamic text; keep ANSI styling simple and balanced; never splice styled strings by JS code-unit offsets.
 - Use narrow BMP glyphs. No wide, ambiguous-width, or combining characters.
@@ -82,7 +84,7 @@ These come from real Windows Terminal failures and still apply to any custom ren
 
 ### Observatory Landing Screen
 
-The blank-chat landing screen (shark wordmark + star field) lives in `agent/extensions/apex/observatory/`, mounted via `ctx.ui.setHeader(...)`. Full art tiers, wordmark rules, preview-harness commands, and rendering constraints are documented in [`agent/extensions/apex/observatory/README.md`](agent/extensions/apex/observatory/README.md) — read it before touching anything under `observatory/`.
+Blank-chat landing is mounted via `ctx.ui.setHeader(...)`. Apex shark/star art lives in `agent/extensions/apex/observatory/`; HAL orb art lives with the HAL UI. The shared Observatory engine is in `packages/ui-kit`. Apex art rules: [`agent/extensions/apex/observatory/README.md`](agent/extensions/apex/observatory/README.md).
 
 ### Crash And Stability Diagnostics
 

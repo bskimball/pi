@@ -24,7 +24,7 @@ Fusion's [mode card](../../prompts/inactive/fusion.md#handoffs) owns the handoff
 
 ## Presentation
 
-`/ui pi` selects default Pi presentation; `/ui apex` selects Apex; `/ui claude` selects the Claude skin on Apex; `/ui hal` selects the HAL skin on Apex. UI switching is live and idle-only, independent of behavior and models. Each UI has a separately saved theme: `dark`, `apex-dark`, `claude-dark`, or `hal-dark`. `hal-dark` and HAL rendering are owned by the Apex presentation implementation; behavior-mode plumbing only selects `PI_UI_SKIN=hal`.
+`/ui pi` selects default Pi presentation. `/ui apex`, `/ui claude`, and `/ui hal` select the matching installed UI extension. Switching is live and idle-only, independent of behavior and models, and fails closed if that UI directory is missing. Each UI has a separately saved theme: `dark`, `apex-dark`, `claude-dark`, or `hal-dark`. Shared receipts live in `packages/ui-kit`; behavior-mode plumbing only sets `PI_APEX_UI` / `PI_UI_SKIN`.
 
 ## Storage and integration
 

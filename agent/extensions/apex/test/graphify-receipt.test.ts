@@ -4,14 +4,14 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
 const {
   GRAPHIFY_RECEIPT_TOOL,
   graphifyOwnsPresentation,
   graphifyReceiptRenderers,
   installGraphifyReceipts,
-} = await import("../internal/presentation/graphify-receipt.ts");
+} = await import("@pi/ui-kit/internal/presentation/graphify-receipt.ts");
 
 const theme = {
   fg: (_key: string, text: string) => text,

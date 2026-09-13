@@ -9,11 +9,14 @@
     "strict": true,
     "types": ["node"],
     "paths": {
-      "pi-mcp-adapter": ["./agent/types/pi-mcp-adapter.d.ts"]
+      "pi-mcp-adapter": ["./agent/types/pi-mcp-adapter.d.ts"],
+      "@pi/ui-kit": ["./packages/ui-kit/index.ts"],
+      "@pi/ui-kit/*": ["./packages/ui-kit/*"]
     }
   },
   "include": [
     "agent/extensions/**/*.ts",
-    "agent/types/**/*.d.ts"
+    "agent/types/**/*.d.ts",
+    "packages/ui-kit/**/*.ts"
   ]
 }

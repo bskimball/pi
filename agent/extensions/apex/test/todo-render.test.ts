@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
-const { installTodoTools } = await import("../internal/todo/todo-tools.ts");
+const { installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
 const { publishDockAgents, resetDockAgents } = await import(
-  "../internal/todo/fleet-listen.ts"
+  "@pi/ui-kit/internal/todo/fleet-listen.ts"
 );
 const {
   TODO_LIST_MAX_LINES,
@@ -12,7 +12,7 @@ const {
   renderAgentList,
   renderPlainTodoList,
   renderTodoList,
-} = await import("../internal/todo/todo-view.ts");
+} = await import("@pi/ui-kit/internal/todo/todo-view.ts");
 
 function createMockPi(apexUi = "1") {
   const previousApexUi = process.env.PI_APEX_UI;

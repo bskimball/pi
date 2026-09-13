@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "pi": {
+    "extensions": ["hal-ui.ts"]
+  }
+}

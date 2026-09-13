@@ -1,22 +1,28 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  RANDOM_INDICATOR_FRAME_COUNT,
+  RANDOM_INDICATOR_INTERVAL_MS,
+  WORKING_MESSAGES,
+  buildWorkingIndicator as buildApexWorkingIndicator,
+} from "../working.ts";
+import {
   CLAUDE_INDICATOR_FRAME_COUNT,
   CLAUDE_WORKING_INTERVAL_MS,
   CLAUDE_WORKING_MESSAGES,
   CLAUDE_WORKING_MOTIFS,
   CLAUDE_WORKING_WEIGHTS,
+  buildWorkingIndicator as buildClaudeWorkingIndicator,
+  claudeWorkingTonesFor,
+} from "../../claude/working.ts";
+import {
   HAL_DEFAULT_CANDIDATE,
   HAL_INDICATOR_CANDIDATES,
   HAL_WORKING_MESSAGES,
-  RANDOM_INDICATOR_FRAME_COUNT,
-  RANDOM_INDICATOR_INTERVAL_MS,
-  WORKING_MESSAGES,
-  buildWorkingIndicator,
-  claudeWorkingTonesFor,
-} from "../apex-ui.ts";
-import { SKIN_ENV_VAR } from "../internal/presentation/skin.ts";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+  buildWorkingIndicator as buildHalWorkingIndicator,
+} from "../../hal/working.ts";
+import { SKIN_ENV_VAR } from "@pi/ui-kit";
+import { safeVisibleWidth } from "@pi/ui-kit";
 
 function withSkin<T>(value: string | undefined, run: () => T): T {
   const previous = process.env[SKIN_ENV_VAR];
@@ -43,6 +49,14 @@ function stubCtx(
 function stubPi(thinkingLevel = "medium"): any {
   return { getThinkingLevel: () => thinkingLevel };
 }
+
+function buildWorkingIndicator(ctx: any, pi: any) {
+  const skin = process.env[SKIN_ENV_VAR];
+  if (skin === "claude") return buildClaudeWorkingIndicator(ctx, pi);
+  if (skin === "hal") return buildHalWorkingIndicator(ctx, pi);
+  return buildApexWorkingIndicator(ctx, pi);
+}
+
 
 const EXPECTED_MOTIFS: Record<string, string[]> = {
   pulse: ["✼", "✻", "✽", "✺", "✽", "✻"],

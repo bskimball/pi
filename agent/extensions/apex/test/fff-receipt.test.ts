@@ -4,11 +4,11 @@ import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
+import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
   getHeadlessReceiptState,
   HEADLESS_STATE_KEY,
-} from "../internal/presentation/headless-receipts.ts";
+} from "@pi/ui-kit/internal/presentation/headless-receipts.ts";
 import {
   FFF_FIND_TOOL,
   FFF_GREP_TOOL,
@@ -17,7 +17,7 @@ import {
   ffgrepReceiptArg,
   ffgrepReceiptRenderers,
   installFffReceipts,
-} from "../internal/presentation/fff-receipt.ts";
+} from "@pi/ui-kit/internal/presentation/fff-receipt.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,
@@ -406,10 +406,7 @@ describe("apex fff receipts", () => {
     assert.ok(state.registry.has(FFF_FIND_TOOL));
     assert.ok(state.registry.has(FFF_GREP_TOOL));
 
-    const moduleUrl = new URL(
-      "../internal/presentation/headless-receipts.ts",
-      import.meta.url,
-    );
+    const moduleUrl = new URL(import.meta.resolve("@pi/ui-kit/internal/presentation/headless-receipts.ts"));
     moduleUrl.search = "fff-reload-test";
     const reloaded = await import(moduleUrl.href);
 

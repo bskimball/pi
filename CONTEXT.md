@@ -6,12 +6,10 @@ Domain vocabulary and seams for `~/.pi`. Runtime behavior lives under `agent/`; 
 
 ```text
 agent/extensions/
-├── apex/                   # optional custom UI; owns all Apex rendering
-│   ├── apex-ui.ts
-│   ├── builtin-tools.ts
-│   ├── observatory/
-│   ├── internal/           # Apex-only presentation/runtime/edit/todo modules
-│   └── test/
+├── apex/                   # Apex UI extension (shark Observatory, braille indicator)
+├── claude/                 # Claude UI extension (star motifs, Claude verbs)
+├── hal/                    # HAL UI extension (orb landing, square glyphs)
+packages/ui-kit/            # shared presentation package (not a Pi extension)
 ├── task/                   # standalone sync + async delegation
 │   ├── amp-task.ts
 │   ├── async-task.ts
@@ -43,18 +41,18 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 ## Presentation ownership
 
-- Apex is the only general custom-presentation extension. Its Observatory, built-in tool receipts, layout safety, and width-safe primitives live under `apex/`.
-- Apex receipts cover the Pi-owned `read`, `edit`, `grep`, and `ls` built-ins through `registerHeadlessReceipt(..., { overrideOwned: true })`; Pi keeps execution. `bash` and `write` are instead re-registered in `apex/builtin-tools.ts` because Apex wraps their execute (write captures a diff). Add chrome for a Pi-owned tool the first way unless execute genuinely needs wrapping.
-- `claude` and `hal` are skins over Apex rather than separate presentation extensions: `PI_UI_SKIN` selects the glyph set in `apex/internal/presentation/skin.ts`, consumed through `TREE` in `ui-common.ts` and the composer prompt in `apex-ui.ts`. Only one extension patches `ToolExecutionComponent`, so no second prototype wrapper exists.
+- Apex, Claude, and HAL are three installable UI extensions. Shared TREE receipts, layout, todo tools, and the single `ToolExecutionComponent` wrap live in `packages/ui-kit` (import `@pi/ui-kit`). That package is not a Pi extension and must not live under `agent/extensions/shared`.
+- Kit receipts cover the Pi-owned `read`, `edit`, `grep`, and `ls` built-ins through `registerHeadlessReceipt(..., { overrideOwned: true })`; Pi keeps execution. `bash` and `write` are re-registered in the kit because execute is wrapped (write captures a diff).
+- Each UI owns landing art, glyphs, working indicator, and theme. `/ui` selects among installed UIs (`pi` is always available) and fails closed if the target directory is missing. `PI_UI_SKIN` still names the active look so a live switch applies without restart. Unset or unrecognized values fall back to Apex glyphs. Only the kit wraps `ToolExecutionComponent` (once).
 - Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
 - Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
-- Todo is Apex-private (`apex/internal/todo/`): receipts and the docked above-editor panel, or stock rendering under `PI_APEX_UI=0`.
+- Todo tools and the docked above-editor panel live in the kit. Styled chrome follows the active UI; under `PI_APEX_UI=0` the dock stays as a plain list.
 - `PI_APEX_UI=0` remains the emergency opt-out for every custom presentation surface. It disables Apex UI and Task cards without disabling either extension's tool behavior.
 - Rendering remains passive and event-driven. No extension presentation timer calls `requestRender()`.
 
 ## Todo dock
 
-One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and Apex listens — no cross-extension import, no extra footer rows.
+One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and the kit listens — no cross-extension import, no extra footer rows.
 
 | Trigger | Effect |
 | --- | --- |
@@ -70,7 +68,7 @@ One `aboveEditor` widget (`todo-list`) owned by Apex. Live async workers share t
 
 The behavior-mode transition module in `prompt-commands/modes.ts` owns staged model/thinking selection, active tools, session choices, and global defaults. Fusion and Work wait for the task-owned persistent-sidekick configuration acknowledgement before persistence and announce the new mode last. They share the configured model pair and transcript lifecycle. Work uses a standalone operations-first prompt and allows the existing synchronous specialist roster; Fusion retains its closed roster. Failed transitions restore the prior selection; incomplete recovery blocks input until a successful `/mode` switch. `/model` alone cannot clear that recovery block.
 
-Presentation remains independent: `pi:ui:changed` lets each owner update its own presentation. Apex refreshes its registered todo/bash/write receipt definitions without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL landing instead of the shark/star field; Pi still owns animation timing.
+Presentation remains independent: `pi:ui:changed` lets the active UI host refresh chrome without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL landing instead of the shark/star field; Pi still owns animation timing.
 
 ## Task extension
 

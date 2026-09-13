@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -9,6 +10,24 @@ import { pickFusionModel } from "./model-picker.ts";
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
 const uiLabels = { pi: "Default Pi", apex: "Apex", claude: "Claude", hal: "HAL" } as const;
+type UiName = keyof typeof uiLabels;
+const UI_EXTENSION_DIR: Record<Exclude<UiName, "pi">, string> = {
+  apex: "apex",
+  claude: "claude",
+  hal: "hal",
+};
+
+function uiExtensionInstalled(ui: Exclude<UiName, "pi">): boolean {
+  return fs.existsSync(join(dirname(fileURLToPath(import.meta.url)), "..", UI_EXTENSION_DIR[ui]));
+}
+
+function availableUis(): UiName[] {
+  const names: UiName[] = ["pi"];
+  for (const name of ["apex", "claude", "hal"] as const) {
+    if (uiExtensionInstalled(name)) names.push(name);
+  }
+  return names;
+}
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" | "work" => mode === "fusion" || mode === "work";
 
 /**
@@ -238,9 +257,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     description: "Switch Pi, Apex, Claude, or HAL presentation, independently of behavior",
     handler: async (args, ctx) => {
       if (!idle(ctx)) return;
-      const value = args.trim().toLowerCase() || await ctx.ui.select("Presentation", ["pi", "apex", "claude", "hal"]);
+      const installed = availableUis();
+      const value = args.trim().toLowerCase() || await ctx.ui.select("Presentation", installed);
       if (!value) return;
-      if (value !== "pi" && value !== "apex" && value !== "claude" && value !== "hal") { ctx.ui.notify("Usage: /ui [pi|apex|claude|hal]", "warning"); return; }
+      if (value !== "pi" && value !== "apex" && value !== "claude" && value !== "hal") { ctx.ui.notify(`Usage: /ui [${installed.join("|")}]`, "warning"); return; }
+      if (value !== "pi" && !uiExtensionInstalled(value)) {
+        ctx.ui.notify(`${uiLabels[value]} UI is not installed.`, "error");
+        return;
+      }
       const oldUi = preferences.ui;
       const oldTheme = ctx.ui.theme.name ?? preferences.themes[oldUi];
       preferences = readPreferences(preferencePath);
@@ -273,11 +297,13 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     applyModeTools(state.mode);
     announce();
     pi.appendEntry("behavior-mode", structuredClone(state));
-    process.env.PI_APEX_UI = preferences.ui === "pi" ? "0" : "1";
-    process.env.PI_UI_SKIN = preferences.ui === "pi" ? "apex" : preferences.ui;
+    const savedUi = preferences.ui;
+    const activeUi: UiName = savedUi !== "pi" && !uiExtensionInstalled(savedUi) ? "pi" : savedUi;
+    process.env.PI_APEX_UI = activeUi === "pi" ? "0" : "1";
+    process.env.PI_UI_SKIN = activeUi === "pi" ? "apex" : activeUi;
     if (ctx.hasUI) {
-      ctx.ui.setTheme(preferences.themes[preferences.ui]);
-      pi.events.emit("pi:ui:changed", { ui: preferences.ui, ctx });
+      ctx.ui.setTheme(preferences.themes[activeUi]);
+      pi.events.emit("pi:ui:changed", { ui: activeUi, ctx });
       ctx.ui.setStatus("mode", labels[state.mode]);
     }
   });
