@@ -90,7 +90,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (!model) return undefined;
     const levels: string[] = [...getSupportedThinkingLevels(model)];
     if (previous && levels.includes(previous.thinking)) levels.sort((a, b) => Number(b === previous.thinking) - Number(a === previous.thinking));
-    const thinking = await ctx.ui.select(`${role} thinking level`, levels);
+    const thinking = await ctx.ui.select(`${role} thinking level${role.toLowerCase().includes("lead") ? " (high recommended)" : role.toLowerCase().includes("sidekick") ? " (medium/low usually enough)" : ""}`, levels);
     return thinking ? { provider: model.provider, modelId: model.id, thinking } : undefined;
   }
   async function configure(ctx: ExtensionContext, mode: "fusion" | "work"): Promise<FusionPair | undefined> {

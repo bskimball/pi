@@ -6,6 +6,14 @@ type PickerModel = Model<Api>;
 const identity = (model: PickerModel) => `${model.provider}/${model.id}`;
 const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 
+/** Pairing hint: lead plans/reviews (frontier, high thinking), sidekick executes (efficient, lower thinking). */
+export function pickerHint(title: string): string | undefined {
+  const text = title.toLowerCase();
+  if (text.includes("lead")) return "frontier for planning/review — high thinking recommended";
+  if (text.includes("sidekick")) return "efficient for execution — medium/low thinking is usually enough";
+  return undefined;
+}
+
 /** Native Pi input and scrolling-list components, using only public extension APIs. */
 export class FusionModelPicker implements Component, Focusable {
   private input = new Input();
@@ -87,8 +95,10 @@ export class FusionModelPicker implements Component, Focusable {
     if (rows !== this.visibleRows) { this.visibleRows = rows; this.rebuildList(); }
     const text = (value: string) => new Text(value, 0, 0).render(width);
     const scope = this.scoped ? "your model scope" : "all configured providers";
+    const hint = pickerHint(this.title);
     return [
       ...text(this.theme.fg("accent", clean(this.title))),
+      ...(hint ? text(this.theme.fg("dim", clean(hint))) : []),
       ...text(this.theme.fg("dim", `${this.filtered.length} models | ${scope}${this.scopedModels.length ? " | Tab: switch scope" : ""}`)),
       ...this.input.render(width),
       ...(this.filtered.length ? this.list.render(width) : text(this.theme.fg("warning", "No matching models. Clear search or Tab to change scope."))),
@@ -107,8 +117,9 @@ export async function pickFusionModel(ctx: ExtensionContext, role: string, previ
     return undefined;
   }
   const previousId = previous ? `${previous.provider}/${previous.modelId}` : undefined;
+  const hint = pickerHint(role);
   if (ctx.mode !== "tui") {
-    const value = await ctx.ui.input(`${role} model (provider/model ID)`, previousId);
+    const value = await ctx.ui.input(`${role} model (provider/model ID)${hint ? ` — ${hint}` : ""}`, previousId);
     if (!value) return undefined;
     const selected = models.find(model => identity(model) === value.trim());
     if (!selected) ctx.ui.notify("Choose a model from a configured provider using its exact provider/model ID.", "warning");
