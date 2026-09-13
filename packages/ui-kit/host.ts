@@ -33,6 +33,7 @@ import {
   type SkinName,
 } from "./index.ts";
 import { runFeaturedExtensionCommand } from "./internal/runtime/featured-commands.ts";
+import { uiKitShared } from "./once.ts";
 
 export interface UiHostOptions {
   skin: SkinName;
@@ -45,32 +46,42 @@ export interface UiHostOptions {
 
 const presentationEnabled = () => process.env.PI_APEX_UI !== "0";
 
-const hosts = new Map<SkinName, UiHostOptions>();
-const g = globalThis as typeof globalThis & {
-  __piUiKitChromeClear?: boolean;
-  __piUiKitHostListeners?: boolean;
-};
+function hostsMap(): Map<SkinName, UiHostOptions> {
+  return uiKitShared().hosts as Map<SkinName, UiHostOptions>;
+}
 
 function activeHost(): UiHostOptions | undefined {
   if (!presentationEnabled()) return undefined;
-  return hosts.get(activeSkinName());
+  return hostsMap().get(activeSkinName());
 }
 
 export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
-  hosts.set(options.skin, options);
+  const shared = uiKitShared();
+  hostsMap().set(options.skin, options);
   installSharedTools(pi);
   if (activeHost()?.skin === options.skin) installSharedPresentation(pi);
-  if (g.__piUiKitHostListeners) return;
-  g.__piUiKitHostListeners = true;
 
+  // Working indicator refreshes on every host (not just the first owner)
+  // so the active skin's frames are (re)applied on each run even if the
+  // first owner's listener is stale. Every host resolves the same
+  // activeHost dynamically, so concurrent writes agree on one skin.
   pi.on("agent_start", (_event, ctx) => {
     const host = activeHost();
     if (!host || !ctx.hasUI) return;
-    const built = host.buildWorkingIndicator(ctx, pi);
-    ctx.ui.setWorkingVisible(true);
-    ctx.ui.setWorkingMessage(built.message);
-    ctx.ui.setWorkingIndicator({ frames: built.frames, intervalMs: built.intervalMs });
+    try {
+      const built = host.buildWorkingIndicator(ctx, pi);
+      ctx.ui.setWorkingVisible(true);
+      ctx.ui.setWorkingMessage(built.message);
+      ctx.ui.setWorkingIndicator({ frames: built.frames, intervalMs: built.intervalMs });
+    } catch (error) {
+      // A skin/theme key mismatch must never take the working chrome down:
+      // keep whatever indicator settings are already in place.
+      reportRenderFailure("working-indicator", error);
+    }
   });
+
+  if (shared.hostListeners) return;
+  shared.hostListeners = true;
 
   let observatory: Observatory | undefined;
   let observatoryCtx: ExtensionContext | undefined;
@@ -291,15 +302,15 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
       }
       return;
     }
-    if (!presentationEnabled() && ctx.hasUI && !g.__piUiKitChromeClear) {
-      g.__piUiKitChromeClear = true;
+    if (!presentationEnabled() && ctx.hasUI && !shared.chromeClear) {
+      shared.chromeClear = true;
       ctx.ui.setEditorComponent(undefined);
       ctx.ui.setWorkingIndicator(undefined);
       ctx.ui.setWorkingMessage(undefined);
       ctx.ui.setHiddenThinkingLabel(undefined);
       clearObservatory();
       queueMicrotask(() => {
-        g.__piUiKitChromeClear = false;
+        shared.chromeClear = false;
       });
     }
   });
@@ -307,15 +318,31 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     const host = activeHost();
     if (!ctx.hasUI || !host) return;
-    const built = host.buildWorkingIndicator(ctx, piApi);
-    ctx.ui.setWorkingVisible(true);
-    ctx.ui.setWorkingMessage(built.message);
-    ctx.ui.setWorkingIndicator({ frames: built.frames, intervalMs: built.intervalMs });
+    // The thinking label lands before the indicator build, and the custom
+    // editor installs after it unconditionally: a throwing indicator build
+    // (e.g. skin/theme key mismatch) must never skip the editor, otherwise
+    // Pi keeps its default editor, whose spinner embeds in the top border
+    // instead of the standalone row above the composer.
     ctx.ui.setHiddenThinkingLabel(host.thinkingLabel);
+
+    function composerPrompt(): string {
+      if (activeSkinName() === "hal") {
+        // HAL cursor pulse: Pi owns render scheduling (no timers), so the
+        // phase is evaluated per render and advances on keystrokes and
+        // streaming frames. Bright/dim keeps either frozen frame looking
+        // intentional when idle.
+        const bright = Math.floor(Date.now() / 530) % 2 === 0;
+        return ctx.ui.theme.fg(bright ? "accent" : "dim", "\u258c");
+      }
+      return ctx.ui.theme.fg("accent", composerPromptGlyph());
+    }
 
     class SkinEditor extends CustomEditor {
       constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
-        super(tui, theme, keybindings, { paddingX: 2 });
+        // Pin embedding off: newer Pi defaults CustomEditor to embedding the
+        // working spinner inside the top border, but our chrome keeps the
+        // indicator on its own line above the composer.
+        super(tui, theme, keybindings, { paddingX: 2, embedWorkingStatus: false });
       }
       render(width: number): string[] {
         try {
@@ -326,7 +353,7 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
           if (lines.length > 1) {
             const inputLine = stripAnsi(lines[1]);
             if (inputLine.startsWith("  ")) {
-              lines[1] = `${ctx.ui.theme.fg("accent", composerPromptGlyph())} ${lines[1].slice(2)}`;
+              lines[1] = `${composerPrompt()} ${lines[1].slice(2)}`;
             }
           }
           return lines;
@@ -337,6 +364,14 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
       }
     }
 
+    try {
+      const built = host.buildWorkingIndicator(ctx, piApi);
+      ctx.ui.setWorkingVisible(true);
+      ctx.ui.setWorkingMessage(built.message);
+      ctx.ui.setWorkingIndicator({ frames: built.frames, intervalMs: built.intervalMs });
+    } catch (error) {
+      reportRenderFailure("working-indicator", error);
+    }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => new SkinEditor(tui, theme, keybindings));
   }
 }

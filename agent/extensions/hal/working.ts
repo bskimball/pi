@@ -70,6 +70,20 @@ function halOrbitFrames(ctx: ExtensionContext, leadTone: string): string[] {
   return frames;
 }
 
+/**
+ * HAL brand inks with graceful degradation: `brand`/`brandDim` exist only in
+ * hal-dark, so under any other theme the core breathes in accent/muted
+ * instead of throwing (Pi's theme.fg throws on unknown keys, which would
+ * otherwise take the whole working chrome down with it).
+ */
+function halFg(ctx: ExtensionContext, key: string, text: string): string {
+  try {
+    return ctx.ui.theme.fg(key as any, text);
+  } catch {
+    return ctx.ui.theme.fg((key === "brand" ? "accent" : "muted") as any, text);
+  }
+}
+
 function halCoreFrames(ctx: ExtensionContext, leadTone: string): string[] {
   const beats: Array<[string, string]> = [
     ["█", "brand"], ["▓", "brand"], ["▒", "brandDim"], ["░", "dim"], ["▒", "brandDim"], ["▓", "brand"],
@@ -79,7 +93,7 @@ function halCoreFrames(ctx: ExtensionContext, leadTone: string): string[] {
     for (const [glyph, tone] of beats) {
       frames.push(
         ctx.ui.theme.fg(leadTone as any, "▌") +
-          ctx.ui.theme.fg(tone as any, glyph) +
+          halFg(ctx, tone, glyph) +
           ctx.ui.theme.fg(leadTone as any, "▐"),
       );
       if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;

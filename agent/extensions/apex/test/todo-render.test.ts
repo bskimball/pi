@@ -1479,3 +1479,80 @@ describe("fusion close backstop", () => {
     });
   });
 });
+
+describe("installUiHost once-owner across skins", () => {
+  it("registers shared tools and shortcuts on only the first pi", async () => {
+    const previousSkin = process.env.PI_UI_SKIN;
+    delete process.env.PI_UI_SKIN;
+    const { resetUiKitInstallForTests, installUiHost, registerObservatoryLanding } = await import("@pi/ui-kit");
+    resetUiKitInstallForTests();
+    function mockPi() {
+      const tools = new Map<string, unknown>();
+      const shortcuts = new Map<string, unknown>();
+      const commands = new Map<string, unknown>();
+      const events = { on() {} };
+      return {
+        tools,
+        shortcuts,
+        commands,
+        events,
+        on() {},
+        registerTool(def: { name: string }) {
+          tools.set(def.name, def);
+        },
+        registerShortcut(key: string, def: unknown) {
+          shortcuts.set(key, def);
+        },
+        registerCommand(name: string, def: unknown) {
+          commands.set(name, def);
+        },
+        getCommands() {
+          return [];
+        },
+        sendUserMessage() {},
+        registerMessageRenderer() {},
+      };
+    }
+    const apex = mockPi();
+    const claude = mockPi();
+    const hal = mockPi();
+    const noopIndicator = () => ({ frames: ["·"], intervalMs: 1000, message: "" });
+    try {
+      const dummyLanding = {
+        prelude() { return []; },
+        logo() { return { rows: [], blockWidth: 0 }; },
+        invitation() { return ""; },
+      };
+      registerObservatoryLanding("apex", dummyLanding as any);
+      registerObservatoryLanding("claude", dummyLanding as any);
+      registerObservatoryLanding("hal", dummyLanding as any);
+      installUiHost(apex as any, { skin: "apex", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      installUiHost(claude as any, { skin: "claude", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      installUiHost(hal as any, { skin: "hal", thinkingLabel: "· thinking", buildWorkingIndicator: noopIndicator });
+      for (const name of ["todo_write", "todo_read", "bash", "write"]) {
+        assert.ok(apex.tools.has(name), `${name} on first pi`);
+        assert.equal(claude.tools.has(name), false, `${name} not on claude`);
+        assert.equal(hal.tools.has(name), false, `${name} not on hal`);
+      }
+      for (const key of ["alt+t", "alt+a", "alt+o"]) {
+        assert.ok(apex.shortcuts.has(key), `${key} on first pi`);
+        assert.equal(claude.shortcuts.has(key), false);
+        assert.equal(hal.shortcuts.has(key), false);
+      }
+      for (const name of ["todos", "agents", "observatory"]) {
+        assert.ok(apex.commands.has(name), `${name} on first pi`);
+        assert.equal(claude.commands.has(name), false);
+        assert.equal(hal.commands.has(name), false);
+      }
+      // Isolated jiti copies of the kit still share this interned process bag.
+      const bag = (process as any)[Symbol.for("pi.ui-kit.shared")];
+      assert.ok(bag?.toolsPi, "process bag claimed by first skin");
+      assert.equal(bag.hosts.size, 3, "later skins still join the hosts map");
+      assert.equal(bag.landings.size, 3, "later skins still join the landings map");
+    } finally {
+      resetUiKitInstallForTests();
+      if (previousSkin === undefined) delete process.env.PI_UI_SKIN;
+      else process.env.PI_UI_SKIN = previousSkin;
+    }
+  });
+});

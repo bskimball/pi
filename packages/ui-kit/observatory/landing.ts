@@ -1,4 +1,5 @@
 import { activeSkinName, type SkinName } from "../internal/presentation/skin.ts";
+import { uiKitShared } from "../once.ts";
 
 export type Fg = (key: any, text: string) => string;
 
@@ -18,12 +19,14 @@ export interface ObservatoryLanding {
   invitation(fg: Fg, width: number): string;
 }
 
-const landings = new Map<SkinName, ObservatoryLanding>();
+function landingsMap(): Map<SkinName, ObservatoryLanding> {
+  return uiKitShared().landings as Map<SkinName, ObservatoryLanding>;
+}
 
 export function registerObservatoryLanding(skin: SkinName, landing: ObservatoryLanding): void {
-  landings.set(skin, landing);
+  landingsMap().set(skin, landing);
 }
 
 export function observatoryLandingFor(skin: SkinName = activeSkinName()): ObservatoryLanding | undefined {
-  return landings.get(skin);
+  return landingsMap().get(skin);
 }

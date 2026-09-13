@@ -53,18 +53,90 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Shared tree glyphs and column widths for tool and task surfaces. */
-export const TREE = {
-  /** Active root: filled circle, painted in the owning receipt's status tone. */
+/** Skin name for task gutters. Mirrors the ui-kit skin contract so
+ * sub-agent cards use the same tree geometry as tool receipts:
+ * apex keeps the rounded continuation rail while claude/hal use the
+ * square corner rail. Read at call time so a live /ui switch applies
+ * without a restart; unset or unrecognized values fall back to apex. */
+type TaskSkinName = "apex" | "claude" | "hal";
+
+function activeTaskSkin(): TaskSkinName {
+  const skin = process.env.PI_UI_SKIN;
+  return skin === "claude" || skin === "hal" ? skin : "apex";
+}
+
+interface TaskSkinGlyphs {
+  header: string;
+  branch: string;
+  last: string;
+  rail: string;
+  receipt: string;
+  hang: string;
+}
+
+const TASK_APEX_SKIN: TaskSkinGlyphs = {
   header: "\u25cf",
   branch: "\u251c\u2500",
   last: "\u2570\u2500",
   rail: "\u2502",
-  /** Idle receipt root: open circle, painted in the owning receipt's status tone. */
   receipt: "\u25cb",
-  /** Detached continuation: aligns to the child column without a tree edge. */
   hang: "   ",
-} as const;
+};
+
+const TASK_CLAUDE_SKIN: TaskSkinGlyphs = {
+  header: "\u25cf",
+  branch: "\u251c\u2500",
+  last: "\u2570\u2500",
+  rail: "\u23bf",
+  receipt: "\u25cf",
+  hang: "   ",
+};
+
+const TASK_HAL_SKIN: TaskSkinGlyphs = {
+  ...TASK_CLAUDE_SKIN,
+  header: "\u25a0",
+  receipt: "\u25a1",
+};
+
+function taskSkinGlyphs(): TaskSkinGlyphs {
+  const skin = activeTaskSkin();
+  if (skin === "hal") return TASK_HAL_SKIN;
+  return skin === "claude" ? TASK_CLAUDE_SKIN : TASK_APEX_SKIN;
+}
+
+/**
+ * Shared tree glyphs and column widths for task surfaces.
+ *
+ * Values intentionally mirror the ui-kit TREE skin contract so sub-agent
+ * activity cards render the same gutters as tool receipts on every UI.
+ * Property reads consult PI_UI_SKIN on every access (same dynamic contract
+ * as the kit), so a live /ui switch swaps gutters without a restart.
+ * Shape and keys are unchanged; the apex skin returns the exact values this
+ * object used to hold statically.
+ */
+export const TREE = {
+  /** Active root: filled circle, painted in the owning receipt's status tone. */
+  get header(): string {
+    return taskSkinGlyphs().header;
+  },
+  get branch(): string {
+    return taskSkinGlyphs().branch;
+  },
+  get last(): string {
+    return taskSkinGlyphs().last;
+  },
+  get rail(): string {
+    return taskSkinGlyphs().rail;
+  },
+  /** Idle receipt root: open circle, painted in the owning receipt's status tone. */
+  get receipt(): string {
+    return taskSkinGlyphs().receipt;
+  },
+  /** Detached continuation: aligns to the child column without a tree edge. */
+  get hang(): string {
+    return taskSkinGlyphs().hang;
+  },
+};
 
 export const DURATION_COLUMN = 6;
 

@@ -14,24 +14,20 @@ import { installSkillInvocationChrome } from "./internal/presentation/skill-invo
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
 import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
+import { claimSharedTools, resetUiKitOnceForTests, uiKitShared } from "./once.ts";
 
-const g = globalThis as typeof globalThis & {
-  __piUiKitTools?: boolean;
-  __piUiKitPresentation?: boolean;
-};
-
-/** Todo tools + bash/write adapters. Safe to call from every UI extension. */
+/** Todo tools + bash/write adapters. First UI extension's `pi` owns them process-wide. */
 export function installSharedTools(pi: ExtensionAPI): void {
-  if (g.__piUiKitTools) return;
-  g.__piUiKitTools = true;
+  if (!claimSharedTools(pi)) return;
   installApexOwnedTools(pi);
   installBuiltinTools(pi);
 }
 
 /** One ToolExecutionComponent wrap. Safe to call from every UI extension. */
 export function installSharedPresentation(pi: ExtensionAPI): void {
-  if (g.__piUiKitPresentation) return;
-  g.__piUiKitPresentation = true;
+  const shared = uiKitShared();
+  if (shared.presentation) return;
+  shared.presentation = true;
   installRenderSafety();
   installBuiltinReceipts();
   installSkillInvocationChrome();
@@ -49,6 +45,5 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
 }
 
 export function resetUiKitInstallForTests(): void {
-  g.__piUiKitTools = false;
-  g.__piUiKitPresentation = false;
+  resetUiKitOnceForTests();
 }

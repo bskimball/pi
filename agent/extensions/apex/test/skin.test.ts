@@ -25,6 +25,9 @@ import {
 import { registerApexLanding } from "../landing.ts";
 import { registerClaudeLanding } from "../../claude/landing.ts";
 import { registerHalLanding } from "../../hal/landing.ts";
+import { buildWorkingIndicator as buildApexIndicator } from "../working.ts";
+import { buildWorkingIndicator as buildClaudeIndicator } from "../../claude/working.ts";
+import { buildWorkingIndicator as buildHalIndicator } from "../../hal/working.ts";
 
 const { loadThemeFromPath } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/theme.js")).href);
 
@@ -183,6 +186,31 @@ describe("apex presentation skins", () => {
         assert.match(selected, /scout/, `width ${width}`);
       }
     });
+  });
+
+  it("keeps every skin's working indicator alive under every theme", () => {
+    // A skin/theme mismatch (e.g. HAL skin under claude-dark, which lacks
+    // the brand inks) must degrade gracefully, never throw: a throw in the
+    // indicator build would skip the custom editor install and leave Pi's
+    // default spinner embedded in the input's top border instead of the
+    // standalone row above it.
+    const themes = ["apex-dark", "claude-dark", "hal-dark"].map((name) =>
+      loadThemeFromPath(
+        fileURLToPath(new URL(`../../../themes/${name}.json`, import.meta.url)),
+        "truecolor",
+      ),
+    );
+    const builders = [buildApexIndicator, buildClaudeIndicator, buildHalIndicator];
+    const pi = { getThinkingLevel: () => "medium" };
+    for (const theme of themes) {
+      const ctx = { ui: { theme } };
+      for (const build of builders) {
+        const built = build(ctx as any, pi as any);
+        assert.ok(built.frames.length > 0);
+        assert.ok(built.message.length > 0);
+        assert.ok(built.intervalMs > 0);
+      }
+    }
   });
 
   it("falls back to apex for unrecognized skin values", () => {

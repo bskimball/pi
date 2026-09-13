@@ -45,10 +45,24 @@ function indent(text: string, blockWidth: number, width: number): string {
   return `${" ".repeat(pad)}${text}`;
 }
 
+/**
+ * Brand inks with graceful degradation: `brand`/`brandDim` exist only in
+ * hal-dark, so under any other theme the mark renders in accent/muted
+ * instead of throwing (Pi's theme.fg throws on unknown keys, which would
+ * otherwise collapse the whole landing to the unavailable fallback).
+ */
+function halFg(fg: Fg, key: string, text: string): string {
+  try {
+    return fg(key, text);
+  } catch {
+    return fg(key === "brand" ? "accent" : "muted", text);
+  }
+}
+
 function halOrb(fg: Fg): string[] {
   return [
     fg("accent", " ▄████▄ "),
-    fg("accent", "█") + fg("brand", "██████") + fg("accent", "█"),
+    fg("accent", "█") + halFg(fg, "brand", "██████") + fg("accent", "█"),
     fg("accent", " ▀████▀ "),
   ];
 }
@@ -75,7 +89,7 @@ export function registerHalLanding(): void {
       if (width < MINIMAL_MIN) return { rows: [fg("text", "HAL")], blockWidth: 3 };
       const pixels = halPixelBlock(width);
       if (pixels) return pixels;
-      const rows = HAL_WORDMARK.map((row, index) => fg(HAL_WORDMARK_KEYS[index] ?? "brand", row));
+      const rows = HAL_WORDMARK.map((row, index) => halFg(fg, HAL_WORDMARK_KEYS[index] ?? "brand", row));
       return { rows, blockWidth: HAL_WORDMARK_WIDTH };
     },
     invitation(fg, width) {
