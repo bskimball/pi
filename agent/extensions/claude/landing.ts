@@ -18,22 +18,25 @@ const STARFIELD_NARROW_SPAN = 20;
 // two dark slit eyes, and a split-foot body in terracotta. Eyes and gaps are
 // plain spaces so the dark terminal background shows through (no theme-key
 // gamble for a contrasting pupil color). Narrow block cells only.
+//
+// Terminal cells are roughly twice as tall as they are wide, so an equal-count
+// grid reads as a stretched column. The full mark is 29 cells across and 7
+// rows tall (compact 19 x 5) so the head stays squat and the feet stay short.
 const CRITTER_FULL_RAW: readonly string[] = [
-  "   ▄█████▄   ",
-  "   ███████   ",
-  " █ ███████ █ ",
-  " █ ██ █ ██ █ ",
-  " █ ███████ █ ",
-  "   ███████   ",
-  "    █████    ",
-  "    █   █    ",
+  "     ▄█████████████████▄     ",
+  "  ██ ███████████████████ ██  ",
+  "  ██ ███████████████████ ██  ",
+  "  ██ ████   █████   ████ ██  ",
+  "     ███████████████████     ",
+  "      █████████████████      ",
+  "      █████       █████      ",
 ];
 const CRITTER_COMPACT_RAW: readonly string[] = [
-  " ▄███▄ ",
-  " █████ ",
-  " █ █ █ ",
-  " █████ ",
-  " █   █ ",
+  "   ▄███████████▄   ",
+  " █ █████████████ █ ",
+  " █ ███  ███  ███ █ ",
+  "   █████████████   ",
+  "    ███     ███    ",
 ];
 const CRITTER_MINIMAL = "█";
 

@@ -6,7 +6,11 @@
 import { OBSERVATORY_MAX_LINES, buildObservatory, renderObservatory } from "@pi/ui-kit";
 import { fallbackVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import { registerApexLanding } from "../landing.ts";
+import { registerClaudeLanding } from "../../claude/landing.ts";
+import { registerHalLanding } from "../../hal/landing.ts";
 registerApexLanding();
+registerClaudeLanding();
+registerHalLanding();
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 

@@ -13,7 +13,7 @@
 // human-readable body that the model receives.
 
 import { safeTruncateToWidth, wrapPlainText } from "./safe-text-layout.ts";
-import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
+import { TREE, WidthText, cleanInline, fitLine } from "./ui-common.ts";
 import { buildTreeLines, type TreeRow } from "./tree-view.ts";
 import {
   detailRow,
@@ -117,7 +117,7 @@ export function noticeLines(
   // and the row ids (`task_4`, `bg_1`) already name the subsystem, so it is the
   // first cell to go.
   const headerLeft = [
-    theme.fg(failed ? "error" : "success", "\u25cf"),
+    theme.fg(failed ? "error" : "success", TREE.statusActive),
     theme.fg("customMessageLabel", "notice"),
     inner >= 44 ? theme.fg("muted", safeLine(options.channel, 40)) : "",
     theme.fg(failed ? "error" : "text", summary),

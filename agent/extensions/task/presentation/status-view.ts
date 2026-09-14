@@ -49,19 +49,19 @@ const TONES: Record<StatusKind, string> = {
   unknown: "muted",
 };
 
-/** Status is carried by color, not shape: open circle when idle, filled otherwise. */
-const GLYPHS: Record<StatusKind, string> = {
-  queued: "\u25cb",
-  starting: "\u25cb",
-  running: "\u25cf",
-  waiting: "\u25cf",
-  succeeded: "\u25cf",
-  settled: "\u25cf",
-  failed: "\u25cf",
-  killed: "\u25cf",
-  closed: "\u25cb",
-  unknown: "\u25cb",
-};
+/**
+ * Status is carried by color, not shape: idle mark when idle, active mark
+ * otherwise. The marks themselves come from the active skin (circles under
+ * apex/claude, squares under hal) so worker rows match tool receipts.
+ */
+const ACTIVE_KINDS: ReadonlySet<StatusKind> = new Set<StatusKind>([
+  "running",
+  "waiting",
+  "succeeded",
+  "settled",
+  "failed",
+  "killed",
+]);
 
 const LABELS: Record<StatusKind, string> = {
   queued: "queued",
@@ -85,7 +85,10 @@ export function statusLabel(kind: StatusKind): string {
 }
 
 export function statusGlyph(theme: StatusTheme, kind: StatusKind): string {
-  return theme.fg(statusTone(kind), GLYPHS[kind] ?? "\u25cb");
+  // Anything unrecognized falls back to the idle mark, matching the old
+  // `GLYPHS[kind] ?? "\u25cb"` behaviour for malformed input.
+  const glyph = ACTIVE_KINDS.has(kind) ? TREE.statusActive : TREE.statusIdle;
+  return theme.fg(statusTone(kind), glyph);
 }
 
 export function isTerminalKind(kind: StatusKind): boolean {

@@ -458,10 +458,10 @@ default.
 | `${@:N:L}` | `L` args starting at N |
 
 The filename (minus `.md`) becomes the `/name` command. This repo currently
-has two prompt templates: `agent/prompts/brainstorm.md`
-(`argument-hint: "[topic]"`, uses `${@:-the current task}`) and
-`agent/prompts/simplify.md` (`argument-hint: "[path or current diff]"`, uses
-`${@:-the current uncommitted diff}`); `/browser` and
+has one prompt template: `agent/prompts/brainstorm.md`
+(`argument-hint: "[topic]"`, uses `${@:-the current task}`); complexity
+review moved to the `simplify` skill (`agent/skills/simplify/SKILL.md`);
+`/browser` and
 `/deploy` are **not** prompt templates — they are native commands registered
 in code by `agent/extensions/prompt-commands.ts` via `pi.registerCommand()`
 because they need executable pre-steps (git snapshotting, a deterministic
@@ -492,7 +492,6 @@ What this run covers, how arguments change that, and what is out.
 Ordered steps. Each step ends on a checkable completion criterion.
 Use a single leading-word heading for the work this prompt does:
 - brainstorm diverge phase: ## Diverge
-- simplify: ## Hunt
 - browser: ## Attach then ## Act (Attach reports connect status before Act begins)
 - deploy: ## Resolve then ## Delegate
 

@@ -25,6 +25,7 @@ import {
 import { registerApexLanding } from "../landing.ts";
 import { registerClaudeLanding } from "../../claude/landing.ts";
 import { registerHalLanding } from "../../hal/landing.ts";
+import { TREE as TASK_TREE } from "../../task/presentation/ui-common.ts";
 import { buildWorkingIndicator as buildApexIndicator } from "../working.ts";
 import { buildWorkingIndicator as buildClaudeIndicator } from "../../claude/working.ts";
 import { buildWorkingIndicator as buildHalIndicator } from "../../hal/working.ts";
@@ -129,9 +130,10 @@ describe("apex presentation skins", () => {
       assert.equal(TREE.header, "●");
       assert.equal(TREE.receipt, "●");
       assert.equal(TREE.rail, "⎿");
-      // Unspecified tree edges keep their apex geometry.
+      // The terminal edge is square like HAL's; all other unspecified
+      // tree edges keep their apex geometry.
       assert.equal(TREE.branch, APEX_GLYPHS.branch);
-      assert.equal(TREE.last, APEX_GLYPHS.last);
+      assert.equal(TREE.last, "\u2514\u2500");
       assert.equal(TREE.hang, APEX_GLYPHS.hang);
     });
   });
@@ -143,6 +145,8 @@ describe("apex presentation skins", () => {
       assert.equal(TREE.header, "■");
       assert.equal(TREE.receipt, "□");
       assert.equal(TREE.rail, "⎿");
+      // HAL and Claude square the terminal tree edge; apex keeps the arc corner.
+      assert.equal(TREE.last, "└─");
       assert.equal(composerPromptGlyph(), ">");
       assert.match(todoText(), /□/);
       assert.match(todoText(), /■/);
@@ -154,8 +158,14 @@ describe("apex presentation skins", () => {
         const lines = renderObservatory(view, (key, text) => theme.fg(key, text), width);
         assert.ok(lines.length <= OBSERVATORY_MAX_LINES);
         for (const line of lines) assert.ok(safeVisibleWidth(line) <= width);
-        if (width >= 20) assert.match(lines.join("\n"), /OPERATIONS CONSOLE/);
-        else if (width >= 3) assert.match(lines.join("\n"), /HAL/);
+        const joined = lines.join("\n");
+        assert.doesNotMatch(joined, /OPERATIONS CONSOLE/);
+        assert.doesNotMatch(joined, /\bprompts?\b/i);
+        assert.doesNotMatch(joined, /\bskills?\b/i);
+        assert.doesNotMatch(joined, /\bagents?\b/i);
+        assert.doesNotMatch(joined, /\/observatory/);
+        if (width >= 20) assert.match(joined, /\u2580/);
+        else if (width >= 1) assert.match(joined, /\u2580/);
       }
 
       // The HAL landing is the mark alone: inventory headings belong to the
@@ -226,7 +236,7 @@ describe("apex presentation skins", () => {
   it("keeps every skin glyph code point narrow", () => {
     // Receipt/tree glyphs flow through safeVisibleWidth budgets, so each
     // code point must be width 1. Multi-char edges total one per code point.
-    for (const glyph of ["●", "○", "■", "□", "⎿", "│", "├", "─", "╰", ">"]) {
+    for (const glyph of ["●", "○", "■", "□", "⎿", "│", "├", "─", "╰", "└", ">"]) {
       assert.equal(safeVisibleWidth(glyph), 1, glyph);
     }
     // Load-bearing rendering-safety assertions for the skin glyphs.
@@ -289,6 +299,52 @@ describe("apex presentation skins", () => {
       if (previousSkin === undefined) delete process.env[SKIN_ENV_VAR];
       else process.env[SKIN_ENV_VAR] = previousSkin;
     }
+  });
+
+  it("keeps the task skin table in lockstep with the ui-kit skin table", () => {
+    // The no-cross-extension-imports invariant forces task to duplicate the
+    // kit's glyph table. Nothing else stops the two copies drifting, and a
+    // drift is exactly what made worker cards render round bullets under HAL
+    // while tool receipts rendered square ones. Compare every shared key on
+    // every skin so the copies cannot diverge again unnoticed.
+    for (const skin of [undefined, "claude", "hal"]) {
+      withSkin(skin, () => {
+        for (const key of ["header", "branch", "last", "rail", "receipt", "hang"] as const) {
+          assert.equal(
+            TASK_TREE[key],
+            TREE[key],
+            `${skin ?? "apex"}: task TREE.${key} must match ui-kit`,
+          );
+        }
+        assert.equal(TASK_TREE.statusIdle, skinGlyphs().statusIdle, `${skin ?? "apex"}: statusIdle`);
+        assert.equal(TASK_TREE.statusActive, skinGlyphs().statusActive, `${skin ?? "apex"}: statusActive`);
+      });
+    }
+  });
+
+  it("squares every HAL task gutter and status mark", () => {
+    withSkin("hal", () => {
+      assert.equal(TASK_TREE.last, "└─");
+      assert.equal(TASK_TREE.header, "■");
+      assert.equal(TASK_TREE.statusIdle, "□");
+      assert.equal(TASK_TREE.statusActive, "■");
+      // Square marks must not measure wider than the round ones they replace.
+      assert.equal(safeVisibleWidth(TASK_TREE.last), 2);
+      assert.equal(safeVisibleWidth(TASK_TREE.statusActive), 1);
+    });
+    // Apex keeps the arc corner. Claude squares the terminal edge like HAL;
+    // Apex keeps circles, and Claude's status marks are already square
+    // kit-wide, so task follows the kit.
+    withSkin(undefined, () => {
+      assert.equal(TASK_TREE.last, "╰─");
+      assert.equal(TASK_TREE.statusIdle, "○");
+      assert.equal(TASK_TREE.statusActive, "●");
+    });
+    withSkin("claude", () => {
+      assert.equal(TASK_TREE.last, "└─");
+      assert.equal(TASK_TREE.statusIdle, "□");
+      assert.equal(TASK_TREE.statusActive, "■");
+    });
   });
 
   it("resolves status glyphs per skin with apex fallback", () => {

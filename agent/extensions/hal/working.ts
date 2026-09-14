@@ -102,6 +102,96 @@ function halCoreFrames(ctx: ExtensionContext, leadTone: string): string[] {
   return frames;
 }
 
+/**
+ * Tone kinds the iris/vocalizer beats are written in. `lead` carries the
+ * session thinking level (the thinking-level test watches for it), `brand`
+ * and `brandDim` route through halFg so non-HAL themes degrade instead of
+ * throwing, and `dim` is a plain theme key present in every theme.
+ */
+type HalToneKind = "lead" | "brand" | "brandDim" | "dim";
+
+function halToneFg(
+  ctx: ExtensionContext,
+  kind: HalToneKind,
+  leadTone: string,
+  text: string,
+): string {
+  if (kind === "lead") return ctx.ui.theme.fg(leadTone as any, text);
+  if (kind === "dim") return ctx.ui.theme.fg("dim", text);
+  return halFg(ctx, kind, text);
+}
+
+/**
+ * Optical Iris: the HAL 9000 eye focusing. A pupil dot blooms to a full
+ * aperture, contracts onto a reticle, and settles back to the pupil. Eight
+ * beats divide 128 exactly, so the loop seam lands on the pupil every time.
+ * Two braille cells keep the mark at text height.
+ */
+function halIrisFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const beats: Array<[string, HalToneKind]> = [
+    ["000010000", "lead"],     // pupil
+    ["010111010", "lead"],     // aperture opening
+    ["111111111", "brand"],    // full dilation
+    ["101000101", "brandDim"], // reticle corners
+    ["101010101", "brand"],    // reticle locked on centre
+    ["010101010", "brandDim"], // cross collapsing
+    ["000010000", "lead"],     // pupil returns
+    ["000010000", "dim"],      // rest
+  ];
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (const [mask, kind] of beats) {
+      frames.push(halToneFg(ctx, kind, leadTone, renderWorkingDots(mask)));
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+/**
+ * Vocalizer Wave: HAL's speech synthesiser readout. Deliberately capped at
+ * LOWER THREE EIGHTHS BLOCK (U+2584) so the ink never climbs past x-height —
+ * full blocks (U+2588) are what made the old core mark tower over the label.
+ * Every beat is exactly three cells; spaces stay unstyled so the ANSI runs
+ * around each glyph open and close in place.
+ */
+const HAL_VOCALIZER_BEATS = [
+  " \u2582 ", "\u2582\u2583\u2582", "\u2583\u2584\u2583", "\u2584\u2583\u2582",
+  "\u2583\u2582 ", "\u2582 \u2582", " \u2582\u2583", "\u2582\u2583\u2584",
+  "\u2583\u2584\u2583", "\u2583\u2582 ", "\u2582  ", " \u2582 ",
+] as const;
+
+const HAL_VOCALIZER_TONES: Record<string, HalToneKind> = {
+  "\u2584": "lead",
+  "\u2583": "brand",
+  "\u2582": "brandDim",
+};
+
+function halVocalizerFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  const frames: string[] = [];
+  while (frames.length < HAL_INDICATOR_FRAME_COUNT) {
+    for (const beat of HAL_VOCALIZER_BEATS) {
+      let frame = "";
+      for (const cell of beat) {
+        const kind = HAL_VOCALIZER_TONES[cell];
+        frame += kind === undefined ? cell : halToneFg(ctx, kind, leadTone, cell);
+      }
+      frames.push(frame);
+      if (frames.length >= HAL_INDICATOR_FRAME_COUNT) return frames;
+    }
+  }
+  return frames;
+}
+
+/**
+ * Picks one motif per build, never mid-run: frames must all share a single
+ * visible width (iris is two cells, vocalizer three), so mixing them inside
+ * one frame list would make the mark jump sideways instead of animate.
+ */
+function halAdaptiveFrames(ctx: ExtensionContext, leadTone: string): string[] {
+  return Math.random() < 0.5 ? halIrisFrames(ctx, leadTone) : halVocalizerFrames(ctx, leadTone);
+}
+
 export interface HalIndicatorCandidate {
   name: string;
   description: string;
@@ -115,9 +205,12 @@ export const HAL_INDICATOR_CANDIDATES: HalIndicatorCandidate[] = [
   { name: "readout", description: "Single-cell level bar rising and falling like a VU meter", intervalMs: 140, build: halReadoutFrames },
   { name: "orbit", description: "One telemetry blip walking the field perimeter", intervalMs: 100, build: halOrbitFrames },
   { name: "core", description: "Breathing crimson core in a static instrument frame", intervalMs: 220, build: halCoreFrames },
+  { name: "adaptive", description: "Alternates between optical iris and vocalizer wave", intervalMs: 120, build: halAdaptiveFrames },
+  { name: "iris", description: "Optical iris: HAL sensor focal pulse and aperture dilation (3x3)", intervalMs: 120, build: halIrisFrames },
+  { name: "vocalizer", description: "Vocalizer wave: acoustic synthesizer logic waveform (compact height)", intervalMs: 120, build: halVocalizerFrames },
 ];
 
-export const HAL_DEFAULT_CANDIDATE = "core";
+export const HAL_DEFAULT_CANDIDATE = "adaptive";
 
 export const HAL_WORKING_MESSAGES = [
   "Running diagnostics", "Computing trajectory", "Realigning the array", "Parsing telemetry",

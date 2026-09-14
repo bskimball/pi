@@ -2,8 +2,10 @@
 //
 // "apex" is the default skin and preserves the exact glyphs Apex has always
 // used. "claude" swaps the receipt/composer glyphs toward a Claude Code look
-// while keeping every tree shape/key so existing call sites are unchanged.
-// "hal" keeps Claude's continuation geometry with square instrument glyphs.
+// and squares the terminal tree edge (└─ instead of ╰─), keeping every other
+// tree shape/key so existing call sites are unchanged.
+// "hal" keeps Claude's continuation rail but squares off the terminal tree
+// edge (└─ instead of ╰─) to match its square instrument glyphs.
 // Claude header/receipt deliberately avoids Extended_Pictographic codepoints
 // (e.g. U+23FA): the emoji font overrides theme color and misreports width.
 //
@@ -52,7 +54,9 @@ const APEX_SKIN: SkinGlyphs = {
 const CLAUDE_SKIN: SkinGlyphs = {
   header: "\u25cf",
   branch: "\u251c\u2500",
-  last: "\u2570\u2500",
+  // 90-degree terminal edge, matching HAL: the arc corner ╰ (U+2570)
+  // squares to └ (U+2514). Same width, same BMP block.
+  last: "\u2514\u2500",
   rail: "\u23bf",
   receipt: "\u25cf",
   hang: "   ",
@@ -65,6 +69,9 @@ const HAL_SKIN: SkinGlyphs = {
   ...CLAUDE_SKIN,
   header: "\u25a0",
   receipt: "\u25a1",
+  // 90-degree terminal edge: HAL is a square-instrument skin, so the arc
+  // corner ╰ (U+2570) squares to └ (U+2514). Same width, same BMP block.
+  last: "\u2514\u2500",
 };
 
 /** Active skin name, defaulting to apex when unset or unrecognized. */

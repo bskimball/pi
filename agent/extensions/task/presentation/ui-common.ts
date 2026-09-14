@@ -54,10 +54,11 @@ export function formatDuration(ms: number): string {
 }
 
 /** Skin name for task gutters. Mirrors the ui-kit skin contract so
- * sub-agent cards use the same tree geometry as tool receipts:
- * apex keeps the rounded continuation rail while claude/hal use the
- * square corner rail. Read at call time so a live /ui switch applies
- * without a restart; unset or unrecognized values fall back to apex. */
+ * sub-agent cards use the same tree geometry and status marks as tool
+ * receipts: apex keeps the rounded continuation rail while claude/hal use
+ * the square corner rail, and claude/hal square the terminal tree edge too.
+ * Read at call time so a live /ui switch applies without a restart; unset
+ * or unrecognized values fall back to apex. */
 type TaskSkinName = "apex" | "claude" | "hal";
 
 function activeTaskSkin(): TaskSkinName {
@@ -72,6 +73,10 @@ interface TaskSkinGlyphs {
   rail: string;
   receipt: string;
   hang: string;
+  /** Idle status mark: queued/starting/closed/unknown worker rows. */
+  statusIdle: string;
+  /** Active status mark: running/waiting/settled/failed worker rows. */
+  statusActive: string;
 }
 
 const TASK_APEX_SKIN: TaskSkinGlyphs = {
@@ -81,21 +86,35 @@ const TASK_APEX_SKIN: TaskSkinGlyphs = {
   rail: "\u2502",
   receipt: "\u25cb",
   hang: "   ",
+  statusIdle: "\u25cb",
+  statusActive: "\u25cf",
 };
 
 const TASK_CLAUDE_SKIN: TaskSkinGlyphs = {
   header: "\u25cf",
   branch: "\u251c\u2500",
-  last: "\u2570\u2500",
+  // 90-degree terminal edge, matching the ui-kit Claude skin so task cards
+  // and tool receipts agree glyph for glyph.
+  last: "\u2514\u2500",
   rail: "\u23bf",
   receipt: "\u25cf",
   hang: "   ",
+  // Claude's status marks are square in the ui-kit skin (todo, notice, and
+  // intercom all render □/■), so task rows match them rather than the
+  // round receipt root above.
+  statusIdle: "\u25a1",
+  statusActive: "\u25a0",
 };
 
 const TASK_HAL_SKIN: TaskSkinGlyphs = {
   ...TASK_CLAUDE_SKIN,
   header: "\u25a0",
   receipt: "\u25a1",
+  // 90-degree terminal edge and square status marks, matching the ui-kit
+  // HAL skin so task cards and tool receipts agree glyph for glyph.
+  last: "\u2514\u2500",
+  statusIdle: "\u25a1",
+  statusActive: "\u25a0",
 };
 
 function taskSkinGlyphs(): TaskSkinGlyphs {
@@ -135,6 +154,14 @@ export const TREE = {
   /** Detached continuation: aligns to the child column without a tree edge. */
   get hang(): string {
     return taskSkinGlyphs().hang;
+  },
+  /** Idle status mark, painted in the owning row's status tone. */
+  get statusIdle(): string {
+    return taskSkinGlyphs().statusIdle;
+  },
+  /** Active status mark, painted in the owning row's status tone. */
+  get statusActive(): string {
+    return taskSkinGlyphs().statusActive;
   },
 };
 

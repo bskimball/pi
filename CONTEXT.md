@@ -68,7 +68,7 @@ One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers shar
 
 The behavior-mode transition module in `prompt-commands/modes.ts` owns staged model/thinking selection, active tools, session choices, and global defaults. Fusion and Work wait for the task-owned persistent-sidekick configuration acknowledgement before persistence and announce the new mode last. They share the configured model pair and transcript lifecycle. Work uses a standalone operations-first prompt and allows the existing synchronous specialist roster; Fusion retains its closed roster. Failed transitions restore the prior selection; incomplete recovery blocks input until a successful `/mode` switch. `/model` alone cannot clear that recovery block.
 
-Presentation remains independent: `pi:ui:changed` lets the active UI host refresh chrome without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL landing instead of the shark/star field; Pi still owns animation timing.
+Presentation remains independent: `pi:ui:changed` lets the active UI host refresh chrome without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL lens-orb landing instead of the shark/star field; Pi still owns animation timing.
 
 ## Task extension
 
@@ -112,7 +112,12 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Preview: `node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs`.
 - Pure passive string rendering; no timers or Pi TUI Text/Markdown/Container.
 - Cell measurement uses Apex-owned `apex/internal/presentation/safe-text-layout.ts`.
-- `shark-art.ts` and `hal-art.ts` are generated and must not be hand-edited.
+- The passive splash is mark + invitation + horizon on every UI: no CUSTOM PROMPTS / CUSTOM AGENTS inventory, no workspace signal, no inventory counts, no `/observatory` hint, no UI caption. Gated on the absence of a selection, not on the skin. The interactive orb and `/observatory` still render the full constellation; a focused orb also shows the key legend.
+- Claude uses a wide block-art critter (29 × 7 cells full, 19 × 5 compact); terminal cells are ~2:1 tall, so equal-count art renders skinny.
+- HAL uses a lens orb above a striped `HAL` wordmark, all upper-half blocks, separated by one dark row. Full tier: orb 9 × 18, wordmark 8 × 31, block width 31. Compact: orb 7 × 14, wordmark 8 × 18, block width 18. Below 20 columns, a single `▀`.
+- The HAL orb has no art array: `discRadii()` gives each cell a normalized radius and `ORB_RAMP` colors it — radiant yellow pupil, concentric crimson glow, dark bronze bezel (the HAL 9000 lens). Truecolor inks per-cell RGB with run coalescing; otherwise it collapses to `warning`/`brand`/`brandDim` by radius. It does not use `pixel-art.ts` bitmaps.
+- The HAL wordmark is Paul Rand's IBM 8-bar construction: all eight rows inked with one uniform `brand` key. Never dim a wordmark row, and do not reintroduce a per-row key tuple.
+- `shark-art.ts` and `hal-art.ts` are generated and must not be hand-edited. `hal-art.ts` is retained as a generated asset but is no longer on the landing path.
 
 ## Feature ownership
 

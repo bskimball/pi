@@ -14,7 +14,6 @@ import {
   type AgentDef,
 } from "../internal/runtime/agent-discovery.ts";
 import { cleanInline } from "../internal/presentation/ui-common.ts";
-import { activeSkinName } from "../internal/presentation/skin.ts";
 import { observatoryLandingFor } from "./landing.ts";
 import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "../internal/presentation/safe-text-layout.ts";
 
@@ -22,7 +21,7 @@ import { padStartToWidth, safeTruncateToWidth, safeVisibleWidth } from "../inter
  * The observatory is installed as Pi's startup header, which has no line cap.
  * With quiet startup the header is the entire opening screen, so the
  * composition is a full splash. The budget covers the tallest 16-row truecolor
- * mark plus the signal, the inventory, and the threshold chrome beneath it.
+ * mark plus optional inventory (interactive orb) and the threshold chrome.
  */
 export const OBSERVATORY_MAX_LINES = 25;
 export const NEUTRAL_SIGNAL = "AWAITING A SIGNAL";
@@ -318,7 +317,7 @@ export function listInventory(
 const PORTAL_MAX_SPAN = 64;
 /** The 56-column full shark + twin constellation columns need this much room. */
 const FULL_MIN = 62;
-/** Below this only the minimal dorsal-fin mark, the signal and the threshold remain. */
+/** Below this only the minimal mark and the threshold remain. */
 const MINIMAL_MIN = 20;
 
 /**
@@ -382,14 +381,6 @@ function evenSpan(span: number): number {
   return span % 2 === 0 ? span : span - 1;
 }
 
-function letterSpace(text: string): string {
-  return [...text].join(" ");
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /**
  * One constellation cell: `glyph name`, truncated to the column. A missing
  * entry renders as nothing at all — short columns simply end.
@@ -431,56 +422,17 @@ function constellationCell(
 }
 
 /**
- * `1 prompt · 16 skills · /observatory`, the quiet meta footer. The
- * discoverability hint is the last thing dropped, never clipped.
+ * Key legend shown only while the interactive orb is focused. Inventory
+ * counts and `/observatory` never appear on the splash.
  */
-function metaLine(
-  view: Observatory,
-  fg: Fg,
-  width: number,
-  active: boolean,
-): string {
+function metaLine(fg: Fg, width: number): string {
   const dot = fg("borderMuted", width >= 60 ? "  ·  " : " · ");
-  if (active) {
-    const keys = ["↑↓ move", "⏎ launch", "esc dismiss"].map((key) =>
-      fg("dim", key),
-    );
-    const legend = keys.join(dot);
-    if (safeVisibleWidth(legend) <= width) return legend;
-    const tight = keys.join(fg("borderMuted", " · "));
-    if (safeVisibleWidth(tight) <= width) return tight;
-    return fg("dim", safeTruncateToWidth("↑↓ ⏎ esc", width));
-  }
-  const counts: string[] = [];
-  if (view.promptCount > 0) {
-    counts.push(fg("dim", plural(view.promptCount, "prompt")));
-  }
-  if (view.skillCount > 0) {
-    counts.push(fg("dim", plural(view.skillCount, "skill")));
-  }
-  if (view.agentCount > 0) {
-    counts.push(fg("dim", plural(view.agentCount, "agent")));
-  }
-  const hint = fg("muted", "/observatory");
-  const full = [...counts, hint].join(dot);
-  if (safeVisibleWidth(full) <= width) return full;
-  const bare = counts.join(dot);
-  return safeVisibleWidth(bare) <= width ? bare : hint;
-}
-
-/**
- * The workspace signal, shortened rather than clipped mid-word when the
- * terminal cannot hold the full `NAME · PROJECT ORBIT` form.
- */
-function signalLine(view: Observatory, fg: Fg, width: number): string {
-  const key = view.hasProject ? "text" : "muted";
-  const spaced = letterSpace(view.signal);
-  if (safeVisibleWidth(spaced) <= width) return fg(key, spaced);
-  if (safeVisibleWidth(view.signal) <= width) return fg(key, view.signal);
-  const head = view.signal.split(" · ")[0] ?? view.signal;
-  const spacedHead = letterSpace(head);
-  if (safeVisibleWidth(spacedHead) <= width) return fg(key, spacedHead);
-  return fg(key, safeTruncateToWidth(head, width));
+  const keys = ["↑↓ move", "⏎ launch", "esc dismiss"].map((key) => fg("dim", key));
+  const legend = keys.join(dot);
+  if (safeVisibleWidth(legend) <= width) return legend;
+  const tight = keys.join(fg("borderMuted", " · "));
+  if (safeVisibleWidth(tight) <= width) return tight;
+  return fg("dim", safeTruncateToWidth("↑↓ ⏎ esc", width));
 }
 
 function logoBlock(fg: Fg, width: number, active: boolean): Block {
@@ -788,9 +740,12 @@ export interface ObservatorySelection {
 }
 
 /**
- * Render the splash: star field → shark mark → signal → constellations → meta →
+ * Render the splash: prelude → mark → optional constellations → key legend →
  * threshold → horizon, on one optical axis with an even single-row rhythm.
- * Installed as Pi's startup header, so 25 rows is the budget, not 9.
+ * The passive splash is the mark alone: no workspace signal, no inventory
+ * counts, no `/observatory` hint. Those stay on the interactive orb and the
+ * `/observatory` selector. Installed as Pi's startup header, so 25 rows is
+ * the budget, not 9.
  */
 export function renderObservatory(
   view: Observatory,
@@ -804,7 +759,11 @@ export function renderObservatory(
   const span = evenSpan(Math.max(8, Math.min(inner - 2, PORTAL_MAX_SPAN)));
   const lines: string[] = [];
   const landing = observatoryLandingFor();
-  const hideInventory = activeSkinName() === "hal" && !selection;
+  // The passive splash is the mark alone on every UI: no CUSTOM PROMPTS /
+  // CUSTOM AGENTS inventory and no count/signal chrome. The same entries stay
+  // reachable through the interactive orb (selection mode) and /observatory.
+  const hideInventory = !selection;
+  const showKeys = active && inner >= MINIMAL_MIN;
 
   if (landing) {
     for (const row of landing.prelude(fg, inner, view)) lines.push(row);
@@ -813,18 +772,13 @@ export function renderObservatory(
   const logo = logoBlock(fg, inner, active);
   for (const row of logo.rows) lines.push(indent(row, logo.blockWidth, inner));
 
-  lines.push(center(signalLine(view, fg, inner), inner));
-
-  // Trailing chrome after the constellation: optional meta, invitation, horizon.
+  // Trailing chrome after the constellation: optional key legend, invitation, horizon.
   // Keep blanks around invitation/horizon so the threshold still breathes.
   const trailing =
     inner >= MINIMAL_MIN
-      ? 1 /* meta */ + 1 /* blank */ + 1 /* invitation */ + 1 /* blank */ + 1 /* horizon */
+      ? (showKeys ? 1 : 0) + 1 /* blank */ + 1 /* invitation */ + 1 /* blank */ + 1 /* horizon */
       : 1 /* invitation */;
   const maxConstellationRows = Math.max(0, OBSERVATORY_MAX_LINES - lines.length - trailing);
-  // HAL's landing is the mark alone: no prompt or agent inventory. The same
-  // entries stay reachable through the interactive orb and /observatory, which
-  // render the constellation regardless of skin.
   const constellations =
     hideInventory
       ? undefined
@@ -835,8 +789,8 @@ export function renderObservatory(
     }
   }
 
-  if (inner >= MINIMAL_MIN) {
-    lines.push(center(metaLine(view, fg, inner, active), inner));
+  if (showKeys) {
+    lines.push(center(metaLine(fg, inner), inner));
   }
 
   lines.push("");

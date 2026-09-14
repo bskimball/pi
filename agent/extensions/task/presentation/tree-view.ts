@@ -49,7 +49,7 @@ export interface ActivityRowsOptions {
 
 /** Status glyph with the shared task activity palette. */
 export function activityGlyph(theme: TaskCardTheme, status: ActivityCardStatus): string {
-  if (status === "running") return theme.fg("warning", "●");
+  if (status === "running") return theme.fg("warning", TREE.statusActive);
   if (status === "error") return theme.fg("error", "×");
   return theme.fg("success", "✓");
 }
