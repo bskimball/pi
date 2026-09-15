@@ -1,226 +1,212 @@
 # Pi configuration
 
-Personal configuration for [Pi](https://github.com/earendil-works/pi-mono) — a customized coding-agent setup with a fleet of specialist sub-agents, TUI extensions, and slash commands for browser automation and deployment.
+Choose how your agent works. Choose how it looks.
 
-Credential-bearing local configuration files (`agent/auth.json`, `agent/models.json`, `agent/mcp.json`, `web-search.json`, plus any `.env`/`.env.*`) are excluded by `.gitignore`. Three of them — `agent/models.json`, `agent/mcp.json`, and `web-search.json` — have a tracked `*.example.json` minimal template with environment-variable references instead of real secrets; `agent/auth.json` and any `.env` files have no example and are populated by `/login` or your own shell environment. See [CONFIGURATION.md](CONFIGURATION.md) for the local parameter reference and links to authoritative upstream Pi documentation, and [CONTEXT.md](CONTEXT.md) for the local extension architecture (seams, standalone rule, presentation ownership, agent catalog, sync-vs-async task internals). [AGENTS.md](AGENTS.md) is the canonical description of this architecture for the agent itself; this file exists for a human reading the repo.
+Personal configuration for [Pi](https://github.com/earendil-works/pi-mono) — a coding agent with a roster of specialist sub-agents, five collaboration modes, three installable presentation skins, and slash-command extensions for browser automation and deployment. This README is the human front door; [AGENTS.md](AGENTS.md) is the canonical description for the agent itself.
 
-## Overview
+## Contents
 
-This repo layers several things on top of a stock Pi install:
+- [Mode vs UI](#mode-vs-ui--two-independent-switches)
+- [Modes at a glance](#modes-at-a-glance)
+- [Setup](#setup) — try it in an isolated clone
+- [Apex vs Apex Orchestrate](#apex-vs-apex-orchestrate)
+- [Fusion](#fusion)
+- [Work](#work)
+- [Specialist roster](#specialist-roster)
+- [Presentation](#presentation-ui)
+- [Restore on a new machine](#restore-on-a-new-machine) — replace your own `~/.pi`
+- [Where to read next](#where-to-read-next)
 
-- **A `task` tool, persistent async `task_*` tools, and a roster of specialist sub-agents** (`agent/agents/`) whose prompts are adapted from [Amp](https://ampcode.com/)'s published agent and sub-agent prompts, with additional custom agents added.
-- **Extensions** (`agent/extensions/`) — task/orchestration tooling, an "Apex" TUI presentation layer, background-process and PowerShell tools, web search, a local MCP adapter, a knowledge-graph query tool, crash logging, and a few small guards.
-- **Slash commands and prompt templates** — `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion / Work), `/ui` switches presentation (pi / apex / claude / hal), and native `/orchestrate` toggles sticky specialist-first mode (control-plane still inline); `/browser` and `/deploy` handle browser automation and full-worktree shipping; `/graphify` hands off to the graphify skill; simpler Markdown templates such as `/brainstorm` live in `agent/prompts/`; complexity review is the `simplify` skill in `agent/skills/`.
-- **Skills** (`agent/skills/`) for browser automation, background processes, image generation, graphify, architecture review, complexity review (`simplify`), frontend design, writing-for-agents, and MCP scripting.
-- **Themes** (`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`, `agent/themes/hal-dark.json`) selected through `/ui` or Pi's theme controls.
-- **Tracked `*.example.json` minimal templates** for the three gitignored configs that have one — see [Example and template files](#example-and-template-files).
+## What's here, and what isn't
 
-## Sub-agents and Orchestration Tools
+This repo is the *configuration layer* on top of a stock Pi install: agent briefs, extensions, slash commands, skills, and themes under `agent/`, plus a shared UI package at `packages/ui-kit`. It does not vendor or replace Pi itself — Pi is a pinned dependency (`@earendil-works/pi-coding-agent`). Two collaboration modes are explicitly built on published external work:
 
-Pi's main agent delegates bounded units of work to specialist sub-agents through synchronous and asynchronous task tools:
+- **Fusion mode is based on [Cognition's Fusion architecture](https://cognition.com/blog/local-fusion)**: a frontier lead paired with a cost-effective sidekick, each keeping its own persistent context and exchanging briefs/results/feedback rather than full transcripts. This is an independent implementation written for Pi — not Devin itself — and this repo makes no measured cost or performance claims; only the design shape is adopted. See [Fusion](#fusion) below for how it works here.
+- **The specialist roster and its task-delegation tools are Amp-inspired**, adapting [Amp](https://ampcode.com/)'s published [subagent model](https://ampcode.com/docs/models-and-subagents) — notably an Oracle-style deep reasoner and a Librarian-style external-code researcher — and adding a broader set of purpose-built specialist roles alongside them (Advisor, Artisan, Inspector, Machinist, Picasso, Scout, Scribe, Sidekick, Stevedore). Prompts are rewritten for Pi; this is not a claim that Amp lacks these roles or that every agent here ships in Amp. `reference/amp-prompts/` holds Amp's original prompts as background reading; they are not loaded at runtime.
 
-- **`task`** — synchronous task delegation: spawns a specialist sub-agent, streams activity back into the parent session, and blocks until returning a single final report.
-- **`task_start` / `task_status` / `task_list` / `task_send` / `task_wait` / `task_abort` / `task_close` / `task_reply`** — asynchronous RPC sub-agent management: starts persistent isolated sessions in the background, steers or sends follow-ups mid-flight, handles UI extension requests, and retrieves or waits for results while keeping the lead context free.
+## Mode vs UI — two independent switches
 
-Each task spawns a separate `pi` process with the specialist's own system prompt, model, thinking level, and tool set.
+Pi has two independent selectors:
 
-**`task_start` is the preferred delegation path** (see `agent/SYSTEM.md`): it returns a worker handle immediately so the lead agent can keep working, monitor, or dispatch other tasks in parallel. `task` (synchronous, blocking) is reserved for cases needing a single bounded result in-line before continuing. The async lifecycle is: `task_start` to launch a worker (counts against a cap of 5 concurrent live workers) → do other work or poll with `task_status` / `task_list` → `task_send` to steer or follow up → `task_wait` to block until the current generation settles → **`task_close` to reap the worker**. A worker normally holds its concurrency slot until closed, so `task_close` is required lifecycle hygiene once a worker's result has been collected. `task_wait` timeouts and Esc interruptions detach only the waiter. If a timeout occurs at Pi's configured compaction reserve boundary, the sequential tool requests an end to its tool-only turn so Pi can auto-compact while the worker keeps running. Worker handles are runtime-local; after a process restart, verify them with `task_list` rather than assuming a historical `task_N` is still live. `task_reply` answers a worker's interactive UI dialog request (select/confirm/input/editor) by request id.
+- **`/mode`** picks *behavior*: which system prompt, delegation policy, and specialist roster are active. Choices: `pi`, `apex`, `apex-orchestrate`, `fusion`, `work`.
+- **`/ui`** picks *presentation*: which visual skin renders tool output, receipts, and the landing screen. Choices: `pi` (stock, no custom chrome), `apex`, `claude`, `hal`.
 
-**Model fallback differs between the two tools.** Each agent file declares a primary model plus an ordered fallback chain (`modelAttempts()`). The synchronous `task` tool retries through that full chain on failure. `task_start` currently spawns using only the first resolved model in the chain — declared fallbacks are not retried at spawn time.
+They're orthogonal — you can run Fusion behavior under the HAL skin, or Apex Orchestrate under stock Pi presentation. Switching either is live, requires an idle lead and idle workers, and preserves the conversation. `/orchestrate on`/`off`/(bare toggle) is a shortcut for switching between Apex and Apex Orchestrate without leaving Apex behavior otherwise. See [`agent/extensions/prompt-commands/README.md`](agent/extensions/prompt-commands/README.md) for the full switching/persistence contract.
 
-`task_send` has two delivery modes with different queueing semantics:
+## Modes at a glance
 
-- **`steer`** — queued at the next **model-call boundary**: it cannot interrupt inference or an in-flight tool call, and is delivered after the current assistant turn finishes its tool calls, just before the next LLM call.
-- **`follow_up`** — delivered only after the worker fully **settles** (no more tool calls or pending steering).
+| Mode | Delegation policy | Roster | Prompt |
+| --- | --- | --- | --- |
+| **Pi** | None built in — upstream Pi's own system prompt and behavior | Full roster, dispatched when you name a specialist or ask it to delegate | Upstream Pi's system-prompt builder |
+| **Apex** | Inline-first: the lead does most work directly, delegates selectively | Full roster | Coding-first base prompt (`agent/SYSTEM.md`) + Apex overlay |
+| **Apex Orchestrate** | Specialist-first: substantial slices go to specialists; lead plans, integrates, verifies, and handles control-plane work inline | Full roster | Same base prompt + strict-orchestrator overlay |
+| **Fusion** | Sidekick-first: one persistent sidekick is the default delegate; four others only on explicit request | Closed six-role team | Same base prompt + Fusion overlay |
+| **Work** | Operations-first, own dedicated prompt; persistent sidekick shares Fusion's lifecycle, but the full synchronous roster stays available | Full synchronous roster + persistent sidekick | Dedicated operations-first prompt, not the coding-first base |
 
-A `prompt`-mode send is only allowed once a worker is settled or failed; use `steer`/`follow_up` while it's still running. Live `task_start` / `task_chain` workers also appear as the Agents tab on the above-editor todo dock (`alt+a` / `/agents`); see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
+"Pi mode" means **stock behavior inside this configured install** — your extensions, tools, skills, and project instructions are all still present, and the model can still delegate when you ask it to. It does not uninstall anything or reset you to a fresh, unconfigured Pi. (A brand-new install defaults to `/mode apex` + `/ui apex`; this table describes what each mode *does*, not the out-of-the-box default.)
 
-The task tool and the sub-agent prompts are **based on Amp's prompts and sub-agents**. Amp ships a small set of built-in sub-agents (an orchestrator, a search/oracle reviewer, a librarian, and fast workers); the reference prompts live under `reference/amp-prompts/` and are used as behavioral and structural templates. On top of that foundation this configuration adds a broader roster of purpose-built specialists:
+## Apex vs Apex Orchestrate
+
+Same base prompt, same specialist roster, same sub-agent tools — the only difference is who does substantial work by default.
+
+**Apex (inline-first):**
+
+```text
+you: "add pagination to the /orders API endpoint"
+  └─ lead reads the code, writes the change, runs the tests
+     (delegates only if it decides a specialist genuinely helps)
+```
+
+**Apex Orchestrate (specialist-first):**
+
+```text
+you: "add pagination to the /orders API endpoint"
+  └─ lead: plans the slice, then delegates it
+       └─ task_start(machinist) → implements, tests
+     lead stays inline for: status checks, "continue", launching the
+     dev server, a single known-path edit, gluing a returned diff
+     lead: integrates the result, verifies, reports back
+```
+
+Independent slices can run in parallel under Apex Orchestrate, each in its own isolated Git worktree, up to five concurrent async workers and three concurrent writers. `/orchestrate on` / `/orchestrate off` / `/orchestrate` (bare toggle) switches between the two without touching `/mode` directly.
+
+## Fusion
+
+Fusion is a **two-person team**, not a bigger roster: one lead, one persistent `sidekick`, and four specialists (`librarian`, `stevedore`, `oracle`, `picasso`) that only run when *you* explicitly ask for them — not automatically, no matter how hard the task looks or how strongly a review gate would normally fire elsewhere.
+
+```text
+you: "investigate why checkout fails intermittently, then fix it"
+  └─ lead: writes a brief (owned paths, unknowns, acceptance check)
+       └─ task_start(sidekick) → investigates, implements, validates
+            ⇄ task_send (steer / follow-up) as the picture develops
+       ← sidekick returns: findings, diff, evidence
+  └─ lead: reviews the diff, verifies, resolves the todo item, reports
+
+# only on your explicit request:
+you: "have oracle review that fix before we ship"
+  └─ task(oracle) → one-shot, synchronous review
+```
+
+Lead and sidekick keep **separate, persistent contexts** across the session — the lead sends a compact brief in, the sidekick sends back results and evidence, not a full transcript either direction. That separation, plus the "cheap sidekick executes, expensive lead plans/reviews" split, is the part borrowed from [Cognition's Fusion architecture](https://cognition.com/blog/local-fusion); the brief/result exchange protocol, the closed-roster gate, and the shared-todo-list discipline are this repo's own implementation on top of that idea. The sidekick is the *only* subagent dispatched automatically; a general "please verify this" or a difficult bug does not, by itself, authorize calling Oracle or any of the other three — you have to name it. See [`agent/prompts/inactive/fusion.md`](agent/prompts/inactive/fusion.md) for the exact handoff and ownership criteria the lead follows.
+
+The first time you switch to Fusion (or Work) without a saved pair, `/mode fusion` itself prompts you to pick the lead and sidekick models and thinking levels — you don't have to run `/mode configure` first. `/mode configure` is the explicit way to (re)configure that pair at any time: while Work is active it configures and activates the shared Work/Fusion pair for Work; otherwise it configures and activates Fusion. Changing model or thinking level while Fusion is active updates the lead's choice directly. The pair is stored locally in the gitignored `agent/mode-settings.json`.
+
+Note: the persistent-sidekick lifecycle (`task_start`/`task_send`/`task_close` on one long-lived worker, transcript continuity across session resume) is **shared with Work**, not exclusive to Fusion — Work uses the same mechanism with a different, operations-first prompt and a wide-open synchronous roster instead of Fusion's closed one.
+
+## Work
+
+Work is operations-first: a lead and one persistent `sidekick`, using a dedicated prompt instead of the coding-first base. Unlike Fusion, Work keeps the *entire* existing synchronous specialist roster available through `task` — it's the closed roster that's Fusion-specific, not the sidekick mechanism. The sidekick retains context across assignments and session resume, and can do scoped reconnaissance, implementation, and slice-local validation, but it can't spawn its own subagents or maintain the lead's todo list. Business workflows and integrations remain owned by their own project; no custom "work" agents ship in this repo.
+
+## Trying a mode
+
+```
+/mode pi                 # stock Pi behavior in this configured install
+/mode apex                # inline-first, full roster
+/mode apex-orchestrate     # specialist-first, same roster
+/orchestrate on            # equivalent toggle, from Apex
+/mode fusion               # closed lead+sidekick team (first switch without a saved pair prompts for one)
+/mode work                 # operations-first, persistent sidekick, full roster
+/mode configure            # pick lead/sidekick models + thinking for Fusion (or Work, if Work is active)
+/ui apex                   # switch presentation only — independent of /mode
+```
+
+Switching requires an idle lead and idle workers (a running dev server doesn't block it). A failed switch restores the prior tools/model/mode; if that recovery itself fails, input stays blocked until a `/mode` switch succeeds.
+
+## Specialist roster
+
+Sub-agents are dispatched with `task` (synchronous, blocks for one final report) or `task_start`/`task_send`/`task_wait`/`task_close` (asynchronous, runs in the background while the lead keeps working). Each spawns its own `pi` process with its own model, thinking level, and tool set.
 
 | Agent | Role |
 | --- | --- |
 | `advisor` | Strategic planner consulted before consequential approaches, when stuck, or when changing direction. Advisory only. |
-| `artisan` | Bold visual-design and frontend specialist for substantial UI implementation, design judgment, exploratory refinement, diagrams, slides, and data visualization. |
-| `inspector` | Fast, cheap read-only verifier for bounded live-browser interaction, responsive checks, console/network evidence, screenshots, and focused visual regression analysis after implementation. |
+| `artisan` | Bold visual-design and frontend specialist for substantial UI implementation, diagrams, slides, and data visualization. |
+| `inspector` | Fast, cheap read-only verifier for live-browser checks, screenshots, and visual regression after implementation. |
 | `librarian` | Remote source-code researcher for external libraries, framework internals, and cross-repository investigation. |
-| `machinist` | Workhorse coding specialist for large implementation chunks, backend logic, refactors, migrations, bug fixes, and tests. |
-| `oracle` | Deep independent reviewer of actual code and diffs, plus debugger for difficult bugs, conflicting evidence, and high-stakes decisions. |
-| `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, and diagrams. |
-| `scout` | Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, and context gathering. |
+| `machinist` | Workhorse coding specialist for large implementation chunks, backend logic, refactors, migrations, bug fixes, tests. |
+| `oracle` | Deep independent reviewer of actual code and diffs, plus debugger for difficult bugs and high-stakes decisions. |
+| `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, diagrams. |
+| `scout` | Fast, cheap local codebase reconnaissance for broad scans and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
-| `sidekick` | Persistent Fusion execution partner for implementation, investigation, writing, and validation; Fusion-only. |
-| `stevedore` | Fast execution specialist for integrated gates, exact diagnostic experiment execution, deploys, git, and platform CLIs. |
+| `sidekick` | Persistent execution partner for implementation, investigation, writing, and validation — Fusion and Work only. |
+| `stevedore` | Fast execution specialist for integrated gates, exact diagnostic experiments, deploys, git, and platform CLIs. |
 
-Shared norms that apply to every specialist (smallest-correct-change discipline, browser rules, evidence, dirty-worktree safety, etc.) live in [`agent/agents/_shared.md`](agent/agents/_shared.md). Worker-mode semantics are separate: `_shared-sync.md` describes fire-and-forget `task` runs, while `_shared-async.md` describes persistent RPC workers with steering, follow-ups, and UI requests. [`agent/agents/_handoff.md`](agent/agents/_handoff.md) is appended for both modes and requires a non-empty visible final report for each generation. Each agent file also declares its primary model plus a fallback chain. Both task modes retry only clean provider/model availability failures; async workers replace the failed RPC session and replay only before visible output or tool execution, preventing duplicate work.
+Full agent-file format (frontmatter fields, fallback-model chains, shared prompt fragments) is documented in [CONFIGURATION.md](CONFIGURATION.md#agent-markdown-agentagentsmd-local-custom).
 
-## Extensions
+## Presentation (`/ui`)
 
-Custom TUI and orchestration extensions live in `agent/extensions/`. Pi discovers an extension two ways: a bare `*.ts` file directly in `agent/extensions/`, or a directory whose `package.json` declares `pi.extensions`. Everything else under a directory — `internal/`, `runtime/`, `presentation/`, `observatory/`, `test/` — is private support code, never loaded as a second extension.
+Three installable skins share one presentation package (`packages/ui-kit`, `@pi/ui-kit`) for receipts, layout, and the above-editor todo/agents dock; each owns its own landing art, glyphs, working indicator, and theme:
 
-```text
-agent/extensions/
-├── apex/            → apex-ui.ts          Apex UI
-├── claude/          → claude-ui.ts        Claude UI
-├── hal/             → hal-ui.ts           HAL UI
-├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
-├── lsp/             → index.ts            language-server navigation
-├── bg-process.ts    + bg-process/         bg_start/status/list/kill
-├── powershell.ts    + powershell/         direct PowerShell child process
-├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
-├── continual-memory.ts + continual-memory/  memory_list / memory_write
-├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate, /mode, /ui
-├── graphify.ts                            local knowledge-graph query + /graphify handoff
-├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
-├── mcp-adapter.ts                         pi-mcp-adapter bridge (stock MCP rendering)
-├── read-guard.ts                          duplicate-image + downscale guard
-├── user-profile.ts                        private user context injection
-├── web-search.ts                          Exa search + fetch_content
-├── at-path-complete.ts                    scoped @ listing for gitignored paths
-└── test/                                  cross-extension tests
-```
+- **`pi`** — stock Pi, no custom chrome.
+- **`apex`** — shark-in-deep-space Observatory landing, braille activity indicator, `apex-dark` theme.
+- **`claude`** — star-motif landing, round receipts, Claude-style verbs, `claude-dark` theme.
+- **`hal`** — geometric HAL-lens-orb landing, square receipts, quiet activity, `hal-dark` theme.
 
-`apex/package.json`, `claude/package.json`, `hal/package.json`, `task/package.json`, and `lsp/package.json` declare their entry points. Shared UI presentation is `packages/ui-kit` (`@pi/ui-kit`), not `agent/extensions/shared`.
+`/ui pi` doesn't unregister any tools — the todo dock, for example, just falls back to a plain uncolored list instead of the styled tabbed panel. Switching UI is independent of `/mode`, live, and idle-only; it fails closed if the target skin's directory is missing.
 
-Relative imports in an extension entry must stay inside that extension's directory. Node built-ins, Pi public packages, and declared npm dependencies (including `@pi/ui-kit`) are the exceptions. Headless helpers remain duplicated per owner so deleting an extension directory plus its entry file removes that feature.
+## Optional capabilities
 
-### Installable UIs
+These extend the base install and are not required to try modes/UI:
 
-Apex, Claude, and HAL are separately discovered UI extensions. The kit owns TREE receipts, layout, todo tools/dock, and the single `ToolExecutionComponent` wrap. Each UI owns landing, glyphs, working indicator, and theme. `/ui` selects among installed UIs; `pi` is stock chrome-off. `PI_APEX_UI=0` strips custom chrome while kit tools stay registered; the todo dock remains a plain list. Settlement of a background job is a kit notice (`bg-process-settled`).
+- **Browser automation** (`/browser`) — attaches to a dedicated, separately profiled debug Chrome on CDP port 29300 for co-browsing and live-page checks. Requires that Chrome to be launched with `--remote-debugging-port=29300` once; see [`agent/skills/agent-browser/SKILL.md`](agent/skills/agent-browser/SKILL.md).
+- **Deploy** (`/deploy`) — delegates lint/format/verify/deploy to `stevedore` against the actual dirty worktree, not a hardcoded pipeline.
+- **Image generation** (Picasso, `agent/skills/generate-image/`) — needs a configured image-capable model; see the skill for its fallback chain.
+- **MCP servers** (`agent/mcp.json`) — optional, gitignored; a minimal example lives at [`agent/mcp.example.json`](agent/mcp.example.json). See [CONFIGURATION.md](CONFIGURATION.md#agentmcpjson-local-custom-mcp-servers).
+- **Web search** (`web_search`/`fetch_content`) — optional, needs an Exa API key via `web-search.json` or `EXA_API_KEY`; example at [`web-search.example.json`](web-search.example.json). `fetch_content` works without a key.
+- **Custom models/providers** (`agent/models.json`) — optional, gitignored; example at [`agent/models.example.json`](agent/models.example.json).
+- **LSP navigation** — uses language servers already on `PATH`; none of this is installed or required for basic use.
+- **`bg_*` background-process tools** run on any platform. The PowerShell tool needs a PowerShell executable on `PATH` — `pwsh`/`pwsh.exe`/`powershell.exe` on Windows, `pwsh` (PowerShell 7+) on Linux/macOS — or `PI_POWERSHELL_PATH` set explicitly; it is not guaranteed to be preinstalled everywhere. This configuration is developed on Windows, so Git Bash examples below have a PowerShell equivalent where it matters.
 
-`task/` renders delegated-worker activity cards through `withTaskPresentation()`: `PI_TASK_UI=0` disables task cards alone, and `PI_APEX_UI=0` disables them too. Child workers are always spawned with `PI_APEX_UI=0`.
+Start with a working Pi model provider; add these integrations only when you need them.
 
-Headless extensions own execute only: `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`. The kit attaches receipt/notice chrome unless `PI_APEX_UI=0`.
+## Setup
 
-There is no custom footer — Pi owns it. `prompt-commands` and `graphify` publish status text into it via `ctx.ui.setStatus(...)`.
+**Requirements:** Node.js matching the engine range of the pinned `@earendil-works/pi-coding-agent@0.85.1` (Node ≥22.19), and `git`.
 
-### Extension notes
+**Try it in a separate clone first.** Pi normally reads `~/.pi/agent`, regardless of where its binary is installed. Clone elsewhere and set `PI_CODING_AGENT_DIR` to select the trial's configuration and default session directory. This is a configuration override, not a filesystem sandbox: agents can still work on the project you open, and optional integrations may use other local resources.
 
-- **`task/amp-task.ts` & `task/async-task.ts`** — implements `task` and the persistent async RPC subagent tools (`task_start`, `task_status`, `task_list`, `task_send`, `task_wait`, `task_abort`, `task_close`, `task_reply`); see [Sub-agents and Orchestration Tools](#sub-agents-and-orchestration-tools) above. The deep async control plane lives in `task/runtime/worker-runtime.ts`; `async-task.ts` retains RPC transport and Pi tool adapters.
-- **`apex/apex-ui.ts`** — see [Apex is the UI](#apex-is-the-ui) and [The shark / Observatory](#the-shark--observatory).
-- **`bg-process.ts`** — `bg_start`/`bg_status`/`bg_list`/`bg_kill` for dev servers and watchers; support code in `bg-process/internal/`.
-- **`powershell.ts`** — a direct `pwsh`/`powershell` child process tool, independent of the host shell; stock renderer; support code in `powershell/internal/`.
-- **`crash-logger.ts`** — records fatal JS/stream errors and nonzero exits to `agent/logs/pi-crash.log`, and session/compaction lifecycle boundaries to `agent/logs/pi-lifecycle.log`; loads at module scope before the first paint, independent of `PI_APEX_UI`. See [Crash and stability](#crash-and-stability) below.
-- **`continual-memory.ts`** — `memory_list`/`memory_write`; small evidence-backed durable notes outside the chat transcript. Kinds: `memory` (facts/preferences/failures) and `prompt` (narrow policy addendums only). Default write scope is global; local is this-session scratch. Global entries live under `agent/harness/global.json` (gitignored).
-- **`prompt-commands.ts`** — registers `/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` directly via `pi.registerCommand()`. See [Slash commands](#slash-commands). `/todos` and `/agents` are registered by Apex (`todo-tools.ts`), not here.
-- **`graphify.ts`** — see [Graphify](#graphify) below.
-- **`worktree.ts`** — isolated Git worktree `add`/`list`/`remove` for parallel writers; support code in `worktree/internal/`; Apex receipt chrome on `worktree`.
-- **`mcp-adapter.ts`** — standalone bridge that boots the root `pi-mcp-adapter` dependency on this `ExtensionAPI`. MCP tools use Pi's stock renderer. Do not also add `pi-mcp-adapter` to `agent/settings.json` `packages`; a second package-loaded copy would initialize a duplicate MCP extension.
-- **`read-guard.ts`** — blocks a repeated `read` of the same image path when mtime/size are unchanged; downscales image blocks in any tool result to a 1568px long edge; gives an advisory nudge on very large bash output. No text re-read guard.
-- **`user-profile.ts`** — injects `agent/USER_PROFILE.local.md` (gitignored, capped at 8,000 characters) into the system prompt via `before_agent_start`, if the file exists.
-- **`at-path-complete.ts`** — scoped `@dir/` autocomplete overlay that lists on-disk children, including gitignored folders such as `files/`. Bare `@foo` stays with FFF/stock fuzzy search.
-- **`web-search.ts`** — native Exa web search and page fetching (`web_search`, `fetch_content`, `get_search_content`) with caching and domain filtering.
-- **`lsp/`** — see [LSP](#lsp) below.
+1. Clone this repository somewhere other than `~/.pi`:
 
-`agent/settings.json` loads `@ff-labs/pi-fff` as an npm package. The `pi-mcp-adapter` dependency is composed locally via `mcp-adapter.ts` instead of package-loaded. (`pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in `tuiMode: "fullscreen"`.)
+   ```bash
+   git clone https://github.com/bskimball/pi.git pi-trial
+   cd pi-trial
+   ```
 
-### Graphify
+2. Install dependencies from the clone root:
 
-`graphify.ts` registers a headless LLM tool, `graphify`, that only queries an existing local knowledge graph (`query`/`path`/`explain` — it never builds or mutates one) and requires artifacts to already exist under `graphify-out` (or a configured `outputDir`). The tool is optional, not a default map of the repo: when the graph is stale (`needs_update` or in-session code edits) execute refuses the query and the injected prompt says to use source tools instead of rebuilding unasked. The `/graphify` slash command (including `/graphify build`) is a handoff: it tells the agent to load and follow `agent/skills/graphify/SKILL.md`, whose full build/update pipeline runs the upstream CLI as `graphify .` — never as `graphify build`. That skill is user-invoked (`disable-model-invocation: true`).
+   ```bash
+   npm install --legacy-peer-deps
+   ```
 
-### LSP
+   The flag is required: the locked `pi-mcp-adapter@2.32.1` still declares a peer on `@earendil-works/pi-ai@^0.84.1`, which npm's caret range excludes against the locked `0.85.1` line. See [CONFIGURATION.md](CONFIGURATION.md) for the full peer-conflict note.
 
-A single on-demand `lsp` tool for semantic navigation (`definition`, `references`, `hover`, `document_symbols`, `workspace_symbols`, `diagnostics`, `read_symbol`), backed by language servers already on `PATH` (TypeScript/JavaScript, Python, Go, PHP). It never installs servers and runs no always-on analysis; servers spawn per session and are disposed on `session_shutdown`. Bare commands resolve on `PATH` only, never from the project directory, so an untrusted repo can't inject a binary. Optional config at `agent/lsp.json` or a trusted `.pi/lsp.json`.
+3. Launch the pinned binary from your target project directory, with `PI_CODING_AGENT_DIR` pointed at this clone's `agent/` folder. Replace the example paths with **absolute** paths. Use a dedicated terminal for the trial and close it afterward; the PowerShell environment assignment lasts for that terminal session.
 
-### Crash and stability
+   ```bash
+   # Git Bash / macOS / Linux, run from the project you want to work in
+   cd /path/to/your-project
+   PI_CODING_AGENT_DIR="/absolute/path/to/pi-trial/agent" "/absolute/path/to/pi-trial/node_modules/.bin/pi"
+   ```
 
-`crash-logger.ts` installs the segmenter shield (defends against a native ICU grapheme-segmentation crash on Windows), last-phase breadcrumbs per pid, and a terminal-restore watchdog for unclean session deaths, independent of `PI_APEX_UI`. Logs: `agent/logs/pi-crash.log`, `agent/logs/pi-lifecycle.log`, `agent/logs/pi-render.log`. See [CONTEXT.md](CONTEXT.md#long-session-and-subagent-stability) and [AGENTS.md](AGENTS.md#crash-and-stability-diagnostics) for the full mechanism; this README does not reproduce it.
+   ```powershell
+   # PowerShell, run from the project you want to work in
+   Set-Location C:\path\to\your-project
+   $env:PI_CODING_AGENT_DIR = "C:\absolute\path\to\pi-trial\agent"
+   & "C:\absolute\path\to\pi-trial\node_modules\.bin\pi.cmd"
+   ```
 
-## Slash commands
+   The local binary uses this repository's pinned Pi version rather than whichever global version is installed. Delegated workers inherit the same agent-directory override and use the running Pi installation; a separate global `pi` command is not required.
 
-`/browser`, `/deploy`, `/orchestrate`, `/mode`, and `/ui` are native commands registered in code by `agent/extensions/prompt-commands.ts` (`pi.registerCommand()`), because they need executable pre-steps — a deterministic browser-connect step, a git worktree snapshot, sticky session-mode switching, and the behavior/presentation pickers — that plain prompt-template expansion can't do. `/mode` switches behavior (Pi / Apex / Apex Orchestrate / Fusion / Work) and `/ui` switches presentation (pi / apex / claude / hal); see `agent/extensions/prompt-commands/README.md` for mode/UI detail. Work is operations-first with a persistent sidekick and the existing synchronous specialist roster; it uses its own prompt instead of the coding-first base. `/graphify` is registered the same way, by `graphify.ts`. `/observatory` is registered by `apex/apex-ui.ts` (also bound to `alt+o`) and opens the Observatory portal in the interactive TUI. `/todos` (`alt+t`) and `/agents` (`alt+a`) are registered by `apex/internal/todo/todo-tools.ts` and collapse or switch the above-editor todo dock; see [CONTEXT.md § Todo dock](CONTEXT.md#todo-dock).
+4. Run `/login` to authenticate with a supported built-in provider, or configure your provider's API key using [Pi's provider documentation](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/providers.md). `/login` stores credentials in `auth.json` directly inside `PI_CODING_AGENT_DIR` (`pi-trial/agent/auth.json`, gitignored).
 
-Simpler prompt templates live under `agent/prompts/*.md` (e.g. [`/brainstorm`](agent/prompts/brainstorm.md)); complexity review lives in the [`simplify` skill](agent/skills/simplify/SKILL.md); see [CONFIGURATION.md](CONFIGURATION.md#prompt-template-markdown-agentpromptsmd-upstream-pi) for the template frontmatter/argument format.
+5. Pick your own provider: the tracked `agent/settings.json` defaults to `defaultProvider: "local-proxy"` / `defaultModel: "gpt-5.6-sol"`, a private setup that won't work for you. Open `/model` (or edit `agent/settings.json` in the clone) and choose a `defaultProvider`/`defaultModel` that names a provider you actually authenticated in step 4, or your own entry in `agent/models.json` (see step 6). The tracked `enabledModels` patterns limit the picker's initial scope. Press **Tab** in `/model` to switch between scoped and all available models, or remove/update those patterns in `agent/settings.json` to include your provider. If you plan to exercise Apex or Apex Orchestrate dispatch, also check that each file in `agent/agents/*.md` names a model/fallback chain you can actually reach, or adjust it.
 
-`agent/prompts/inactive/` keeps the original Markdown-template versions of [`browser.md`](agent/prompts/inactive/browser.md) and [`deploy.md`](agent/prompts/inactive/deploy.md) for reference; they are not discovered as commands (non-recursive prompt-template discovery skips the `inactive/` subdirectory) and are superseded by the native implementations above.
+6. (Optional) Restore the example configs if you want custom models, MCP servers, or web search — see [Example and template files](#example-and-template-files) below. Because you set `PI_CODING_AGENT_DIR` to the clone's `agent/` folder, copy `agent/mcp.example.json` → `agent/mcp.json` and `agent/models.example.json` → `agent/models.json` inside that same `agent/` folder; copy `web-search.example.json` there too (as `agent/web-search.json`), since `web-search.ts` resolves `web-search.json` inside `PI_CODING_AGENT_DIR` when that variable is set, not the repo root. None of this is required to try `/mode`/`/ui` against a provider you already configured in steps 4–5.
 
-### `/orchestrate`
-
-Switches the current session between Regular mode (inline-by-default) and a **strict orchestrator** that is specialist-first for substantial slices. Exactly one mode card is injected per turn — Regular or Orchestrate, never both. With orchestration on, the lead still decomposes the request, writes work orders, integrates results, verifies the outcome, and answers the user. Control-plane work stays inline: status, continue, launch/stop the app, a single known-path edit, and glue after a returned slice. Substantial implementation still goes to specialists.
-
-```text
-/orchestrate on       # enable specialist-first orchestration
-/orchestrate off      # restore Regular-mode inline-by-default
-/orchestrate          # toggle the current mode
-```
-
-Strict mode routes substantial implementation to Machinist or Artisan, broad discovery to Scout, and routine post-implementation browser verification to Inspector. Truly independent slices can launch in parallel (isolated writer worktrees, at most 3 live writers). Path-triggered Oracle review still applies. If the session is sticky-on and the turn is control-plane, the lead should offer `/orchestrate off` once rather than forcing a specialist pipeline. The mode persists when the session resumes and displays `orchestrator` in the footer while active.
-
-### `/browser`
-
-Attaches to a **dedicated authenticated debug Chrome** and co-browses with you. Chrome's daily-profile remote debugging shows an **Allow** dialog on every new client; this command sidesteps that by using a separate profile with classic CDP on port **29300**:
-
-```text
-chrome --remote-debugging-port=29300 --user-data-dir=~/.pi/browser/chrome-profile
-```
-
-Google/Microsoft logins persist in this dedicated profile after a one-time sign-in. A deterministic pre-step runs `agent/bin/browser-connect.mjs connect` to idempotently attach, then the agent uses `agent-browser --cdp 29300` (snapshot/click/fill/batch) to drive the page. It never launches a ghost browser and never touches the daily Chrome profile.
-
-```
-/browser https://mail.google.com
-/browser check staging dashboard
-```
-
-### `/deploy`
-
-Delegates lint, format, verify, and deploy to the `stevedore` sub-agent instead of running the deploy inline. A deterministic pre-step captures the git worktree, branch, HEAD, and a dirty-file inventory, then the main agent hands `stevedore` a complete self-contained brief:
-
-- Work only inside the resolved absolute worktree path.
-- Discover and run the project's own lint/format/typecheck/test/build/deploy scripts.
-- Treat the full dirty tree as the release contents (no partial subsets), excluding only true noise/secrets/generated artifacts.
-- Deploy to the stated target, verify, and report back with final `git status`.
-
-```
-/deploy staging
-/deploy wrangler, skip tests
-```
-
-## Skills
-
-Skills live in `agent/skills/` and are freeform directories beyond the required `SKILL.md`. `agent/settings.json` also adds `../node_modules/pi-mcp-adapter/skills` to `skills`, which brings in the upstream `mcp-scripting` skill.
-
-- [`agent-browser/SKILL.md`](agent/skills/agent-browser/SKILL.md) — browser automation through the dedicated debug Chrome on CDP port 29300; the same pathway `/browser` uses.
-- [`background-process/SKILL.md`](agent/skills/background-process/SKILL.md) — the `bg_*` tools (from `bg-process.ts`) for long-running commands like dev servers and watchers.
-- [`generate-image/SKILL.md`](agent/skills/generate-image/SKILL.md) — image generation via a bundled helper script, [`generate_image.py`](agent/skills/generate-image/generate_image.py), with an automatic model fallback chain.
-- [`graphify/SKILL.md`](agent/skills/graphify/SKILL.md) — the full graphify build/update CLI pipeline (`graphify .` and friends); user-invoked via `/graphify` (`disable-model-invocation: true`). See [Graphify](#graphify) above for the query-only tool.
-- [`improve-codebase-architecture/SKILL.md`](agent/skills/improve-codebase-architecture/SKILL.md) — scans for deepening opportunities and works through them interactively; `disable-model-invocation: true`, so it's invoked explicitly rather than picked automatically.
-- [`mcp-scripting-recipes/SKILL.md`](agent/skills/mcp-scripting-recipes/SKILL.md) — local composition recipes (discovery-first resolution, bounded fan-out, partial failures, timeout budgeting) layered on top of the upstream `mcp-scripting` skill's API contract.
-
-## Theme
-
-`agent/themes/apex-dark.json`, `agent/themes/claude-dark.json`, and `agent/themes/hal-dark.json` are custom dark themes selected through `/ui` or Pi's theme controls; the active theme hot-reloads when edited. HAL uses cool matte surfaces, restrained cyan emphasis, and semantic status colors. See [CONFIGURATION.md](CONFIGURATION.md#themes-agentthemesjson-upstream-pi) for the tracked field/format reference.
-
-## The shark / Observatory
-
-Apex and Claude use a shark in deep space as the Observatory landing mark on a fresh chat, not as a live animation during work. HAL uses a static geometric HAL wordmark and a quiet operations-console label, with the same inventory and navigation. Observatory is a blank-chat landing screen mounted by `apex/apex-ui.ts` as Pi's startup header (`ctx.ui.setHeader(...)`), not an above-editor widget, so with `quietStartup` it's the opening screen.
-
-```text
-agent/extensions/apex/observatory/
-├── observatory.ts        composition, inventory, glyph shark tiers, selectors
-├── observatory-orb.ts    focus/selection state
-├── shark-art.ts          generated truecolor pixel bitmaps (ULTRA / WIDE / MID)
-├── pixel-art.ts          half-block pixel renderer + truecolor detection
-├── star-field.ts         background star rows
-├── preview.mjs           full-screen harness
-└── sky-preview.mjs       star-field-only harness
-```
-
-The mark itself is **drawn, not photographed**: `tools/shark-art/encode-shark.py` renders a parametric side profile (smooth body curves plus straight-edged fin polygons) into truecolor half-block cells, where each glyph carries two rows of pixels. The generated TypeScript lives at `packages/ui-kit/observatory/shark-art.ts` — regenerate it with `python tools/shark-art/emit-ts.py`, never hand-edit that file. `pixel-art.ts` decodes the shared cell format and gates on truecolor, falling back to glyph art elsewhere.
-
-Two facts ride on the mark: the Observatory splash (`observatory.ts`) shows the full mark on a fresh chat only; the star field (`star-field.ts`) encodes the *shape* from the workspace path (so every project has its own constellation, stable across launches) and the *density* from context usage (stars burn out faintest-first as the window fills).
-
-Preview harness — do not iterate on this surface through screenshots:
-
-```
-node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs
-node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs 80
-node --experimental-transform-types agent/extensions/apex/observatory/sky-preview.mjs
-```
-
-Compaction uses Pi's built-in spinner only. Live async workers show through the normal task status cards and `task_*` tools. Apex keeps no extension-owned animation clocks for either surface.
+None of the tracked example files are working configuration for you — they show shape, not values. The bundled `local-proxy` defaults and any agent-file model routes are this author's private setup; expect to change them before anything runs. Once you're satisfied and want this to be your actual Pi configuration instead of a scoped trial, see [Restore on a new machine](#restore-on-a-new-machine) below.
 
 ## Example and template files
 
-Three of the gitignored, credential-bearing configs have a tracked example sibling — a **minimal supported template**, not a full mirror of the active file's shape, with placeholder/env-only values safe to read or copy:
+Three gitignored, credential-bearing configs have a tracked example sibling — a **minimal supported template**, not a full mirror of the active file, with placeholder/env-only values:
 
 | Active (gitignored) | Example (tracked) |
 | --- | --- |
@@ -228,20 +214,20 @@ Three of the gitignored, credential-bearing configs have a tracked example sibli
 | `agent/models.json` | [`agent/models.example.json`](agent/models.example.json) |
 | `web-search.json` | [`web-search.example.json`](web-search.example.json) |
 
-`agent/auth.json` has no example — it is populated by Pi's `/login` command, not copied.
+`agent/auth.json` has no example — it's populated by `/login`, not copied.
 
-Copying an example is a starting point, not a drop-in config: placeholders need real values, and the shapes are illustrative rather than exhaustive. `agent/mcp.example.json`'s server entry is a sample server, not a required one — replace or remove it for your own MCP servers. `agent/models.example.json`'s provider/model IDs are placeholders; if you copy it as-is, also check that `agent/settings.json`'s `defaultProvider`/`defaultModel` still name a provider and model that actually exist in your `models.json`. See [CONFIGURATION.md](CONFIGURATION.md) for field-by-field documentation of each format, and [Restore on a new machine](#restore-on-a-new-machine) below for how to turn an example into an active config.
+Copying an example is a starting point, not a drop-in config: placeholders need real values. `agent/mcp.example.json`'s server entry is a sample, not a required one. `agent/models.example.json`'s provider/model IDs are placeholders — if you copy it as-is, also update `agent/settings.json`'s `defaultProvider`/`defaultModel` to match. See [CONFIGURATION.md](CONFIGURATION.md) for field-by-field documentation, and [Restore on a new machine](#restore-on-a-new-machine) below for the exact copy commands.
 
 ## Restore on a new machine
 
-1. Clone this repository as `~/.pi`.
+1. Clone this repository as `~/.pi`. **Back up any existing `~/.pi` first — do not overwrite an existing installation.**
 2. Install dependencies:
 
    ```bash
    npm install --legacy-peer-deps
    ```
 
-   `pi-mcp-adapter@2.32.1` still peers `@earendil-works/pi-ai@^0.84.1`, which excludes the locked 0.85.1 line. See [CONFIGURATION.md](CONFIGURATION.md) for the peer/install note.
+   See [Setup](#setup) above (dependency install step) for why the flag is needed.
 
 3. Restore the ignored local configuration files from their tracked examples (see [CONFIGURATION.md](CONFIGURATION.md) for field details):
 
@@ -251,15 +237,22 @@ Copying an example is a starting point, not a drop-in config: placeholders need 
    cp web-search.example.json web-search.json
    ```
 
-   Prefer leaving `$LOCAL_PROXY_API_KEY` and `$EXA_API_KEY` references in place and defining those environment variables. For MCP, `bearerTokenEnv` contains an environment-variable **name**: define `EXAMPLE_MCP_TOKEN`, or rename the field value and define the renamed variable. Do not paste a token into `bearerTokenEnv`. Literal secrets are supported by some formats but are discouraged.
+   Prefer leaving `$LOCAL_PROXY_API_KEY` and `$EXA_API_KEY` references in place and defining those environment variables instead of pasting real values. For MCP, `bearerTokenEnv` holds an environment-variable **name** — define that variable, don't paste a token into the field itself.
 
-   If `PI_CODING_AGENT_DIR` is set, `web-search.ts` reads `web-search.json` from that exact directory instead of the repo root; copy the example there.
-4. Sign in to OAuth-backed providers again with Pi's `/login` command. `agent/auth.json` is intentionally ignored.
-5. `agent/models.json` reloads automatically when `/model` is opened. The Exa credential config is re-read on each `web_search` call. `agent/mcp.json` changes apply on the next session start or `/reload` — restart Pi (or `/reload`) after changing it.
+   If `PI_CODING_AGENT_DIR` is set (for example, when running an isolated clone rather than `~/.pi` directly), `web-search.ts` reads `web-search.json` from that exact directory instead of the repo root — copy the example there instead.
+4. Sign in to OAuth-backed providers again with `/login`. `agent/auth.json` is intentionally gitignored and not restored from anything.
+5. `agent/models.json` reloads automatically the next time `/model` is opened — no restart needed. The Exa credential is re-read on every `web_search` call. `agent/mcp.json` changes need a restart or `/reload`.
 
-Before committing, review the staged files and run a secret scanner such as Gitleaks:
+Before committing anything from this repo, review staged files and run a secret scanner such as Gitleaks:
 
 ```bash
 git diff --cached
 gitleaks git --staged
 ```
+
+## Where to read next
+
+- [CONFIGURATION.md](CONFIGURATION.md) — field-by-field reference for every config/markdown format used here (`mcp.json`, `models.json`, `settings.json`, agent frontmatter, prompt templates, skills, themes, extensions), each linked to the authoritative upstream Pi doc where one exists.
+- [CONTEXT.md](CONTEXT.md) — the internal extension architecture: the standalone-extension rule, presentation ownership, the sync-vs-async task system, the Fusion sidekick lifecycle, and long-session stability mechanisms. Read this before modifying an extension.
+- [AGENTS.md](AGENTS.md) — the working instructions this repo gives to the agent operating on itself.
+- [`agent/extensions/prompt-commands/README.md`](agent/extensions/prompt-commands/README.md) — the exact `/mode`/`/ui` switching, persistence, and storage contract.
