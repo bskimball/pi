@@ -53,8 +53,9 @@ Same base prompt, same specialist roster, same sub-agent tools — the only diff
 
 ```text
 you: "add pagination to the /orders API endpoint"
-  └─ lead reads the code, writes the change, runs the tests
-     (delegates only if it decides a specialist genuinely helps)
+  └─ lead: reads the code, implements the change
+       └─ oracle: independently reviews the actual code and diff
+     lead: addresses blocking findings, verifies, reports back
 ```
 
 **Apex Orchestrate (specialist-first):**
@@ -62,11 +63,15 @@ you: "add pagination to the /orders API endpoint"
 ```text
 you: "add pagination to the /orders API endpoint"
   └─ lead: plans the slice, then delegates it
-       └─ task_start(machinist) → implements, tests
-     lead stays inline for: status checks, "continue", launching the
-     dev server, a single known-path edit, gluing a returned diff
-     lead: integrates the result, verifies, reports back
+       └─ machinist: implements, runs slice-local checks
+       └─ oracle: independently reviews the actual code and diff
+     lead: resolves blocking findings, integrates the result
+       └─ stevedore: runs integrated verification
+     lead: reports back; stays inline for status checks, "continue",
+           launching the dev server, and small integration edits
 ```
+
+**Both Apex modes use Oracle for fresh-eyes review after substantial changes.** Review examines the actual code and diff, not just the implementer's summary, and blocking findings must be resolved before delivery. Sensitive changes, published public APIs, and user-visible behavior trigger review regardless of diff size; a non-behavioral typo does not need the full workflow.
 
 Independent slices can run in parallel under Apex Orchestrate, each in its own isolated Git worktree, up to five concurrent async workers and three concurrent writers. `/orchestrate on` / `/orchestrate off` / `/orchestrate` (bare toggle) switches between the two without touching `/mode` directly.
 
