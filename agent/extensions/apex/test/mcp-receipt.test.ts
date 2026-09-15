@@ -6,6 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
+  registerHeadlessReceipt,
+  shouldAttachApexReceipts,
+} from "@pi/ui-kit/internal/presentation/headless-receipts.ts";
+import {
+  MCP_SCHEMA_SENTINEL,
   MCP_TOOL,
   compactMcpArgs,
   installMcpReceipts,
@@ -215,5 +220,219 @@ describe("apex mcp receipts", () => {
       if (previous === undefined) delete process.env.PI_APEX_UI;
       else process.env.PI_APEX_UI = previous;
     }
+  });
+
+  it("routes mcp__<server> proxies to server-aware kit renderers", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      const proto = ToolExecutionComponent.prototype as any;
+      const proxyOwned = {
+        toolName: "mcp__BLI400C",
+        toolDefinition: {
+          name: "mcp__BLI400C",
+          renderCall: () => ({ render: () => ["OWN"], invalidate() {} }),
+          renderResult: () => ({ render: () => ["OWN"], invalidate() {} }),
+          renderShell: "self",
+        },
+      };
+      const first = proto.getCallRenderer.call(proxyOwned);
+      const second = proto.getCallRenderer.call(proxyOwned);
+      // Factory-built, memoized per tool name: stable identity, not the
+      // gateway object, and the adapter's owned chrome is displaced.
+      assert.equal(first, second);
+      assert.notEqual(first, mcpReceiptRenderers.renderCall);
+      assert.notEqual(
+        proto.getResultRenderer.call(proxyOwned),
+        proxyOwned.toolDefinition.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(proxyOwned), "self");
+    });
+  });
+
+  it("renders @ <server> on proxy call headers from the tool name", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      const proto = ToolExecutionComponent.prototype as any;
+      const proxyOwned = {
+        toolName: "mcp__BLI400C",
+        toolDefinition: {
+          name: "mcp__BLI400C",
+          renderCall: () => ({ render: () => ["OWN"], invalidate() {} }),
+          renderResult: () => ({ render: () => ["OWN"], invalidate() {} }),
+          renderShell: "self",
+        },
+      };
+      const renderCall = proto.getCallRenderer.call(proxyOwned);
+      const header = renderCall(
+        { tool: "plan_run_ibmi_command" },
+        theme,
+        context({ tool: "plan_run_ibmi_command" }),
+      )
+        .render(100)
+        .join("\n");
+      assert.match(header, /plan_run_ibmi_command @ BLI400C/);
+    });
+  });
+
+  it("leaves the gateway mcp call header unchanged", () => {
+    const header = mcpReceiptRenderers
+      .renderCall(
+        { tool: "list_tabs", server: "chrome-devtools", args: { max: 5 } },
+        theme,
+        context({ tool: "list_tabs", server: "chrome-devtools" }),
+      )
+      .render(100)
+      .join("\n");
+    assert.match(header, /call list_tabs @ chrome-devtools/);
+  });
+
+  it("prefers an explicit args server over the proxy name fallback", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      const proto = ToolExecutionComponent.prototype as any;
+      const proxyOwned = {
+        toolName: "mcp__BLI400C",
+        toolDefinition: { name: "mcp__BLI400C" },
+      };
+      const renderCall = proto.getCallRenderer.call(proxyOwned);
+      const header = renderCall(
+        { tool: "inspect", server: "OTHER" },
+        theme,
+        context({ tool: "inspect", server: "OTHER" }),
+      )
+        .render(100)
+        .join("\n");
+      assert.match(header, /inspect @ OTHER/);
+      assert.doesNotMatch(header, /BLI400C/);
+    });
+  });
+
+  it("prefers exact keys over prefix matchers", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      const exactCall = () => ({ render: () => ["EXACT"], invalidate() {} });
+      const exactResult = () => ({ render: () => ["EXACT"], invalidate() {} });
+      registerHeadlessReceipt(
+        "mcp__probe",
+        { renderCall: exactCall, renderResult: exactResult },
+        { overrideOwned: true },
+      );
+      const decided = shouldAttachApexReceipts({
+        toolName: "mcp__probe",
+        toolDefinition: {
+          renderCall: () => ({}),
+          renderResult: () => ({}),
+        },
+      });
+      assert.equal(decided?.renderCall, exactCall);
+      assert.equal(decided?.renderResult, exactResult);
+    });
+  });
+
+  it("matches only mcp-family tool names", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      assert.equal(
+        shouldAttachApexReceipts({ toolName: "mcp" })?.renderCall,
+        mcpReceiptRenderers.renderCall,
+      );
+      assert.equal(
+        shouldAttachApexReceipts({ toolName: "mcp__BLI400C" })?.renderCall,
+        shouldAttachApexReceipts({ toolName: "mcp__BLI400C" })?.renderCall,
+      );
+      assert.notEqual(
+        shouldAttachApexReceipts({ toolName: "mcp__BLI400C" })?.renderCall,
+        undefined,
+      );
+      assert.equal(
+        shouldAttachApexReceipts({ toolName: "mcpScript" })?.renderCall,
+        mcpScriptReceiptRenderers.renderCall,
+      );
+      assert.equal(shouldAttachApexReceipts({ toolName: "bash" }), undefined);
+      assert.equal(
+        shouldAttachApexReceipts({ toolName: "BLI400C_plan_run_ibmi_command" }),
+        undefined,
+      );
+    });
+  });
+
+  it("splits error text into a bounded message plus a bounded schema section", () => {
+    const schemaLines = Array.from(
+      { length: 60 },
+      (_, i) => `  param${i} (string) - description for parameter ${i}`,
+    );
+    const text =
+      "Error: DSPDEVD is an interactive display command and cannot run here." +
+      `\n\n${MCP_SCHEMA_SENTINEL}\n${schemaLines.join("\n")}`;
+    const args = { tool: "plan_run_ibmi_command", server: "BLI400C" };
+    const result = {
+      content: [{ type: "text", text }],
+      details: {
+        mode: "call",
+        server: "BLI400C",
+        tool: "plan_run_ibmi_command",
+        error: "tool_error",
+      },
+    };
+
+    const expanded = mcpReceiptRenderers
+      .renderResult(result, { expanded: true, isPartial: false }, theme, context(args))
+      .render(80);
+    const out = expanded.join("\n");
+    assert.match(out, /DSPDEVD/);
+    assert.equal(
+      out.split("\n").filter((line: string) => line.includes(MCP_SCHEMA_SENTINEL)).length,
+      1,
+    );
+    assert.match(out, /param0/);
+    assert.doesNotMatch(out, /param59/);
+    assert.match(out, /\.\.\. \d+\+ more lines/);
+    // 60-line schema input collapses to message + label + ~24 schema lines.
+    assert.ok(expanded.length < 40);
+    assert.ok(expanded.every((line: string) => safeVisibleWidth(line) <= 80));
+
+    const collapsed = mcpReceiptRenderers
+      .renderResult(result, { expanded: false, isPartial: false }, theme, context(args))
+      .render(80);
+    const collapsedText = collapsed.join("\n");
+    assert.match(collapsedText, /DSPDEVD/);
+    assert.doesNotMatch(collapsedText, /param0/);
+  });
+
+  it("leaves results without the schema sentinel unchanged", () => {
+    const args = { tool: "list_pages", server: "chrome-devtools" };
+    const result = {
+      content: [{ type: "text", text: "pages: Example\nsecond line" }],
+      details: { mode: "call", server: "chrome-devtools", tool: "list_pages" },
+    };
+    const rendered = mcpReceiptRenderers
+      .renderResult(result, { expanded: true, isPartial: false }, theme, context(args))
+      .render(80);
+    const out = rendered.join("\n");
+    assert.match(out, /pages: Example/);
+    assert.match(out, /second line/);
+    assert.doesNotMatch(out, new RegExp(MCP_SCHEMA_SENTINEL));
+  });
+
+  it("yields no chrome for namespace proxies when PI_APEX_UI=0", () => {
+    withApexUi("0", () => {
+      installMcpReceipts();
+      const ownedCall = () => ({ render: () => ["OWN"], invalidate() {} });
+      const proto = ToolExecutionComponent.prototype as any;
+      const proxyOwned = {
+        toolName: "mcp__BLI400C",
+        toolDefinition: {
+          name: "mcp__BLI400C",
+          renderCall: ownedCall,
+          renderResult: () => ({ render: () => ["OWN"], invalidate() {} }),
+          renderShell: "self",
+        },
+      };
+      assert.equal(proto.getCallRenderer.call(proxyOwned), ownedCall);
+      assert.equal(
+        shouldAttachApexReceipts({ toolName: "mcp__BLI400C" }),
+        undefined,
+      );
+    });
   });
 });

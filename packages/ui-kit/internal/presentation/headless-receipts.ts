@@ -33,6 +33,15 @@ export type RegisteredReceipt = HeadlessRenderers & {
   suppressOwnedWhenDisabled?: boolean;
 };
 
+export type RegisteredPrefix = {
+  prefix: string;
+  resolve: (toolName: string) => RegisteredReceipt;
+};
+
+export type HeadlessRendererFactory = (
+  toolName: string,
+) => HeadlessRenderers;
+
 export type HeadlessPresentation = {
   renderCall?: unknown;
   renderResult?: unknown;
@@ -51,6 +60,7 @@ export type HeadlessReceiptState = {
   installed: boolean;
   legacyWrapped: boolean;
   registry: Map<string, RegisteredReceipt>;
+  prefixes: RegisteredPrefix[];
   originals: {
     getCallRenderer?: (this: HeadlessComponent) => unknown;
     getResultRenderer?: (this: HeadlessComponent) => unknown;
@@ -85,11 +95,15 @@ export function getHeadlessReceiptState(): HeadlessReceiptState {
         (ToolExecutionComponent.prototype as HeadlessPrototype)[LEGACY_INSTALL_KEY],
       ),
       registry: existingRegistry ?? new Map<string, RegisteredReceipt>(),
+      prefixes: [],
       originals: {},
     };
     g[HEADLESS_STATE_KEY] = state;
     g[RECEIPTS_KEY] = state.registry;
   }
+  // Prefix matchers arrived after the state shape; a process-wide state born
+  // under an older module instance will not have the field yet.
+  if (!state.prefixes) state.prefixes = [];
   return state;
 }
 
@@ -126,33 +140,83 @@ export function componentOwnsPresentation(component: HeadlessComponent): boolean
   );
 }
 
+function toRegisteredReceipt(
+  renderers: HeadlessRenderers,
+  options?: HeadlessReceiptOptions,
+): RegisteredReceipt {
+  const overrideOwned =
+    options?.overrideOwned ??
+    Boolean((renderers as { overrideOwned?: boolean }).overrideOwned);
+  const suppressOwnedWhenDisabled = options?.suppressOwnedWhenDisabled ?? false;
+  return {
+    renderCall: renderers.renderCall,
+    renderResult: renderers.renderResult,
+    overrideOwned,
+    suppressOwnedWhenDisabled,
+  };
+}
+
 /** Register Apex receipts for one headless tool. Last register for a name wins. */
 export function registerHeadlessReceipt(
   toolName: string,
   renderers: HeadlessRenderers,
   options?: HeadlessReceiptOptions,
 ): void {
+  getHeadlessReceiptState().registry.set(
+    toolName,
+    toRegisteredReceipt(renderers, options),
+  );
+}
+
+/**
+ * Register Apex receipts for every tool whose name starts with `prefix`.
+ * Second-chance match only: exact keys always win, and among prefixes the
+ * longest match wins. Last register for a prefix wins. Accepts either a fixed
+ * renderers object or a factory that builds one from the matched tool name
+ * (used when the name itself carries display data, e.g. `mcp__<server>`).
+ */
+export function registerHeadlessReceiptPrefix(
+  prefix: string,
+  renderers: HeadlessRenderers | HeadlessRendererFactory,
+  options?: HeadlessReceiptOptions,
+): void {
   const state = getHeadlessReceiptState();
-  const overrideOwned =
-    options?.overrideOwned ??
-    Boolean((renderers as { overrideOwned?: boolean }).overrideOwned);
-  const suppressOwnedWhenDisabled = options?.suppressOwnedWhenDisabled ?? false;
-  state.registry.set(toolName, {
-    renderCall: renderers.renderCall,
-    renderResult: renderers.renderResult,
-    overrideOwned,
-    suppressOwnedWhenDisabled,
-  });
+  const resolve =
+    typeof renderers === "function"
+      ? (toolName: string) => toRegisteredReceipt(renderers(toolName), options)
+      : () => toRegisteredReceipt(renderers, options);
+  const existing = state.prefixes.findIndex((entry) => entry.prefix === prefix);
+  if (existing === -1) state.prefixes.push({ prefix, resolve });
+  else state.prefixes[existing] = { prefix, resolve };
+}
+
+function matchPrefixReceipt(
+  state: HeadlessReceiptState,
+  toolName: string,
+): RegisteredReceipt | undefined {
+  let best: RegisteredPrefix | undefined;
+  let bestLength = -1;
+  for (const entry of state.prefixes) {
+    if (
+      entry.prefix.length > bestLength &&
+      toolName.startsWith(entry.prefix)
+    ) {
+      best = entry;
+      bestLength = entry.prefix.length;
+    }
+  }
+  return best?.resolve(toolName);
 }
 
 function shouldSuppressOwnedPresentation(
   component: HeadlessComponent,
 ): boolean {
   if (apexPresentationEnabled() || !component.toolName) return false;
-  return Boolean(
-    getHeadlessReceiptState().registry.get(component.toolName)
-      ?.suppressOwnedWhenDisabled,
-  );
+  const state = getHeadlessReceiptState();
+  const receipt =
+    state.registry.get(component.toolName) ??
+    matchPrefixReceipt(state, component.toolName);
+  return Boolean(receipt?.suppressOwnedWhenDisabled);
 }
 
 export function shouldAttachApexReceipts(
@@ -162,7 +226,8 @@ export function shouldAttachApexReceipts(
   const toolName = component.toolName;
   if (!toolName) return undefined;
   const state = getHeadlessReceiptState();
-  const renderers = state.registry.get(toolName);
+  const renderers =
+    state.registry.get(toolName) ?? matchPrefixReceipt(state, toolName);
   if (!renderers) return undefined;
   if (!renderers.overrideOwned && componentOwnsPresentation(component)) return undefined;
   return renderers;

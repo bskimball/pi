@@ -3,21 +3,32 @@
 // mcp-adapter.ts / pi-mcp-adapter own execute and register their own
 // renderCall/renderResult. Apex cannot import that extension. This replaces
 // adapter presentation with compact Apex receipts via the shared headless wrap
-// when Apex presentation is enabled.
+// when Apex presentation is enabled. Covers the `mcp`/`mcpScript` gateway
+// tools by exact name plus per-server `mcp__<server>` namespace proxies by
+// prefix.
 //
 // PI_APEX_UI=0 skips the wrap or falls back dynamically, leaving the adapter's
-// own presentation intact. Direct/namespace MCP tools keep adapter chrome.
+// own presentation intact. Direct `<server>_<tool>` passthrough tools match no
+// name rule and keep adapter chrome.
 
-import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
+import { boundedOutput, toolRenderers, type ToolSpec } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
   installHeadlessReceipts,
   registerHeadlessReceipt,
+  registerHeadlessReceiptPrefix,
+  type HeadlessRenderers,
 } from "./headless-receipts.ts";
 
 export const MCP_TOOL = "mcp";
 export const MCP_SCRIPT_TOOL = "mcpScript";
+/** Prefix of the adapter's per-server namespace-proxy tools (`mcp__<server>`). */
+export const MCP_PROXY_PREFIX = "mcp__";
+/** Sentinel the adapter appends before an input-schema dump on tool errors. */
+export const MCP_SCHEMA_SENTINEL = "Expected parameters:";
+/** Cap for the split-out schema section so a fat schema cannot blow out the receipt. */
+const MCP_SCHEMA_BODY_LINES = 24;
 
 type McpArgs = {
   tool?: string;
@@ -146,30 +157,71 @@ export function mcpScriptReceiptArg(
   );
 }
 
-export const mcpReceiptRenderers = toolRenderers<McpArgs>({
-  surface: MCP_TOOL,
-  title: MCP_TOOL,
-  arg: mcpReceiptArg,
-  stats(result) {
-    const details = detailsOf(result);
-    const parts: string[] = [];
-    const mode = cleanInline(details.mode, 24);
-    if (mode && mode !== "call") parts.push(mode);
-    const server = cleanInline(details.server ?? details.hintServer, 32);
-    const tool = cleanInline(details.tool ?? details.requestedTool, 40);
-    if (server && tool) parts.push(`${server}/${tool}`);
-    else if (server) parts.push(server);
-    else if (tool) parts.push(tool);
-    if (details.error) parts.push("error");
-    return parts.join(" · ");
-  },
-  preview(output) {
-    return output ? boundedOutput(output, 4, 1200) : [];
-  },
-  body(output) {
-    return output ? boundedOutput(output, 80) : [];
-  },
-});
+/** Split adapter error text into message + `Expected parameters:` schema dump. */
+function splitMcpSchema(output: string): { message: string; schema: string } {
+  const index = output.indexOf(MCP_SCHEMA_SENTINEL);
+  if (index === -1) return { message: output, schema: "" };
+  return {
+    message: output.slice(0, index).replace(/\s+$/, ""),
+    schema: output.slice(index + MCP_SCHEMA_SENTINEL.length).replace(/^\s+/, ""),
+  };
+}
+
+/** Prefer an explicit args server; proxies carry the server in the tool name. */
+function withFallbackServer(
+  args: McpArgs | undefined,
+  fallback: string | undefined,
+): McpArgs | undefined {
+  if (!fallback || args?.server) return args;
+  return { ...args, server: fallback };
+}
+
+export const mcpReceiptRenderers = toolRenderers<McpArgs>(mcpReceiptSpec());
+
+/**
+ * One receipt family for gateway and proxies. `fallbackServer` fills the
+ * `@ <server>` header slot when args carry no explicit server — the
+ * namespace-proxy case, where the server is baked into the tool name.
+ */
+function mcpReceiptSpec(fallbackServer?: string): ToolSpec<McpArgs> {
+  return {
+    surface: MCP_TOOL,
+    title: MCP_TOOL,
+    arg: (args, budget) =>
+      mcpReceiptArg(withFallbackServer(args, fallbackServer), budget),
+    stats(result) {
+      const details = detailsOf(result);
+      const parts: string[] = [];
+      const mode = cleanInline(details.mode, 24);
+      if (mode && mode !== "call") parts.push(mode);
+      const server = cleanInline(details.server ?? details.hintServer, 32);
+      const tool = cleanInline(details.tool ?? details.requestedTool, 40);
+      if (server && tool) parts.push(`${server}/${tool}`);
+      else if (server) parts.push(server);
+      else if (tool) parts.push(tool);
+      if (details.error) parts.push("error");
+      return parts.join(" · ");
+    },
+    preview(output) {
+      if (!output) return [];
+      const { message, schema } = splitMcpSchema(output);
+      return boundedOutput(schema ? message : output, 4, 1200);
+    },
+    body(output) {
+      if (!output) return [];
+      const { message, schema } = splitMcpSchema(output);
+      if (!schema) return boundedOutput(output, 80);
+      const lines = message ? boundedOutput(message, 80) : [];
+      return [
+        lines,
+        [MCP_SCHEMA_SENTINEL],
+        boundedOutput(schema, MCP_SCHEMA_BODY_LINES),
+      ].flat();
+    },
+    // Budget: message (80+1) + label (1) + schema (24+1) lines max.
+    bodyLines: 107,
+  };
+}
 
 export const mcpScriptReceiptRenderers = toolRenderers<McpScriptArgs>({
   surface: MCP_SCRIPT_TOOL,
@@ -189,13 +241,38 @@ export const mcpScriptReceiptRenderers = toolRenderers<McpScriptArgs>({
   },
 });
 
-/** Attach Apex receipts to mcp and mcpScript, overriding adapter chrome. */
+const proxyRendererCache = new Map<string, HeadlessRenderers>();
+
+/**
+ * Per-proxy renderers: the server lives in the tool name (`mcp__<server>`),
+ * not in the args, so each proxy gets a spec with its name-derived server as
+ * the header fallback. Memoized per tool name for stable renderer identity.
+ * Result stats still prefer the exact `details.server` when the adapter
+ * provides one; the fallback only ever fills the call header.
+ */
+function mcpProxyRenderers(toolName: string): HeadlessRenderers {
+  const cached = proxyRendererCache.get(toolName);
+  if (cached) return cached;
+  const server =
+    cleanInline(toolName.slice(MCP_PROXY_PREFIX.length), 40) || undefined;
+  const built = toolRenderers<McpArgs>(mcpReceiptSpec(server));
+  proxyRendererCache.set(toolName, built);
+  return built;
+}
+
+/** Attach Apex receipts to mcp, mcpScript, and per-server namespace proxies. */
 export function installMcpReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(MCP_TOOL, mcpReceiptRenderers, {
     overrideOwned: true,
   });
   registerHeadlessReceipt(MCP_SCRIPT_TOOL, mcpScriptReceiptRenderers, {
+    overrideOwned: true,
+  });
+  // Exact keys are consulted first, so this never shadows "mcp"/"mcpScript"
+  // (neither starts with "mcp__"). Direct `<server>_<tool>` passthrough
+  // tools match no name rule and keep adapter chrome.
+  registerHeadlessReceiptPrefix(MCP_PROXY_PREFIX, mcpProxyRenderers, {
     overrideOwned: true,
   });
   installHeadlessReceipts();
