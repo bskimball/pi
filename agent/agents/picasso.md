@@ -5,7 +5,7 @@ model: local-proxy/gemini-3.8-flash-high
 fallbackModels:
   - local-proxy/gpt-5.6-luna
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-thinking: high
+thinking: low
 tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: false
 maxTurns: 30

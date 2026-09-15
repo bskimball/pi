@@ -4,7 +4,6 @@ description: Remote source-code researcher for external libraries, framework int
 model: local-proxy/grok-4.6
 fallbackModels:
   - local-proxy/gemini-3.8-flash-high
-  - local-proxy/gpt-5.6-terra
   - local-proxy/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
 thinking: medium
