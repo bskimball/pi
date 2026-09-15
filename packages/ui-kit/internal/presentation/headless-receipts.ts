@@ -4,19 +4,27 @@
 // registration wins the whole tool, so Apex cannot re-register them. This
 // skins receipts by wrapping ToolExecutionComponent getters instead.
 //
+// Two copies of that class exist at runtime: the one extensions import
+// (dist/index.js) and the one the bundled live TUI instantiates
+// (dist/bundle). Patching only the imported copy leaves every
+// wrap-dependent receipt on owner chrome, so both prototypes are wrapped.
+//
 // PI_APEX_UI=0 skips the wrap or dynamically falls back to original tool
 // presentation when toggled after installation. Any existing presentation on a
 // tool (renderCall, renderResult, or a non-default renderShell) wins unless a
 // receipt explicitly opts into overrideOwned upon registration.
 
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { apexPresentationEnabled } from "./presentation.ts";
+import { reportRenderFailure } from "./tool-receipt.ts";
 
 export const HEADLESS_STATE_KEY = Symbol.for("pi.apex.headlessReceipts.state");
 export const RECEIPTS_KEY = Symbol.for("pi.apex.headlessReceipts.registry");
 const LEGACY_INSTALL_KEY = Symbol.for("pi.apex.headlessReceipts.installed");
 
-export const HEADLESS_WRAPPER_VERSION = 2;
+export const HEADLESS_WRAPPER_VERSION = 3;
 
 export type HeadlessReceiptOptions = {
   overrideOwned?: boolean;
@@ -55,18 +63,26 @@ export type HeadlessComponent = {
   builtInToolDefinition?: HeadlessPresentation;
 };
 
+export type HeadlessOriginals = {
+  getCallRenderer?: (this: HeadlessComponent) => unknown;
+  getResultRenderer?: (this: HeadlessComponent) => unknown;
+  getRenderShell?: (this: HeadlessComponent) => unknown;
+  hasRendererDefinition?: (this: object) => boolean;
+};
+
+export type LiveBundleState = "pending" | "patched" | "absent" | "failed";
+
 export type HeadlessReceiptState = {
   version: number;
   installed: boolean;
   legacyWrapped: boolean;
   registry: Map<string, RegisteredReceipt>;
   prefixes: RegisteredPrefix[];
-  originals: {
-    getCallRenderer?: (this: HeadlessComponent) => unknown;
-    getResultRenderer?: (this: HeadlessComponent) => unknown;
-    getRenderShell?: (this: HeadlessComponent) => unknown;
-    hasRendererDefinition?: (this: object) => boolean;
-  };
+  originals: HeadlessOriginals;
+  /** Pristine methods per wrapped prototype (imported copy + bundled copy). */
+  protoOriginals: Map<object, HeadlessOriginals>;
+  /** Outcome of the attempt to wrap the bundled live copy. */
+  liveBundle: LiveBundleState;
   shouldAttach?: (component: HeadlessComponent) => RegisteredReceipt | undefined;
 };
 
@@ -97,6 +113,8 @@ export function getHeadlessReceiptState(): HeadlessReceiptState {
       registry: existingRegistry ?? new Map<string, RegisteredReceipt>(),
       prefixes: [],
       originals: {},
+      protoOriginals: new Map(),
+      liveBundle: "pending",
     };
     g[HEADLESS_STATE_KEY] = state;
     g[RECEIPTS_KEY] = state.registry;
@@ -104,6 +122,8 @@ export function getHeadlessReceiptState(): HeadlessReceiptState {
   // Prefix matchers arrived after the state shape; a process-wide state born
   // under an older module instance will not have the field yet.
   if (!state.prefixes) state.prefixes = [];
+  if (!state.protoOriginals) state.protoOriginals = new Map();
+  if (!state.liveBundle) state.liveBundle = "pending";
   return state;
 }
 
@@ -260,40 +280,62 @@ function callOriginal<T>(
 const moduleState = getHeadlessReceiptState();
 moduleState.shouldAttach = shouldAttachApexReceipts;
 
-/** Attach registered Apex receipts to matching ToolExecutionComponent instances. */
-export function installHeadlessReceipts(): void {
-  const state = getHeadlessReceiptState();
-  state.shouldAttach = shouldAttachApexReceipts;
-
-  // A disabled clean startup must not add a process-wide presentation wrap.
-  // An older installed wrap must still be upgraded so v2 can suppress stale
-  // owned presentation and restore stock Pi chrome while Apex is disabled.
-  if (!apexPresentationEnabled() && !state.installed) return;
-  if (state.installed && state.version >= HEADLESS_WRAPPER_VERSION) return;
-
-  const proto = ToolExecutionComponent.prototype as object;
+/**
+ * Wrap one ToolExecutionComponent prototype so registered headless receipts
+ * attach to the instances it creates. The decision logic stays process-global
+ * (state.shouldAttach + registry), but pristine methods are captured per
+ * prototype: the class extensions import (dist/index.js) is a different
+ * object from the class the bundled live TUI instantiates (dist/bundle), and
+ * each copy needs its own originals. Returns false — and logs once to
+ * pi-render.log — when the target lacks the expected getters, instead of
+ * silently leaving owner chrome in place. Exported for tests: pass a
+ * stand-in prototype to prove a second copy gets wrapped.
+ */
+export function wrapToolExecutionPrototype(
+  proto: object,
+  state: HeadlessReceiptState = getHeadlessReceiptState(),
+): boolean {
   const call = findOwnMethod(proto, "getCallRenderer");
   const result = findOwnMethod(proto, "getResultRenderer");
   const shell = findOwnMethod(proto, "getRenderShell");
   const hasRenderer = findOwnMethod(proto, "hasRendererDefinition");
-  if (!call || !result || !shell || !hasRenderer) return;
+  if (!call || !result || !shell || !hasRenderer) {
+    reportRenderFailure(
+      "headless-receipts",
+      new Error(
+        "ToolExecutionComponent prototype is missing getCallRenderer/getResultRenderer/getRenderShell/hasRendererDefinition; kit receipts cannot attach to tools rendered by this copy.",
+      ),
+    );
+    return false;
+  }
 
-  // On a version migration the process-global state already holds the true
-  // pre-Apex methods. Replace old wrappers without stacking them as originals.
-  if (!state.installed) {
-    state.originals = {
-      getCallRenderer: call.method as (this: HeadlessComponent) => unknown,
-      getResultRenderer: result.method as (this: HeadlessComponent) => unknown,
-      getRenderShell: shell.method as (this: HeadlessComponent) => unknown,
-      hasRendererDefinition: hasRenderer.method as (this: object) => boolean,
-    };
+  // First install captures the pristine methods. Afterwards the
+  // process-global state already holds them: prefer the stored set (an older
+  // wrapper may already be installed on this prototype), then the legacy
+  // single-copy originals on a version upgrade, and only then the methods
+  // just found. Never mistake our own wrappers for pristine methods.
+  let originals = state.protoOriginals.get(proto);
+  if (!originals) {
+    const isPrimary = proto === (ToolExecutionComponent.prototype as object);
+    if (isPrimary && state.installed && state.originals.getCallRenderer) {
+      originals = state.originals;
+    } else {
+      originals = {
+        getCallRenderer: call.method as (this: HeadlessComponent) => unknown,
+        getResultRenderer: result.method as (this: HeadlessComponent) => unknown,
+        getRenderShell: shell.method as (this: HeadlessComponent) => unknown,
+        hasRendererDefinition: hasRenderer.method as (this: object) => boolean,
+      };
+      if (isPrimary && !state.installed) state.originals = originals;
+    }
+    state.protoOriginals.set(proto, originals);
   }
 
   call.target.getCallRenderer = function getHeadlessCallRenderer(
     this: HeadlessComponent,
   ) {
     const s = getHeadlessReceiptState();
-    const existing = callOriginal(s, this, s.originals.getCallRenderer);
+    const existing = callOriginal(s, this, originals.getCallRenderer);
     if (shouldSuppressOwnedPresentation(this)) return undefined;
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
@@ -308,7 +350,7 @@ export function installHeadlessReceipts(): void {
     this: HeadlessComponent,
   ) {
     const s = getHeadlessReceiptState();
-    const existing = callOriginal(s, this, s.originals.getResultRenderer);
+    const existing = callOriginal(s, this, originals.getResultRenderer);
     if (shouldSuppressOwnedPresentation(this)) return undefined;
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
@@ -323,7 +365,7 @@ export function installHeadlessReceipts(): void {
     this: HeadlessComponent,
   ) {
     const s = getHeadlessReceiptState();
-    const existing = callOriginal(s, this, s.originals.getRenderShell);
+    const existing = callOriginal(s, this, originals.getRenderShell);
     if (shouldSuppressOwnedPresentation(this)) return "default";
     const decision = s.shouldAttach
       ? s.shouldAttach(this)
@@ -343,12 +385,126 @@ export function installHeadlessReceipts(): void {
     return callOriginal(
       s,
       this as HeadlessComponent,
-      s.originals.hasRendererDefinition as
+      originals.hasRendererDefinition as
         | ((this: HeadlessComponent) => boolean)
         | undefined,
     ) ?? false;
   };
 
+  return true;
+}
+
+/**
+ * File URL of the bundled core entry that owns the live component copies, if
+ * this install has one. Derived from the already-resolved core entry so it
+ * works regardless of where Pi is installed; undefined on unbundled runtimes
+ * (SDK/tests without a bundle).
+ */
+export function resolveLiveBundleEntryUrl(): string | undefined {
+  let entry: string;
+  try {
+    entry = import.meta.resolve("@earendil-works/pi-coding-agent");
+  } catch {
+    return undefined;
+  }
+  const suffix = "/dist/index.js";
+  if (!entry.endsWith(suffix)) return undefined;
+  const candidate = `${entry.slice(0, -suffix.length)}/dist/bundle/index.js`;
+  let path: string;
+  try {
+    path = fileURLToPath(candidate);
+  } catch {
+    return undefined;
+  }
+  return existsSync(path) ? candidate : undefined;
+}
+
+/**
+ * Import the bundled core entry (the module object behind dist/bundle).
+ * Shared by every kit surface that must patch the live copies of core
+ * classes instead of the dist/index.js copies extensions import. Resolves to
+ * undefined when this install has no bundle; throws when the bundle exists
+ * but cannot be imported (callers log that loudly: it means live rendering
+ * is out of the kit's reach).
+ */
+export function importLiveBundleModule(): Promise<Record<string, unknown>> {
+  const url = resolveLiveBundleEntryUrl();
+  if (!url)
+    return Promise.reject(new Error("No bundled core entry in this install."));
+  return import(url) as Promise<Record<string, unknown>>;
+}
+
+/**
+ * Wrap the bundled copy of ToolExecutionComponent that the live TUI
+ * instantiates. The class extensions import (dist/index.js) is a different
+ * object, so the primary wrap alone never intercepts a rendered component.
+ * Fire-and-forget: install stays synchronous; a missing bundle (dev/test)
+ * silently skips, anything else that fails is logged once to pi-render.log.
+ * Exported for tests: await it to prove the genuine bundled copy gets wrapped.
+ */
+export async function patchLiveBundlePrototype(
+  state: HeadlessReceiptState,
+): Promise<void> {
+  if (state.liveBundle !== "pending") return;
+  if (!resolveLiveBundleEntryUrl()) {
+    state.liveBundle = "absent";
+    return;
+  }
+  let exported: unknown;
+  try {
+    exported = (await importLiveBundleModule()).ToolExecutionComponent;
+  } catch (error) {
+    state.liveBundle = "failed";
+    reportRenderFailure("headless-receipts", error);
+    return;
+  }
+  const proto =
+    typeof exported === "function"
+      ? (exported as { prototype?: unknown }).prototype
+      : undefined;
+  if (!proto || typeof proto !== "object") {
+    state.liveBundle = "failed";
+    reportRenderFailure(
+      "headless-receipts",
+      new Error(
+        "Bundled core entry does not export ToolExecutionComponent; kit receipts cannot attach to live tool calls.",
+      ),
+    );
+    return;
+  }
+  if (proto === (ToolExecutionComponent.prototype as object)) {
+    // Unbundled runtime: the primary wrap already covers it.
+    state.liveBundle = "patched";
+    return;
+  }
+  state.liveBundle = wrapToolExecutionPrototype(proto, state)
+    ? "patched"
+    : "failed";
+}
+
+/** Attach registered Apex receipts to matching ToolExecutionComponent instances. */
+export function installHeadlessReceipts(): void {
+  const state = getHeadlessReceiptState();
+  state.shouldAttach = shouldAttachApexReceipts;
+
+  // A disabled clean startup must not add a process-wide presentation wrap.
+  // An older installed wrap must still be upgraded so v2 can suppress stale
+  // owned presentation and restore stock Pi chrome while Apex is disabled.
+  if (!apexPresentationEnabled() && !state.installed) return;
+  if (
+    state.installed &&
+    state.version >= HEADLESS_WRAPPER_VERSION &&
+    state.liveBundle !== "pending"
+  )
+    return;
+
+  // v2 wrapped exactly one prototype (the imported copy). The helper prefers
+  // the stored pristine originals, so the upgrade path replaces stale
+  // wrappers without touching them.
+  if (!wrapToolExecutionPrototype(ToolExecutionComponent.prototype as object, state))
+    return;
+
   state.version = HEADLESS_WRAPPER_VERSION;
   state.installed = true;
+  void patchLiveBundlePrototype(state);
 }

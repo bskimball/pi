@@ -6,8 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
+  getHeadlessReceiptState,
   registerHeadlessReceipt,
+  resolveLiveBundleEntryUrl,
   shouldAttachApexReceipts,
+  wrapToolExecutionPrototype,
 } from "@pi/ui-kit/internal/presentation/headless-receipts.ts";
 import {
   MCP_SCHEMA_SENTINEL,
@@ -434,5 +437,111 @@ describe("apex mcp receipts", () => {
         undefined,
       );
     });
+  });
+
+  it("wraps a second ToolExecutionComponent copy (bundled live TUI class)", () => {
+    withApexUi("1", () => {
+      installMcpReceipts();
+      // Stand-in for the bundled copy the live TUI instantiates: same getter
+      // shape as core, distinct prototype object the primary wrap never sees.
+      class BundledCopy {
+        toolName?: string;
+        toolDefinition?: any;
+        constructor(name: string, definition: any) {
+          this.toolName = name;
+          this.toolDefinition = definition;
+        }
+        getCallRenderer() {
+          return this.toolDefinition?.renderCall;
+        }
+        getResultRenderer() {
+          return this.toolDefinition?.renderResult;
+        }
+        getRenderShell() {
+          return this.toolDefinition?.renderShell ?? "default";
+        }
+        hasRendererDefinition() {
+          return this.toolDefinition !== undefined;
+        }
+      }
+      const bundleProto = BundledCopy.prototype as any;
+      assert.equal(wrapToolExecutionPrototype(bundleProto), true);
+      const ownedCall = () => ({ render: () => ["OWN"], invalidate() {} });
+      const ownedResult = () => ({ render: () => ["OWN"], invalidate() {} });
+      const component = new BundledCopy("mcp__BLI400A", {
+        name: "mcp__BLI400A",
+        renderCall: ownedCall,
+        renderResult: ownedResult,
+        renderShell: "self",
+      });
+      // overrideOwned receipts beat the adapter-owned renderers on the live
+      // copy too — before the two-copy fix this returned the owned renderers.
+      // (Proxy names resolve to memoized per-server renderers, so compare
+      // against the registry decision, not the gateway singleton.)
+      const decided = shouldAttachApexReceipts({
+        toolName: "mcp__BLI400A",
+        toolDefinition: {
+          renderCall: ownedCall,
+          renderResult: ownedResult,
+        },
+      });
+      assert.ok(decided);
+      assert.equal(
+        bundleProto.getCallRenderer.call(component),
+        decided.renderCall,
+      );
+      assert.equal(
+        bundleProto.getResultRenderer.call(component),
+        decided.renderResult,
+      );
+      assert.equal(bundleProto.getRenderShell.call(component), "self");
+      assert.equal(bundleProto.hasRendererDefinition.call(component), true);
+    });
+  });
+
+  it("wraps the genuine bundled copy via the real install path", async (t) => {
+    const bundleUrl = resolveLiveBundleEntryUrl();
+    if (!bundleUrl) {
+      t.skip("no bundled core entry in this install");
+      return;
+    }
+    const previous = process.env.PI_APEX_UI;
+    process.env.PI_APEX_UI = "1";
+    try {
+      installMcpReceipts(); // kicks the fire-and-forget bundle patch
+      const state = getHeadlessReceiptState();
+      const deadline = Date.now() + 3000;
+      while (state.liveBundle === "pending" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      // Fails if the install path stops reaching the live copy.
+      assert.equal(state.liveBundle, "patched");
+      const live = (await import(bundleUrl) as any).ToolExecutionComponent;
+      const liveProto = live.prototype;
+      const ownedCall = () => ({ render: () => ["OWN"], invalidate() {} });
+      const ownedResult = () => ({ render: () => ["OWN"], invalidate() {} });
+      const component = {
+        toolName: "mcp__BLI400A",
+        toolDefinition: {
+          name: "mcp__BLI400A",
+          renderCall: ownedCall,
+          renderResult: ownedResult,
+          renderShell: "self",
+        },
+      };
+      const decided = shouldAttachApexReceipts(component as any);
+      assert.ok(decided);
+      assert.equal(
+        liveProto.getCallRenderer.call(component),
+        decided.renderCall,
+      );
+      assert.equal(
+        liveProto.getResultRenderer.call(component),
+        decided.renderResult,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previous;
+    }
   });
 });
