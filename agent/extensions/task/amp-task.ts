@@ -18,10 +18,12 @@ import {
   getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
+  piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
@@ -559,10 +561,12 @@ export default function (pi: ExtensionAPI) {
     ),
   });
 
-  pi.registerTool({
+  const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${agentList}`;
+  const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${agentList}`;
+  const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",
-    description: `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${agentList}`,
+    description: taskFullDescription,
     parameters: TaskParams,
     executionMode: "parallel",
 
@@ -1214,6 +1218,20 @@ export default function (pi: ExtensionAPI) {
         return card;
       },
     }),
+  };
+  const applyTaskAdvertisement = (mode = process.env.PI_BEHAVIOR_MODE ?? "pi") => {
+    const piMode = mode === "pi";
+    taskToolDef.description = piMode ? taskPiDescription : taskFullDescription;
+    const properties = (taskToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
+    taskToolDef.parameters = Type.Object({
+      ...properties,
+      agent: Type.String({ description: piMode ? piAgentParamDescription(agents) : agentParamDescription(agents) }),
+    }) as typeof taskToolDef.parameters;
+    pi.registerTool(taskToolDef);
+  };
+  applyTaskAdvertisement();
+  pi.events.on("pi:modes:changed", (payload: unknown) => {
+    applyTaskAdvertisement((payload as { mode?: string }).mode ?? "pi");
   });
 
   pi.on("session_shutdown", () => {

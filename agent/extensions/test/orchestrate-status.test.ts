@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT } from "../prompt-commands.ts";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
@@ -16,10 +16,11 @@ test("legacy modes restore without adopting a new global default", () => {
   assert.equal(restoreMode([], prefs, true).mode, "pi");
   assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
 });
-test("Pi exposes built-in default tools; collaboration modes exclude chain/rebind while Work keeps the full roster", () => {
+test("Pi keeps installed extension tools; collaboration modes exclude chain/rebind while Work keeps the full roster", () => {
   const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_rebind", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   const collaborationTools = ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
-  assert.deepEqual(toolsForMode("pi", tools), ["read", "write", "edit", "bash"]);
+  assert.deepEqual(toolsForMode("pi", tools), tools);
+  assert.deepEqual(toolsForMode("apex", tools), tools);
   assert.deepEqual(toolsForMode("fusion", tools), collaborationTools);
   assert.deepEqual(toolsForMode("work", tools), collaborationTools);
 });
@@ -76,9 +77,13 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate");
     workerBusy = false;
     await commands.mode("pi", ctx);
-    assert.match((await prompt()).systemPrompt, /^You are an expert coding assistant operating inside pi/);
-    assert.doesNotMatch((await prompt()).systemPrompt, /Apex base|Strict orchestrator/);
-    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    const piPrompt = (await prompt()).systemPrompt;
+    assert.match(piPrompt, /^You are an expert coding assistant operating inside pi/);
+    assert.match(piPrompt, /Pi mode \(active\)/);
+    assert.match(piPrompt, /explicit user direction only/);
+    assert.doesNotMatch(piPrompt, /Apex base|Strict orchestrator|Regular mode \(active\)/);
+    assert.ok(PI_SYSTEM_BLOCK.includes("Pi mode (active)"));
+    assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start"]);
     allTools.push("fffind", "ffgrep", "intercom");
     await commands.mode("apex", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
@@ -92,7 +97,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.doesNotMatch(fused, /^You are an expert coding assistant operating inside pi/);
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("pi", ctx);
-    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
     await commands.mode("work", ctx);
     assert.equal(process.env.PI_BEHAVIOR_MODE, "work");
     const workBaseline = buildSystemPrompt({
@@ -241,12 +246,12 @@ test("mode switch failure after tool change restores prior tools, model, env, an
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
     await emit("session_start", { reason: "new" });
     await commands.mode("pi", ctx);
-    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    assert.deepEqual(active, allTools);
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
     failToolsOnce = true;
     await commands.mode("apex", ctx);
     assert.match(notices[notices.length - 1], /Mode switch to Apex failed.*restored Pi/);
-    assert.deepEqual(active, ["read", "write", "edit", "bash"], "prior Pi tool set restored");
+    assert.deepEqual(active, allTools, "prior Pi tool set restored");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "mode env restored");
     const prompt = await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir } });
     assert.match(prompt.systemPrompt, /^You are an expert coding assistant operating inside pi/, "still Pi prompt");
@@ -419,7 +424,7 @@ test("incomplete recovery blocks input until a later /mode succeeds; /model cann
     assert.deepEqual(await emit("input", { text: "go" }), { action: "handled" }, "block still enforced");
     await commands.mode("pi", ctx);
     assert.equal(await emit("input", { text: "go" }), undefined, "successful /mode clears the block");
-    assert.deepEqual(active, ["read", "write", "edit", "bash"]);
+    assert.deepEqual(active, allTools);
   } finally {
     for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

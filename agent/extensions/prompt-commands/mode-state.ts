@@ -39,7 +39,6 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
   return structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion });
 }
 export function toolsForMode(mode: Mode, names: string[]): string[] {
-  if (mode === "pi") return names.filter(name => ["read", "bash", "edit", "write"].includes(name));
   if (mode === "fusion" || mode === "work") return names.filter(name => !["task_chain", "task_rebind"].includes(name));
   return names;
 }

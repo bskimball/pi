@@ -71,8 +71,9 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
   process.env.PI_BEHAVIOR_MODE = "fusion";
   delete process.env.PI_FUSION_SIDEKICK;
   const handlers = new Map<string, Function[]>();
-  const bus = new Map<string, Function>();
+  const bus = new Map<string, Function[]>();
   const tools = new Map<string, any>();
+  const emitBus = (name: string, payload: any) => { for (const fn of bus.get(name) ?? []) fn(payload); };
   // wrapToolDefinition copies description/parameters; mutating the registered object
   // is not enough unless registerTool runs again and re-wraps.
   let wrapped: { description: string; agent: string } | undefined;
@@ -87,7 +88,7 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     registerTool: (tool: any) => { tools.set(tool.name, tool); snapshotWrap(tool); },
     registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
     on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
-    events: { on(name: string, fn: Function) { bus.set(name, fn); } },
+    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); } },
     getThinkingLevel: () => "medium",
   };
   try {
@@ -112,8 +113,8 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     }
     const chain = await tools.get("task_chain").execute("call", { steps: [{ agent: "machinist", prompt: "write a file" }] }, undefined, undefined, ctx);
     assert.equal(chain.isError, true);
-    const busy = { busy: true }; bus.get("pi:modes:query-busy")!(busy); assert.equal(busy.busy, true);
-    const idle = { busy: false }; bus.get("pi:modes:query-busy")!(idle); assert.equal(idle.busy, false);
+    const busy = { busy: true }; emitBus("pi:modes:query-busy", busy); assert.equal(busy.busy, true);
+    const idle = { busy: false }; emitBus("pi:modes:query-busy", idle); assert.equal(idle.busy, false);
     assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "task", input: {} })).find(Boolean), undefined);
     for (const toolName of ["task_chain", "task_rebind"]) {
       const result = handlers.get("tool_call")!.map(fn => fn({ toolName, input: {} })).find(Boolean);
@@ -130,12 +131,20 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(wrapped?.description ?? "", /sidekick/);
     assert.doesNotMatch(wrapped?.description ?? "", /machinist|scout|artisan/);
     assert.match(wrappedAgent(), /sidekick/);
-    bus.get("pi:modes:changed")!({ mode: "apex" });
+    emitBus("pi:modes:changed", { mode: "apex" });
     assert.match(advertised().description, /machinist/);
     assert.match(agentParam(), /machinist/);
     assert.match(wrapped?.description ?? "", /machinist/);
     assert.match(wrappedAgent(), /machinist/);
-    bus.get("pi:modes:changed")!({ mode: "fusion" });
+    assert.match(tools.get("task").description, /Issue multiple task calls/);
+    emitBus("pi:modes:changed", { mode: "pi" });
+    assert.match(advertised().description, /only when the user names that specialist/);
+    assert.doesNotMatch(advertised().description, /Use it when work benefits from separate specialist context/);
+    assert.match(agentParam(), /In Pi mode, dispatch only when the user names that specialist/);
+    assert.doesNotMatch(agentParam(), /after delegation is justified/);
+    assert.match(tools.get("task").description, /only when the user names that specialist/);
+    assert.match(tools.get("task").parameters.properties.agent.description, /In Pi mode, dispatch only when the user names that specialist/);
+    emitBus("pi:modes:changed", { mode: "fusion" });
     assert.match(advertised().description, /sidekick/);
     assert.doesNotMatch(advertised().description, /machinist|scout|artisan/);
     assert.match(advertised().description, /librarian|stevedore|oracle|picasso/);
@@ -146,7 +155,7 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(wrappedAgent(), /sidekick/);
     assert.doesNotMatch(wrappedAgent(), /machinist|scout|artisan/);
 
-    bus.get("pi:modes:changed")!({ mode: "work" });
+    emitBus("pi:modes:changed", { mode: "work" });
     assert.match(advertised().description, /Work sidekick/);
     assert.match(advertised().description, /All existing synchronous specialists remain available/);
     assert.match(agentParam(), /Work permits only its designated sidekick/);

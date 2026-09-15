@@ -147,6 +147,11 @@ export function agentParamDescription(agents: Map<string, AgentDef>): string {
   return `Agent to run. One of: ${[...agents.keys()].join(", ")}.${hint ? ` ${hint}` : ""}`;
 }
 
+/** Pi mode keeps specialists available but never auto-routes from the schema. */
+export function piAgentParamDescription(agents: Map<string, AgentDef>): string {
+  return `Agent to run. One of: ${[...agents.keys()].join(", ")}. In Pi mode, dispatch only when the user names that specialist or asks you to delegate; this parameter does not decide whether to delegate.`;
+}
+
 /** True when an agent definition lives under the project-local `.pi/agents` tree. */
 export function isProjectAgentFile(file: string, cwd: string = process.cwd()): boolean {
   const projectAgents = path.resolve(cwd, ".pi", "agents");

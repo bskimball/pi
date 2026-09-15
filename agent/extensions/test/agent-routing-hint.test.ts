@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const { agentParamDescription, discoverAgents, routingHint } = await import(
+const { agentParamDescription, piAgentParamDescription, discoverAgents, routingHint } = await import(
   "../task/runtime/agent-discovery.ts"
 );
 
@@ -54,6 +54,15 @@ describe("routing hint", () => {
     assert.match(description, /live-page checks to inspector/);
     assert.doesNotMatch(description, /only on explicit user request in regular mode/);
     assert.doesNotMatch(description, /UI\/frontend\/styling\/layout implementation to artisan/);
+  });
+
+  it("describes Pi-mode specialists without auto-routing", () => {
+    const agents = discoverAgents();
+    const description = piAgentParamDescription(agents);
+    assert.match(description, /^Agent to run\. One of: /);
+    assert.match(description, /In Pi mode, dispatch only when the user names that specialist/);
+    assert.doesNotMatch(description, /after delegation is justified/);
+    assert.doesNotMatch(description, /to machinist|to artisan|to inspector/);
   });
 
 });

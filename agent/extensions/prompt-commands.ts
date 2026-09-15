@@ -149,6 +149,14 @@ The user has switched this session into strict orchestrator mode. This overrides
 
 Review and context gates still apply as stated in this block. No unrequested \`model\` override: specialists use their configured default and fallback chain unless the user explicitly requested a different model for that delegation; \`maxTurns\`/\`timeoutSec\` overrides are silently ignored. Control-plane, glue, and known-path edits are the inline path in this mode — they are not a reason to skip a path-triggered Oracle review after a behavior or trust-boundary change. If a unit truly cannot be delegated (credentials, interactive auth, user-only decisions), surface it to the user instead of doing it silently.`;
 
+export const PI_SYSTEM_BLOCK = `
+
+## Pi mode (active)
+
+Do the work yourself with the available tools. Installed extensions such as intercom, fffind, and ffgrep are first-class tools in this mode — use them directly.
+
+Subagents (\`task\`, \`task_start\`, \`task_chain\`) stay available for explicit user direction only. Dispatch a specialist only when the user names that specialist or asks you to delegate, for example "ask Oracle to review this" or "have scout map this." Do not dispatch because the work is large, multi-file, frontend, a review, research, verification, or a path-triggered gate. Task complexity and tool-description routing hints do not authorize a specialist call. This Pi rule overrides automatic specialist routing in tool descriptions, skills, or review gates.
+`;
 export const FUSION_PREFACE = `# Fusion lead
 You are paired with a persistent sidekick (\`task_start\`, agent \`sidekick\`) that reads, investigates, and implements on your behalf. Before reading any file the user did not name, write the owned todo list and dispatch the sidekick for discovery; the investigation rules below are carried out through the sidekick, not by you. Full contract: "Fusion mode (active)" at the end of this prompt.
 
@@ -158,7 +166,7 @@ export const WORK_SYSTEM_PROMPT = readFileSync(join(dirname(fileURLToPath(import
 
 export default function (pi: ExtensionAPI): void {
   registerBrowserAttachTool(pi);
-  registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE);
+  registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK);
 
   pi.registerCommand("browser", {
     description:

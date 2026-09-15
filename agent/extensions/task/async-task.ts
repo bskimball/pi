@@ -18,6 +18,7 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
+  piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
   modelAttempts,
@@ -701,11 +702,23 @@ Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+  const taskStartPiDescription = `Start an asynchronous specialist only when the user names that specialist or asks you to delegate. Do not auto-route from this description. Returns a worker id (task_N) immediately; use task_wait, task_send, and task_close to manage the worker.
+
+Available agents:
+${agentList}
+
+At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const persistentSidekickMode = (): "fusion" | "work" | undefined => behaviorMode === "fusion" || behaviorMode === "work" ? behaviorMode : undefined;
-  const taskStartDescription = (mode = persistentSidekickMode()) => mode && sidekickDef ? taskStartPersistentDescription(mode) : taskStartFullDescription;
-  const taskStartAgentDescription = (mode = persistentSidekickMode()) => mode && sidekickDef
-    ? `Agent to run. One of: sidekick. ${mode === "work" ? "Work" : "Fusion"} permits only its designated sidekick on task_start.`
-    : agentParamDescription(agents);
+  const taskStartDescription = (mode = persistentSidekickMode()) => {
+    if (mode && sidekickDef) return taskStartPersistentDescription(mode);
+    return behaviorMode === "pi" ? taskStartPiDescription : taskStartFullDescription;
+  };
+  const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
+    if (mode && sidekickDef) {
+      return `Agent to run. One of: sidekick. ${mode === "work" ? "Work" : "Fusion"} permits only its designated sidekick on task_start.`;
+    }
+    return behaviorMode === "pi" ? piAgentParamDescription(agents) : agentParamDescription(agents);
+  };
   const applyTaskStartAdvertisement = (mode = persistentSidekickMode()) => {
     taskStartToolDef.description = taskStartDescription(mode);
     const properties = (taskStartToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;

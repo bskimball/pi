@@ -53,7 +53,7 @@ function joinPromptAppends(...sections: Array<string | undefined>): string | und
   return present.length ? present.join("\n\n") : undefined;
 }
 
-export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = ""): void {
+export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = ""): void {
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
@@ -344,9 +344,18 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (state.mode === "fusion") return { systemPrompt: fusionPreface + event.systemPrompt + fusion };
     const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: BuildSystemPromptOptions) => string };
     const selectedTools = pi.getActiveTools();
-    // Pi retains its stock builder behavior unchanged.
+    // Pi keeps the stock builder and installed-tool guidance, plus a
+    // user-directed specialist overlay. It does not inherit Apex routing.
     if (state.mode !== "work") {
-      return { systemPrompt: buildSystemPrompt({ ...event.systemPromptOptions, customPrompt: undefined, appendSystemPrompt: undefined, promptGuidelines: [], cwd: ctx.cwd, selectedTools }) };
+      return {
+        systemPrompt: buildSystemPrompt({
+          ...event.systemPromptOptions,
+          customPrompt: undefined,
+          appendSystemPrompt: joinPromptAppends(event.systemPromptOptions.appendSystemPrompt, piBlock),
+          cwd: ctx.cwd,
+          selectedTools,
+        }),
+      };
     }
     // Runner handlers execute sequentially, so earlier extensions may have
     // appended dynamic context to the stock baseline. Preserve that suffix

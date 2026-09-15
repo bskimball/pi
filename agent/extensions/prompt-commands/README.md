@@ -8,7 +8,7 @@ The model picker uses the same available-provider catalog as Pi's `/model`, init
 
 Mode changes preserve the conversation and require an idle lead and idle workers. Running dev servers do not block switching. Selection is staged: apply model/thinking, acknowledge sidekick configuration, persist the session/default choices, then announce the mode. A failed switch restores prior tools, model, and mode; incomplete recovery blocks input until a successful `/mode` switch. Model and thinking changes update the active Work or Fusion lead choice.
 
-Pi uses the installed Pi system-prompt builder and the default built-in read, bash, edit, and write tools. Apex, Apex Orchestrate, and Fusion overlay the configured base prompt. Work instead invokes the installed builder with its dedicated operations-first custom prompt, retaining project context, installed skills, and selected-tool guidance without inheriting the coding-first base prompt.
+Pi uses the installed Pi system-prompt builder and keeps installed extension tools, including intercom, fffind, and ffgrep. Subagents remain available only when the user names a specialist or asks to delegate; Pi does not inherit Apex auto-routing. Apex, Apex Orchestrate, and Fusion overlay the configured base prompt. Work instead invokes the installed builder with its dedicated operations-first custom prompt, retaining project context, installed skills, and selected-tool guidance without inheriting the coding-first base prompt.
 
 ## Work
 
