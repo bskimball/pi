@@ -18,9 +18,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   CANONICAL_STATUSES,
+  TODO_LIST_MAX_LINES,
   buildTodoList,
   renderAgentList,
   renderPlainTodoList,
+  renderSidekickLine,
   renderTodoList,
   type DockPane,
   type TodoItem,
@@ -331,8 +333,21 @@ export function installTodoTools(pi: ExtensionAPI): void {
     return Boolean(current) || (presentationEnabled && liveAgents.length > 0);
   }
 
+  /**
+   * Fusion's sole persistent sidekick, when it is the only live worker.
+   * Rendered as one inline line on the todos pane (no second pane worth
+   * switching to); the multi-worker agents tab is untouched. Suppressed
+   * while presentation is disabled, where the dock stays a plain list.
+   */
+  function fusionSidekick(): DockAgentItem | undefined {
+    if (!presentationEnabled || liveAgents.length !== 1) return undefined;
+    const only = liveAgents[0];
+    return only?.fusion === true ? only : undefined;
+  }
+
   function dockTabs() {
     if (!liveAgents.length) return undefined;
+    if (fusionSidekick()) return undefined;
     return {
       pane: dockPane,
       agentCount: liveAgents.length,
@@ -375,13 +390,21 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 tabs: dockTabs(),
               });
             }
-            return presentationEnabled
-              ? renderTodoList(theme, width, current, {
-                  collapsed: panelCollapsed,
-                  toggleHint: TOGGLE_HINT,
-                  tabs: dockTabs(),
-                })
-              : renderPlainTodoList(current, width);
+            if (!presentationEnabled) return renderPlainTodoList(current, width);
+            const lines = renderTodoList(theme, width, current, {
+              collapsed: panelCollapsed,
+              toggleHint: TOGGLE_HINT,
+              tabs: dockTabs(),
+            });
+            // Fusion single sidekick: one persistent line on the todos pane.
+            // It counts against TODO_LIST_MAX_LINES so the panel never grows
+            // past its current max height; collapsed stays header-only.
+            const sidekick = !panelCollapsed ? fusionSidekick() : undefined;
+            if (!sidekick) return lines;
+            return [
+              ...lines.slice(0, TODO_LIST_MAX_LINES - 1),
+              renderSidekickLine(theme, width, sidekick),
+            ];
           }, "[todo panel unavailable]"),
         { placement: "aboveEditor" },
       );

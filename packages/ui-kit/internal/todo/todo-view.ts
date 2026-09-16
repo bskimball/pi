@@ -285,6 +285,19 @@ export interface DockAgentItem {
   lifecycle: string;
   createdAt: number;
   lastEventAt?: number;
+  /** Live execution phase ("model" | "tool" | "retry" | "compacting" | "none"). */
+  phase?: string;
+  /** Name of the most recently started running tool, if any. */
+  tool?: string;
+  turns?: number;
+  maxTurns?: number;
+  generation?: number;
+  /** Pending UI requests: the "blocked on a question" signal. */
+  waitingUi?: number;
+  /** Bounded short mission label tracking the current generation. */
+  mission?: string;
+  /** True for Fusion's single persistent sidekick. */
+  fusion?: boolean;
 }
 
 const AGENT_GLYPHS: Record<string, string> = {
@@ -404,6 +417,65 @@ export function renderAgentList(
     );
   });
   return [safeTruncateToWidth(header, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
+}
+
+/** Finite number from an untrusted value, or undefined. */
+function finiteNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * One persistent line for Fusion's single sidekick, appended to the todos
+ * pane so the dock answers "what is it doing right now" at zero token
+ * cost. Exactly one row, clipped right through safeTruncateToWidth:
+ *
+ *   ● sidekick · gen 3 · running bash · 7/40 · 2m
+ *
+ * The waiting-UI signal leads the detail (the worker is blocked asking a
+ * question); otherwise the middle prefers phase/tool and falls back to the
+ * lifecycle label. A real turn cap renders as `turns/maxTurns`; an
+ * unbounded Fusion cap renders as `turn N`. The mission trails so state
+ * clips last. Glyph and tones come from the active skin and theme only.
+ */
+export function renderSidekickLine(
+  theme: StatusTheme,
+  width: number,
+  item: DockAgentItem,
+  options: { now?: number } = {},
+): string {
+  if (width <= 0) return "";
+  const now = options.now ?? Date.now();
+  const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
+  const glyph = skinGlyphs().statusActive;
+  const tone = waiting ? "warning" : (AGENT_TONES[item.lifecycle] ?? "muted");
+  const label =
+    (AGENT_LABELS[item.lifecycle] ?? safeText(item.lifecycle, 16)) || "agent";
+  const tool = safeText(item.tool, 24);
+  const middle = waiting
+    ? "waiting for reply"
+    : tool
+      ? `${label} ${tool}`
+      : item.lifecycle === "running" && item.phase === "model"
+        ? "thinking"
+        : label;
+  const generation = finiteNum(item.generation);
+  const turns = finiteNum(item.turns);
+  const maxTurns = finiteNum(item.maxTurns);
+  const detail = metaText([
+    generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
+    middle,
+    turns === undefined
+      ? undefined
+      : maxTurns !== undefined && maxTurns > 0 && maxTurns <= 100_000
+        ? `${Math.trunc(turns)}/${Math.trunc(maxTurns)}`
+        : `turn ${Math.trunc(turns)}`,
+    agentAge(item, now),
+    safeText(item.mission, 80) || undefined,
+  ]);
+  return safeTruncateToWidth(
+    `${ROW_INSET}${theme.fg(tone, glyph)} ${theme.fg("text", "sidekick")} ${theme.fg(waiting ? "warning" : "muted", detail)}`,
+    width,
+  );
 }
 
 /**

@@ -54,10 +54,13 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and the kit listens — no cross-extension import, no extra footer rows.
 
+Snapshots carry structural liveness (`phase`, running `tool`, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `fusion`) bounded at publish time. `fleetSnapshotKey()` covers those fields so a tool change or turn repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer.
+
 | Trigger | Effect |
 | --- | --- |
 | `todo_write` / `todo_read` | Mount or refresh the Todos pane. |
 | Live `task_start` / `task_chain` worker | Mount `[todos] / [agents N]`. Agents-only sessions open on Agents. |
+| Lone Fusion sidekick (`fusion`, 1 live worker) | No tabs: one inline sidekick line on the Todos pane, inside `TODO_LIST_MAX_LINES`. |
 | `alt+t` or `/todos` | Collapse or expand the dock. |
 | `alt+a` | Toggle Todos / Agents when chrome is on. |
 | `/agents` | Switch to Agents. |

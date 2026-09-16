@@ -11,6 +11,7 @@ const {
   buildTodoList,
   renderAgentList,
   renderPlainTodoList,
+  renderSidekickLine,
   renderTodoList,
 } = await import("@pi/ui-kit/internal/todo/todo-view.ts");
 
@@ -1477,6 +1478,178 @@ describe("fusion close backstop", () => {
         mock.emit("session_shutdown", {}, {});
       }
     });
+  });
+});
+
+describe("fusion single-sidekick dock line", () => {
+  function mountPlan(apexUi = "1") {
+    resetDockAgents();
+    const mock = createMockPi(apexUi);
+    let mountedComponent: any;
+    let setWidgetCalls = 0;
+    const tuiCtx = {
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        setWidget(_key: string, component: any) {
+          setWidgetCalls += 1;
+          mountedComponent = component;
+        },
+        notify() {},
+      },
+    } as any;
+    mock.emit("session_start", { reason: "new" }, tuiCtx);
+    return {
+      mock,
+      tuiCtx,
+      setWidgetCalls: () => setWidgetCalls,
+      render: (width = 80): string[] => {
+        const factory = mountedComponent as
+          | ((tui: unknown, theme: unknown) => { render: (width: number) => string[] })
+          | undefined;
+        const comp = typeof factory === "function" ? factory(null, theme) : undefined;
+        return comp?.render ? comp.render(width) : [];
+      },
+      shutdown() {
+        publishDockAgents([]);
+        mock.emit("session_shutdown", {}, tuiCtx);
+      },
+    };
+  }
+
+  async function writePlan(mock: any, tuiCtx: any) {
+    await mock.latestTool("todo_write").execute(
+      "call_1",
+      { todos: [{ content: "Review the crash", status: "in_progress" }] },
+      undefined,
+      undefined,
+      tuiCtx,
+    );
+  }
+
+  const sidekick = (overrides: Record<string, unknown> = {}) => ({
+    id: "task_sidekick",
+    agent: "sidekick",
+    lifecycle: "running",
+    createdAt: Date.now() - 2 * 60_000,
+    lastEventAt: Date.now() - 2 * 60_000,
+    phase: "tool",
+    tool: "bash",
+    turns: 7,
+    maxTurns: 40,
+    generation: 3,
+    waitingUi: 0,
+    mission: "Steer the dock",
+    fusion: true,
+    ...overrides,
+  });
+
+  it("appends exactly one bounded line to the todos pane", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      const mountedOnce = dock.setWidgetCalls();
+      publishDockAgents([sidekick()]);
+      assert.equal(dock.setWidgetCalls(), mountedOnce, "sidekick tick repaints in place");
+      const lines = dock.render(80);
+      assert.ok(lines.length <= TODO_LIST_MAX_LINES, `within ${TODO_LIST_MAX_LINES} lines`);
+      assert.match(lines.join("\n"), /Review the crash/, "todos stay visible");
+      const sidekickRows = lines.filter((line) => line.includes("sidekick"));
+      assert.equal(sidekickRows.length, 1, "exactly one sidekick row");
+      const row = sidekickRows[0];
+      assert.match(row, /sidekick/);
+      assert.match(row, /gen 3/);
+      assert.match(row, /running bash/);
+      assert.match(row, /7\/40/);
+      assert.match(row, /Steer the dock/);
+      assert.doesNotMatch(lines[0], /\[todos\]/, "no tab strip for the lone sidekick");
+      assert.doesNotMatch(lines.join("\n"), /agents 1/, "no agents tab for the lone sidekick");
+      for (const line of lines) {
+        assert.ok(safeVisibleWidth(line) <= 80, `"${line}" exceeds width budget`);
+      }
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("leads with waiting for reply while blocked on a question", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([sidekick({ waitingUi: 2, tool: "bash" })]);
+      const rows = dock.render(80).filter((line) => line.includes("sidekick"));
+      assert.equal(rows.length, 1);
+      assert.match(rows[0], /waiting for reply/, "blocked signal wins over the tool name");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("keeps the multi-worker agents tab path unchanged", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        { id: "task_1", agent: "oracle", lifecycle: "running", createdAt: 1 },
+        { id: "task_2", agent: "artisan", lifecycle: "running", createdAt: 2 },
+      ]);
+      const lines = dock.render(80);
+      assert.match(lines[0], /\[todos\]/, "tab strip stays for N>1");
+      assert.match(lines[0], /agents 2/);
+      assert.doesNotMatch(lines.join("\n"), /sidekick/, "no inline line for N>1");
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      const agents = dock.render(80);
+      assert.match(agents.join("\n"), /oracle/, "agents pane still reachable via /agents");
+      assert.match(agents.join("\n"), /artisan/);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("shows tabs instead of the inline line for a lone non-fusion worker", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        { id: "task_1", agent: "scout", lifecycle: "running", createdAt: 1 },
+      ]);
+      const lines = dock.render(80);
+      assert.match(lines[0], /\[todos\]/, "tab strip stays for non-fusion workers");
+      assert.doesNotMatch(lines.join("\n"), /sidekick/);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("stays a plain todo list under PI_APEX_UI=0", async () => {
+    const dock = mountPlan("0");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([sidekick()]);
+      const lines = dock.render(80);
+      assert.match(lines.join("\n"), /Review the crash/);
+      assert.doesNotMatch(lines.join("\n"), /sidekick/, "no chrome while disabled");
+      assert.ok(lines.every((line: string) => !/\u001b\[/.test(line)));
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("keeps renderSidekickLine to one bounded row at every width", () => {
+    const item = sidekick({
+      tool: "bash",
+      mission: "A mission label that keeps going past any sane dock width",
+      maxTurns: Number.MAX_SAFE_INTEGER,
+    });
+    for (const width of [20, 40, 80]) {
+      const row = renderSidekickLine(theme, width, item);
+      assert.equal(row.includes("\n"), false, `width ${width}: single row`);
+      assert.ok(safeVisibleWidth(row) <= width, `width ${width}: "${row}"`);
+      assert.doesNotMatch(row, /9007199254740991/, "no raw MAX_SAFE_INTEGER in the dock");
+    }
+    const wide = renderSidekickLine(theme, 80, item);
+    assert.match(wide, /turn 7/, "unbounded fusion cap renders as turn N");
+    assert.deepEqual(renderSidekickLine(theme, 0, item), "");
   });
 });
 

@@ -769,6 +769,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   let lastFleetKey = "";
   const dispatchWaitWakes = new Set<(dispatchId: string) => void>();
   const wakeActiveTaskWaits = (dispatchId: string) => {
+    // Defensive copy: each woken waiter synchronously deletes itself from
+    // dispatchWaitWakes via unregisterDispatch, so iterate a snapshot.
+    // oxlint-disable-next-line unicorn/no-useless-spread
     for (const wake of [...dispatchWaitWakes]) {
       try {
         wake(dispatchId);
@@ -782,12 +785,26 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     const items: FleetSnapshotItem[] = [];
     for (const worker of workers.values()) {
       if (!isLiveLifecycle(worker.lifecycle) || worker.closed) continue;
+      const running = worker.ledger.running();
+      const tool = running.length
+        ? running.reduce((latest, activity) =>
+            activity.startedAt >= latest.startedAt ? activity : latest,
+          ).tool
+        : undefined;
       items.push({
         id: worker.id,
         agent: worker.agent,
         lifecycle: worker.lifecycle,
         createdAt: worker.createdAt,
         lastEventAt: worker.lastEventAt,
+        phase: worker.phase,
+        tool,
+        turns: worker.turns,
+        maxTurns: worker.maxTurns,
+        generation: worker.generation,
+        waitingUi: worker.pendingUi.size,
+        mission: worker.mission,
+        fusion: worker.fusion,
       });
     }
     return items;
@@ -2589,6 +2606,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         }
         try {
           worker.initialPrompt = message;
+          worker.mission = missionFromPrompt(message);
           worker.fallbackReplaySafe = true;
           writeLastPhase(`task_send:prompt:enter id=${id}`);
           startGeneration(worker);

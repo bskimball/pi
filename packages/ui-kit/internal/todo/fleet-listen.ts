@@ -4,12 +4,29 @@
 const FLEET_BUS_KEY = "__piTaskFleetBus";
 const ITEM_CAP = 8;
 
+/** Publish-time bounds so the dock never receives unbounded text. */
+const TOOL_CHARS = 24;
+const MISSION_CHARS = 80;
+
 export interface DockAgentItem {
   id: string;
   agent: string;
   lifecycle: string;
   createdAt: number;
   lastEventAt?: number;
+  /** Live execution phase ("model" | "tool" | "retry" | "compacting" | "none"). */
+  phase?: string;
+  /** Name of the most recently started running tool, if any. */
+  tool?: string;
+  turns?: number;
+  maxTurns?: number;
+  generation?: number;
+  /** Pending UI requests: the "blocked on a question" signal. */
+  waitingUi?: number;
+  /** Bounded short mission label tracking the current generation. */
+  mission?: string;
+  /** True for Fusion's single persistent sidekick. */
+  fusion?: boolean;
 }
 
 type FleetListener = (items: readonly DockAgentItem[]) => void;
@@ -54,6 +71,22 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
     createdAt: Number(item.createdAt) || 0,
     lastEventAt:
       item.lastEventAt === undefined ? undefined : Number(item.lastEventAt) || 0,
+    phase: item.phase === undefined ? undefined : String(item.phase ?? ""),
+    tool:
+      item.tool === undefined
+        ? undefined
+        : String(item.tool ?? "").slice(0, TOOL_CHARS),
+    turns: item.turns === undefined ? undefined : Number(item.turns) || 0,
+    maxTurns: item.maxTurns === undefined ? undefined : Number(item.maxTurns) || 0,
+    generation:
+      item.generation === undefined ? undefined : Number(item.generation) || 0,
+    waitingUi:
+      item.waitingUi === undefined ? undefined : Number(item.waitingUi) || 0,
+    mission:
+      item.mission === undefined
+        ? undefined
+        : String(item.mission ?? "").slice(0, MISSION_CHARS),
+    fusion: item.fusion === undefined ? undefined : Boolean(item.fusion),
   }));
   const state = bus();
   state.items = next;

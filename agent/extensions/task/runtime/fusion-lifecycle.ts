@@ -12,6 +12,7 @@ import {
   type WorkerLifecycle,
 } from "./worker-runtime.ts";
 import { parseReportSchema, reportInstruction } from "./report-schema.ts";
+import { missionFromPrompt } from "../presentation/task-view.ts";
 import type { ReportStatus } from "./report-schema.ts";
 
 export const FUSION_EPHEMERAL_AGENTS = [
@@ -57,6 +58,7 @@ export interface FusionWorkerState {
   model?: string;
   thinking?: string;
   initialPrompt?: string;
+  mission?: string;
   fallbackReplaySafe?: boolean;
   reportSchema?: string;
   parsedReport?: Record<string, unknown> | null;
@@ -409,6 +411,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       worker.reportError = undefined;
     }
     worker.initialPrompt = prompt;
+    worker.mission = missionFromPrompt(prompt);
     worker.fallbackReplaySafe = false;
     this.deps.startGeneration(worker);
     // A new contract must reach the child as well as the settlement parser:
