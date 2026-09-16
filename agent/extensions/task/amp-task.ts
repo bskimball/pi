@@ -26,9 +26,12 @@ import {
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
+  isWorkCrewAgent,
   modelAttempts,
   resolveAgentThinking,
   stderrDiagnostic,
+  workCrewList,
+  WORK_CREW_AGENTS,
 } from "./runtime/agent-discovery.ts";
 import { isolatedChildEnv } from "./runtime/child-process.ts";
 import { missionFromPrompt, shortArgs } from "./presentation/task-view.ts";
@@ -563,6 +566,8 @@ export default function (pi: ExtensionAPI) {
 
   const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${agentList}`;
   const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${agentList}`;
+  const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
+  const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, broad recon or monotonous reversible execution to clerk.`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",
@@ -580,6 +585,13 @@ export default function (pi: ExtensionAPI) {
         !isFusionEphemeralAgent(params.agent)
       ) {
         const text = `Fusion permits synchronous task only for ${FUSION_EPHEMERAL_AGENTS.join(", ")}; ${params.agent} is Apex-only — use the sidekick or switch modes.`;
+        return { content: [{ type: "text", text }], isError: true, details: {} };
+      }
+      if (
+        process.env.PI_BEHAVIOR_MODE === "work" &&
+        !isWorkCrewAgent(params.agent)
+      ) {
+        const text = `Work permits synchronous task only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       const def = agents.get(params.agent);
@@ -1221,11 +1233,12 @@ export default function (pi: ExtensionAPI) {
   };
   const applyTaskAdvertisement = (mode = process.env.PI_BEHAVIOR_MODE ?? "pi") => {
     const piMode = mode === "pi";
-    taskToolDef.description = piMode ? taskPiDescription : taskFullDescription;
+    const workMode = mode === "work";
+    taskToolDef.description = piMode ? taskPiDescription : workMode ? taskWorkDescription : taskFullDescription;
     const properties = (taskToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
     taskToolDef.parameters = Type.Object({
       ...properties,
-      agent: Type.String({ description: piMode ? piAgentParamDescription(agents) : agentParamDescription(agents) }),
+      agent: Type.String({ description: piMode ? piAgentParamDescription(agents) : workMode ? taskWorkAgentDescription : agentParamDescription(agents) }),
     }) as typeof taskToolDef.parameters;
     pi.registerTool(taskToolDef);
   };

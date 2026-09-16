@@ -152,6 +152,31 @@ export function piAgentParamDescription(agents: Map<string, AgentDef>): string {
   return `Agent to run. One of: ${[...agents.keys()].join(", ")}. In Pi mode, dispatch only when the user names that specialist or asks you to delegate; this parameter does not decide whether to delegate.`;
 }
 
+/**
+ * Closed Work crew: the only specialists Work mode may dispatch, and the
+ * only ones Pi mode's manual path names for Work. Mirrors the Fusion
+ * ephemeral roster above; Apex and Fusion cards exclude these by policy.
+ */
+export const WORK_CREW_AGENTS = [
+  "strategist",
+  "researcher",
+  "clerk",
+] as const;
+
+export type WorkCrewAgent = (typeof WORK_CREW_AGENTS)[number];
+
+export function isWorkCrewAgent(name: string): boolean {
+  return (WORK_CREW_AGENTS as readonly string[]).includes(name);
+}
+
+/** `- name: description` lines for crew members present in the catalog. */
+export function workCrewList(agents: Map<string, AgentDef>): string {
+  return WORK_CREW_AGENTS.map((name) => agents.get(name))
+    .filter((def): def is AgentDef => !!def)
+    .map((def) => `- ${def.name}: ${def.description}`)
+    .join("\n");
+}
+
 /** True when an agent definition lives under the project-local `.pi/agents` tree. */
 export function isProjectAgentFile(file: string, cwd: string = process.cwd()): boolean {
   const projectAgents = path.resolve(cwd, ".pi", "agents");

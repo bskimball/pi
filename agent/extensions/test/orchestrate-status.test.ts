@@ -16,7 +16,7 @@ test("legacy modes restore without adopting a new global default", () => {
   assert.equal(restoreMode([], prefs, true).mode, "pi");
   assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
 });
-test("Pi keeps installed extension tools; collaboration modes exclude chain/rebind while Work keeps the full roster", () => {
+test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind from active tools", () => {
   const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_rebind", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   const collaborationTools = ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   assert.deepEqual(toolsForMode("pi", tools), tools);

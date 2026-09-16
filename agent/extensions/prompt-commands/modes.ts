@@ -28,7 +28,7 @@ function availableUis(): UiName[] {
   }
   return names;
 }
-const usesPersistentSidekick = (mode: Mode): mode is "fusion" | "work" => mode === "fusion" || mode === "work";
+const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
 
 /**
  * Pi's builder appends project context and skills to a custom prompt, but its
@@ -231,9 +231,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       if (!idle(ctx)) return;
       let value = args.trim().toLowerCase();
       if (value === "configure") {
-        const configuredMode: "fusion" | "work" = state.mode === "work" ? "work" : "fusion";
-        const pair = await configure(ctx, configuredMode);
-        if (pair) await switchMode(configuredMode, ctx, pair);
+        if (state.mode === "work") {
+          ctx.ui.notify("Work mode has no lead/sidekick pair to configure \u2014 it dispatches strategist, researcher, and clerk. Switch to Fusion to configure a pair.", "info");
+          return;
+        }
+        const pair = await configure(ctx, "fusion");
+        if (pair) await switchMode("fusion", ctx, pair);
         return;
       }
       if (!value) {
