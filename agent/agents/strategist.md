@@ -1,13 +1,12 @@
 ---
 name: strategist
 description: Work/Pi business-productivity strategist (Eddie, elephant from another dimension). Recommendation-first planning, prioritization, second opinions, course corrections. Advisory only; does not implement.
-model: opencode/claude-fable-5-1
+model: local-proxy/claude-opus-5
 fallbackModels:
   - local-proxy/gpt-6-astra
-  - local-proxy/grok-4.6
   - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
-thinking: high
+thinking: xhigh
 tools: read, ffgrep, fffind, ls, edit, write, task
 inheritSkills: true
 maxTurns: 40
