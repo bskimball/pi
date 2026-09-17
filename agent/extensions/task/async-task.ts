@@ -18,6 +18,7 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
+  apexAgentList,
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
@@ -700,14 +701,13 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 export default function (pi: ExtensionAPI) {
   if (taskPresentationEnabled()) installTaskRenderSafety();
   const agents = discoverAgents();
-  const agentList = [...agents.values()]
-    .map((agent) => `- ${agent.name}: ${agent.description}`)
-    .join("\n");
+  const apexAgents = new Map([...agents].filter(([name]) => !isWorkCrewAgent(name)));
+  const apexAgentCatalog = apexAgentList(agents);
   const sidekickDef = agents.get("sidekick");
   const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
 
 Available agents:
-${agentList}
+${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const taskStartPersistentDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
@@ -726,7 +726,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const taskStartPiDescription = `Start an asynchronous specialist only when the user names that specialist or asks you to delegate. Do not auto-route from this description. Returns a worker id (task_N) immediately; use task_wait, task_send, and task_close to manage the worker.
 
 Available agents:
-${agentList}
+${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const persistentSidekickMode = (): "fusion" | undefined => behaviorMode === "fusion" ? behaviorMode : undefined;
@@ -740,7 +740,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       return `Agent to run. One of: sidekick. Fusion permits only its designated sidekick on task_start.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
-    return behaviorMode === "pi" ? piAgentParamDescription(agents) : agentParamDescription(agents);
+    return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
   };
   const applyTaskStartAdvertisement = (mode = persistentSidekickMode()) => {
     taskStartToolDef.description = taskStartDescription(mode);
@@ -1977,6 +1977,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         // needs a configured pair before spawning.
         if (!fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
       }
+      if (behaviorMode !== "work" && isWorkCrewAgent(params.agent)) {
+        return textResult(`Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`, true);
+      }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
         return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`, true);
       }
@@ -2199,7 +2202,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     parameters: Type.Object({
       steps: Type.Array(
         Type.Object({
-          agent: Type.String({ description: agentParamDescription(agents) }),
+          agent: Type.String({ description: agentParamDescription(apexAgents) }),
           prompt: Type.String({
             description:
               "Work order for this step. Use {{prev}} to insert the previous step's bounded report.",
@@ -2227,6 +2230,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (!agents.get(step.agent)) {
           return textResult(
             `Unknown agent "${step.agent}" at step ${i + 1}. Available: ${[...agents.keys()].join(", ")}`,
+            true,
+          );
+        }
+        if (behaviorMode !== "work" && isWorkCrewAgent(step.agent)) {
+          return textResult(
+            `Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${step.agent} cannot run in this mode at step ${i + 1}; switch to Work or dispatch advisor, librarian, or scout.`,
             true,
           );
         }

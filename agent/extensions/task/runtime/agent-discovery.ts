@@ -153,9 +153,8 @@ export function piAgentParamDescription(agents: Map<string, AgentDef>): string {
 }
 
 /**
- * Closed Work crew: the only specialists Work mode may dispatch, and the
- * only ones Pi mode's manual path names for Work. Mirrors the Fusion
- * ephemeral roster above; Apex and Fusion cards exclude these by policy.
+ * Closed Work crew: these specialists are Work-only and excluded from
+ * Apex, Pi, and Fusion advertisements by policy.
  */
 export const WORK_CREW_AGENTS = [
   "strategist",
@@ -167,6 +166,14 @@ export type WorkCrewAgent = (typeof WORK_CREW_AGENTS)[number];
 
 export function isWorkCrewAgent(name: string): boolean {
   return (WORK_CREW_AGENTS as readonly string[]).includes(name);
+}
+
+/** `- name: description` lines for non-Work agents in catalog order. */
+export function apexAgentList(agents: Map<string, AgentDef>): string {
+  return [...agents.values()]
+    .filter((def) => !isWorkCrewAgent(def.name))
+    .map((def) => `- ${def.name}: ${def.description}`)
+    .join("\n");
 }
 
 /** `- name: description` lines for crew members present in the catalog. */

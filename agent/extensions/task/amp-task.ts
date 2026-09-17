@@ -23,6 +23,7 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
+  apexAgentList,
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
@@ -539,9 +540,7 @@ function renderTaskComponent(
 
 export default function (pi: ExtensionAPI) {
   const agents = discoverAgents();
-  const agentList = [...agents.values()]
-    .map((agent) => `- ${agent.name}: ${agent.description}`)
-    .join("\n");
+  const apexAgents = new Map([...agents].filter(([name]) => !isWorkCrewAgent(name)));
 
   const TaskParams = Type.Object({
     agent: Type.String({
@@ -564,8 +563,9 @@ export default function (pi: ExtensionAPI) {
     ),
   });
 
-  const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${agentList}`;
-  const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${agentList}`;
+  const apexAgentCatalog = apexAgentList(agents);
+  const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${apexAgentCatalog}`;
+  const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${apexAgentCatalog}`;
   const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
   const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, broad recon or monotonous reversible execution to clerk.`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
@@ -585,6 +585,13 @@ export default function (pi: ExtensionAPI) {
         !isFusionEphemeralAgent(params.agent)
       ) {
         const text = `Fusion permits synchronous task only for ${FUSION_EPHEMERAL_AGENTS.join(", ")}; ${params.agent} is Apex-only — use the sidekick or switch modes.`;
+        return { content: [{ type: "text", text }], isError: true, details: {} };
+      }
+      if (
+        process.env.PI_BEHAVIOR_MODE !== "work" &&
+        isWorkCrewAgent(params.agent)
+      ) {
+        const text = `Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       if (
@@ -1238,7 +1245,7 @@ export default function (pi: ExtensionAPI) {
     const properties = (taskToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
     taskToolDef.parameters = Type.Object({
       ...properties,
-      agent: Type.String({ description: piMode ? piAgentParamDescription(agents) : workMode ? taskWorkAgentDescription : agentParamDescription(agents) }),
+      agent: Type.String({ description: piMode ? piAgentParamDescription(apexAgents) : workMode ? taskWorkAgentDescription : agentParamDescription(apexAgents) }),
     }) as typeof taskToolDef.parameters;
     pi.registerTool(taskToolDef);
   };
