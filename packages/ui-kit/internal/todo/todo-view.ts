@@ -46,6 +46,8 @@ const MORE_GLYPH = "\u22ee"; // ⋮
 const PEEK_ACTIVITY_ROWS = 4;
 /** Transcript tail lines rendered in the peek overlay. */
 const PEEK_TRANSCRIPT_LINES = 12;
+/** The fleet bus hard cap; every retained worker must remain selectable. */
+const AGENT_ROWS = 8;
 /** Rows the list is allowed to spend on items, before/after notes excluded. */
 const ROWS_COLLAPSED = 6;
 const ROWS_EXPANDED = 10;
@@ -286,6 +288,8 @@ export interface DockTabOptions {
 export interface DockAgentActivity {
   /** Bounded tool name. */
   tool: string;
+  /** Bounded primary argument: file, command, query, or prompt. */
+  summary?: string;
   /** Activity status: "running" | "completed" | "error". */
   status: string;
 }
@@ -309,6 +313,8 @@ export interface DockAgentItem {
   mission?: string;
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
+  /** Worker session file path, when reported by the task extension. */
+  sessionFile?: string;
   /** Recent tool activity, oldest first; at most 4 entries. */
   activity?: DockAgentActivity[];
 }
@@ -401,7 +407,7 @@ export function renderAgentList(
       ? renderDockTabs(theme, width, options.tabs)
       : fitLine(
           theme.fg("toolTitle", "agents"),
-          theme.fg("dim", `${items.length} live`),
+          theme.fg("dim", `${items.length} agents`),
           width,
         );
   if (options.collapsed) return [safeTruncateToWidth(header, width)];
@@ -409,12 +415,23 @@ export function renderAgentList(
     return [
       header,
       safeTruncateToWidth(
-        `${ROW_INSET}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", "no live agents")}`,
+        `${ROW_INSET}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", "no agents")}`,
         width,
       ),
     ].slice(0, TODO_LIST_MAX_LINES);
   }
-  const rows = items.slice(0, ROWS_COLLAPSED).map((item, rowIndex) => {
+  const liveCount = items.filter((item) => !canSwitchToSession(item.lifecycle)).length;
+  const settledCount = items.length - liveCount;
+  const truthfulHeader = options.tabs
+    ? renderDockTabs(theme, width, {
+        ...options.tabs,
+        detail: metaText([
+          liveCount ? `${liveCount} running` : undefined,
+          settledCount ? `${settledCount} settled` : undefined,
+        ]),
+      })
+    : header;
+  const rows = items.slice(0, AGENT_ROWS).map((item, rowIndex) => {
     const glyph = AGENT_GLYPHS[item.lifecycle] ?? skinGlyphs().statusIdle;
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
     const title = cleanInline(item.agent, 40) || "agent";
@@ -427,13 +444,14 @@ export function renderAgentList(
         [
           theme.fg(markerTone, marker),
           theme.fg(selected ? "accent" : "text", title),
+          theme.fg("dim", cleanInline(item.id, 40)),
           theme.fg("muted", state),
           theme.fg("dim", agentAge(item, now)),
         ].join(" "),
       width,
     );
   });
-  return [safeTruncateToWidth(header, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
+  return [safeTruncateToWidth(truthfulHeader, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
 }
 
 /**
@@ -445,7 +463,7 @@ export function renderAgentList(
 export function agentRowAtY(
   y: number,
   rowCount: number,
-  visibleRows = ROWS_COLLAPSED,
+  visibleRows = AGENT_ROWS,
 ): number | undefined {
   if (!Number.isInteger(y) || y < 1) return undefined;
   const index = y - 1;
@@ -490,7 +508,7 @@ export function workerStateText(item: DockAgentItem): string {
 
 /**
  * Read-only peek overlay body for one worker: mission plus live state plus
- * the bounded recent-activity list plus a transcript tail, oldest first.
+ * the bounded recent-activity list plus the newest transcript lines that fit.
  * Never opens a SessionManager; the transcript tail is injected by the
  * caller (bounded read + tolerant parse live in todo-tools).
  */
@@ -498,7 +516,12 @@ export function renderPeekBody(
   theme: StatusTheme,
   width: number,
   item: DockAgentItem,
-  options: { now?: number; transcript?: string[] } = {},
+  options: {
+    now?: number;
+    transcript?: string[];
+    canOpenHere?: boolean;
+    maxLines?: number;
+  } = {},
 ): string[] {
   if (width <= 0) return [];
   const now = options.now ?? Date.now();
@@ -511,9 +534,10 @@ export function renderPeekBody(
     turnCountText(item.turns, item.maxTurns),
     agentAge(item, now),
   ]);
+  const maxLines = Math.max(3, Math.min(TODO_LIST_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
   const lines = [
     safeTruncateToWidth(
-      `${theme.fg("accent", safeText(item.agent, 40) || "agent")} ${theme.fg("muted", safeText(item.mission, 80) || item.id)}`,
+      `${theme.fg("accent", safeText(item.agent, 40) || "agent")} ${theme.fg("dim", safeText(item.id, 40))} ${theme.fg("muted", safeText(item.mission, 80) || item.id)}`,
       width,
     ),
     safeTruncateToWidth(
@@ -521,19 +545,23 @@ export function renderPeekBody(
       width,
     ),
   ];
-  const entries = (item.activity ?? []).slice(0, PEEK_ACTIVITY_ROWS);
+  const activityBudget = Math.max(0, Math.min(PEEK_ACTIVITY_ROWS, maxLines - 3));
+  const entries = activityBudget > 0
+    ? (item.activity ?? []).slice(-activityBudget)
+    : [];
   for (const entry of entries) {
     const name = safeText(readProp(entry, "tool"), 24) || "tool";
+    const summary = safeText(readProp(entry, "summary"), 120);
     const status = safeText(readProp(entry, "status"), 16);
     const tone = status === "error" ? "error" : status === "running" ? "warning" : "dim";
     lines.push(
       safeTruncateToWidth(
-        `${ROW_INSET}${theme.fg(tone, "\u25aa")} ${theme.fg("text", name)}${status ? ` ${theme.fg("dim", status)}` : ""}`,
+        `${ROW_INSET}${theme.fg(tone, "\u25aa")} ${theme.fg("text", name)}${summary ? ` ${theme.fg("muted", summary)}` : ""}${status ? ` ${theme.fg("dim", status)}` : ""}`,
         width,
       ),
     );
   }
-  if (!entries.length) {
+  if (!entries.length && maxLines >= 4) {
     lines.push(
       safeTruncateToWidth(
         `${ROW_INSET}${theme.fg("dim", "\u25aa")} ${theme.fg("muted", "no recent activity")}`,
@@ -541,31 +569,39 @@ export function renderPeekBody(
       ),
     );
   }
-  const tail = (options.transcript ?? []).slice(-PEEK_TRANSCRIPT_LINES);
-  if (tail.length) {
-    lines.push(
-      safeTruncateToWidth(theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))), width),
-    );
-    for (const entry of tail) {
-      lines.push(safeTruncateToWidth(theme.fg("muted", entry), width));
-    }
-  } else {
-    lines.push(
-      safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width),
-    );
+  // Keep controls above the optional transcript so a short terminal never
+  // clips the only way out of the overlay.
+  let controls = "session still writing · esc/q: close";
+  if (canSwitchToSession(item.lifecycle)) {
+    controls = options.canOpenHere
+      ? "o: open session · esc/q: close"
+      : "o: prepare /agents open · esc/q: close";
   }
-  lines.push(
-    safeTruncateToWidth(
-      theme.fg(
-        "dim",
-        canSwitchToSession(item.lifecycle)
-          ? "o: open session · esc: close"
-          : "session still writing — open after settle · esc: close",
-      ),
-      width,
-    ),
-  );
-  return lines.slice(0, TODO_LIST_MAX_LINES);
+  lines.push(safeTruncateToWidth(theme.fg("dim", controls), width));
+
+  const remaining = Math.max(0, maxLines - lines.length);
+  if (remaining > 0) {
+    const transcript = (options.transcript ?? []).slice(-PEEK_TRANSCRIPT_LINES);
+    if (transcript.length) {
+      if (remaining === 1) {
+        lines.push(safeTruncateToWidth(theme.fg("muted", transcript.at(-1) ?? ""), width));
+      } else {
+        const newest = transcript.slice(-(remaining - 1));
+        lines.push(
+          safeTruncateToWidth(
+            theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
+            width,
+          ),
+        );
+        for (const entry of newest) {
+          lines.push(safeTruncateToWidth(theme.fg("muted", entry), width));
+        }
+      }
+    } else {
+      lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+    }
+  }
+  return lines.slice(0, maxLines);
 }
 
 /**

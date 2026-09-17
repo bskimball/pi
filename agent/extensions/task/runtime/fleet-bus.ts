@@ -6,6 +6,8 @@ export const FLEET_BUS_KEY = "__piTaskFleetBus";
 export interface FleetSnapshotActivity {
   /** Bounded tool name. */
   tool: string;
+  /** Bounded primary argument: file, command, query, or prompt. */
+  summary?: string;
   /** Activity status: "running" | "completed" | "error". */
   status: string;
 }
@@ -37,6 +39,7 @@ export interface FleetSnapshotItem {
 
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
+const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
@@ -53,7 +56,7 @@ export function fleetSnapshotKey(
   return items
     .map(
       (item) =>
-        `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.fusion ? "1" : ""}\0${(item.activity ?? []).map((entry) => `${entry.tool}:${entry.status}`).join(",")}`,
+        `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.fusion ? "1" : ""}\0${item.sessionFile ?? ""}\0${(item.activity ?? []).map((entry) => `${entry.tool}:${entry.summary ?? ""}:${entry.status}`).join(",")}`,
     )
     .join("\n");
 }
@@ -110,6 +113,10 @@ export function publishFleetSnapshot(items: readonly FleetSnapshotItem[]): void 
         ? undefined
         : item.activity.slice(0, ACTIVITY_CAP).map((entry) => ({
             tool: String(entry?.tool ?? "").slice(0, TOOL_CHARS),
+            summary:
+              entry?.summary === undefined
+                ? undefined
+                : String(entry.summary ?? "").slice(0, SUMMARY_CHARS),
             status: String(entry?.status ?? ""),
           })),
   }));

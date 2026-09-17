@@ -791,22 +791,29 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const snapshotFleetItems = (): FleetSnapshotItem[] => {
-    const items: FleetSnapshotItem[] = [];
+    const live: FleetSnapshotItem[] = [];
+    const history: FleetSnapshotItem[] = [];
     for (const worker of workers.values()) {
-      if (!isLiveLifecycle(worker.lifecycle) || worker.closed) continue;
+      if (worker.closed) continue;
+      const isLive = isLiveLifecycle(worker.lifecycle);
+      if (!isLive && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") continue;
       const running = worker.ledger.running();
       const tool = running.length
         ? running.reduce((latest, activity) =>
             activity.startedAt >= latest.startedAt ? activity : latest,
           ).tool
         : undefined;
-      // Bounded tail of the full ledger (most recent last); summaries stay
-      // off the bus because they carry unbounded user text.
+      // argsSummary already bounds each entry; the bus applies its own cap
+      // before exposing file/command/query details to presentation.
       const activity = worker.ledger
         .snapshot()
         .slice(-4)
-        .map((entry) => ({ tool: entry.tool, status: entry.status }));
-      items.push({
+        .map((entry) => ({
+          tool: entry.tool,
+          summary: entry.summary,
+          status: entry.status,
+        }));
+      const item: FleetSnapshotItem = {
         id: worker.id,
         agent: worker.agent,
         lifecycle: worker.lifecycle,
@@ -822,9 +829,13 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         fusion: worker.fusion,
         sessionFile: worker.sessionFile,
         activity,
-      });
+      };
+      (isLive ? live : history).push(item);
     }
-    return items;
+    // Running workers remain first; recently settled/failed workers fill the
+    // remaining bounded history slots so peek/open remains reachable.
+    history.sort((left, right) => (right.lastEventAt ?? right.createdAt) - (left.lastEventAt ?? left.createdAt));
+    return [...live, ...history].slice(0, 8);
   };
 
   const syncFleetWidget = (_ctx?: ExtensionContext) => {
@@ -3759,6 +3770,13 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   let removeFusionInputListener: (() => void) | undefined;
+  let uiPromptDepth = 0;
+  pi.on("ui_prompt_start", () => {
+    uiPromptDepth += 1;
+  });
+  pi.on("ui_prompt_end", () => {
+    uiPromptDepth = Math.max(0, uiPromptDepth - 1);
+  });
   pi.on("session_start", (_event, ctx) => {
     removeFusionInputListener?.();
     try {
@@ -3768,7 +3786,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     }
     fusionLifecycle.isolateSession(ctx?.sessionManager?.getSessionId?.());
     if (ctx?.hasUI) removeFusionInputListener = ctx.ui.onTerminalInput(data => {
-      if (data === "\u001b" && persistentSidekickMode()) {
+      if (data === "\u001b" && persistentSidekickMode() && uiPromptDepth === 0) {
         const worker = fusionWorker();
         if (worker && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") void abortWorkerAndEscalate(worker);
       }
@@ -3781,6 +3799,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
     removeFusionInputListener?.();
+    uiPromptDepth = 0;
     shuttingDown = true;
     dispatchWaitWakes.clear();
     try {

@@ -331,9 +331,8 @@ class DockPanel implements Component {
 
 /**
  * Pure click-result contract for the dock panel, extracted so tests bind
- * the exact object without instantiating the module-local class. Returns
- * `{handled:true, focus:false, capture:false}` on agent rows (claim the
- * row, take no focus, capture no gesture) and undefined otherwise.
+ * the exact object without instantiating the module-local class. Agent-row
+ * clicks are claimed without requesting focus or mouse capture.
  */
 export function dockClickResult(
   event: Pick<TuiMouseEvent, "type" | "button" | "y">,
@@ -350,10 +349,6 @@ export function dockClickResult(
   } catch {
     // A dock failure must not interrupt the TUI input path.
   }
-  // Claim the click but decline focus AND capture: focus must stay with
-  // the editor (a claimed click without `focus` never calls setFocus —
-  // see applyMouseDispatchResult), and capture would wedge the press /
-  // release gesture tracking onto a component that never releases it.
   return { handled: true, focus: false, capture: false };
 }
 
@@ -371,6 +366,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let dockMounted = false;
   let unsubscribeFleet = () => {};
   let removeDockInput: (() => void) | undefined;
+  let uiPromptDepth = 0;
   const PANEL_KEY = "todo-list";
   const TOGGLE_HINT = "alt+t";
   const SWITCH_HINT = "alt+a";
@@ -432,7 +428,16 @@ export function installTodoTools(pi: ExtensionAPI): void {
    */
   function dockInputHandler(data: string): { consume?: boolean } | undefined {
     if (!presentationEnabled || !currentCtx?.hasUI || currentCtx.mode !== "tui") return undefined;
+    // ui.custom owns keyboard input while its overlay is focused. The editor
+    // owns navigation and submit as soon as the user has composed any text,
+    // including a prepared `/agents open` command.
+    if (peekOpen || uiPromptDepth > 0) return undefined;
     if (!dockMounted || dockPane !== "agents" || panelCollapsed || !liveAgents.length) return undefined;
+    try {
+      if (currentCtx.ui.getEditorText().length > 0) return undefined;
+    } catch {
+      // If editor state is unavailable, keep the bounded dock shortcuts.
+    }
     if (data === "\u001b") {
       switchPane(currentCtx, "todos");
       return { consume: true };
@@ -645,36 +650,85 @@ export function installTodoTools(pi: ExtensionAPI): void {
    * while one is open resolve immediately without opening another.
    */
   let peekOpen = false;
-  async function openPeek(ctx: ExtensionContext, item: DockAgentItem): Promise<{ open: boolean }> {
+  let peekItemId: string | undefined;
+  let peekSnapshot: DockAgentItem | undefined;
+  let peekTranscriptLines: string[] = [];
+  let peekInvalidate: (() => void) | undefined;
+
+  function refreshOpenPeek(items: readonly DockAgentItem[]): void {
+    if (!peekOpen || !peekItemId) return;
+    const next = items.find((item) => item.id === peekItemId);
+    if (!next) return;
+    peekSnapshot = next;
+    // Structural fleet publications are the refresh boundary. This bounded
+    // file read never occurs in render and streaming heartbeat deltas do not
+    // publish a new snapshot.
+    peekTranscriptLines = peekTranscript(next);
+    peekInvalidate?.();
+  }
+
+  async function openPeek(
+    ctx: ExtensionContext,
+    item: DockAgentItem,
+    canOpenHere = false,
+  ): Promise<{ open: boolean }> {
     if (peekOpen) return { open: false };
-    const transcript = peekTranscript(item);
-    const switchable = canSwitchToSession(item.lifecycle);
     peekOpen = true;
+    peekItemId = item.id;
+    peekSnapshot = item;
+    peekTranscriptLines = peekTranscript(item);
     let result: { open: boolean } | undefined;
     try {
-      result = await ctx.ui.custom<{ open: boolean }>((_tui, theme, _keys, done) => ({
-      render(width: number): string[] {
-        return renderPeekBody(theme, width, item, { transcript });
-      },
-      // Dismissal is deliberately permissive: an overlay the user cannot
-      // close wedges the whole TUI. Accept bare Esc, Esc arriving with
-      // trailing bytes, Ctrl+C, and q.
-      handleInput(data: string): void {
-        if (data.startsWith("\u001b") || data === "\u0003" || data === "q" || data === "Q") {
-          done({ open: false });
-          return;
-        }
-        if (data === "o" || data === "O" || data === "\r" || data === "\n") {
-          if (switchable) done({ open: true });
-        }
-      },
-      invalidate(): void {},
-    }), {
-      overlay: true,
-      overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" },
-    });
+      let currentRows = () => 12;
+      result = await ctx.ui.custom<{ open: boolean }>(
+        (tui, theme, keys, done) => {
+          currentRows = () => Math.max(3, Math.min(12, tui.terminal?.rows ?? 12));
+          peekInvalidate = requestHostRender;
+          return {
+            render(width: number): string[] {
+              return renderPeekBody(theme, width, peekSnapshot ?? item, {
+                transcript: peekTranscriptLines,
+                canOpenHere,
+                maxLines: currentRows(),
+              });
+            },
+            handleInput(data: string): void {
+              if (
+                keys.matches(data, "tui.select.cancel") ||
+                data === "\u0003" ||
+                data === "q" ||
+                data === "Q"
+              ) {
+                done({ open: false });
+                return;
+              }
+              if (
+                data === "o" ||
+                data === "O" ||
+                keys.matches(data, "tui.select.confirm")
+              ) {
+                const current = peekSnapshot ?? item;
+                if (canSwitchToSession(current.lifecycle)) done({ open: true });
+              }
+            },
+            invalidate(): void {},
+          };
+        },
+        {
+          overlay: true,
+          overlayOptions: () => ({
+            width: "80%",
+            maxHeight: currentRows(),
+            anchor: "center",
+          }),
+        },
+      );
     } finally {
       peekOpen = false;
+      peekItemId = undefined;
+      peekSnapshot = undefined;
+      peekTranscriptLines = [];
+      peekInvalidate = undefined;
     }
     return result ?? { open: false };
   }
@@ -685,12 +739,31 @@ export function installTodoTools(pi: ExtensionAPI): void {
     clampSelection();
     const item = liveAgents[selectedAgent];
     if (!item) {
-      ctx.ui.notify("No live agents.", "info");
+      ctx.ui.notify("No agents.", "info");
       return;
     }
     currentCtx = ctx;
-    await openPeek(ctx, item);
+    const resolved = await openPeek(ctx, item);
+    if (resolved.open) prepareOpenCommand(ctx, item);
     if (currentCtx) renderPanel();
+  }
+
+  /**
+   * Click/shortcut contexts cannot switch sessions. Prepare the explicit
+   * command only when the editor is empty, preserving every user draft.
+   */
+  function prepareOpenCommand(ctx: ExtensionContext, item: DockAgentItem): void {
+    const command = `/agents open ${item.id}`;
+    try {
+      if (ctx.ui.getEditorText() === "") {
+        ctx.ui.setEditorText(command);
+        ctx.ui.notify("Press Enter to open this settled worker session.", "info");
+        return;
+      }
+    } catch {
+      // Fall through to a non-destructive instruction.
+    }
+    ctx.ui.notify(`Run ${command} to open this settled worker session.`, "info");
   }
 
   function renderPanel(): void {
@@ -752,16 +825,17 @@ export function installTodoTools(pi: ExtensionAPI): void {
             },
             {
               fallback: "[todo panel unavailable]",
-              // Click selects only. Opening the peek overlay from a click
-              // strands it: the overlay renders but never receives Esc,
-              // because the click that spawned it declines focus. Enter on
-              // the keyboard path opens it safely, since onTerminalInput is
-              // already receiving keys when it fires.
               onAgentRow: (rowIndex) => {
                 if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
                 clampSelection();
                 selectedAgent = rowIndex;
+                const item = liveAgents[rowIndex];
+                const host = currentCtx;
                 if (currentCtx) renderPanel();
+                if (item && host) void openPeek(host, item).then((resolved) => {
+                  if (resolved.open) prepareOpenCommand(host, item);
+                  if (currentCtx) renderPanel();
+                });
               },
               rowCount: () => (dockPane === "agents" && !panelCollapsed ? liveAgents.length : 0),
             },
@@ -781,7 +855,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return;
     }
     if (!dockHasSurface()) {
-      ctx.ui.notify("No todo list for this session yet.", "info");
+      ctx.ui.notify("No todo list or retained agent history for this session yet.", "info");
       return;
     }
     panelCollapsed = !panelCollapsed;
@@ -795,7 +869,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return;
     }
     if (pane === "agents" && liveAgents.length === 0) {
-      ctx.ui.notify("No live agents.", "info");
+      ctx.ui.notify("No agents.", "info");
       return;
     }
     if (pane === "todos" && !current && liveAgents.length > 0) {
@@ -809,6 +883,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   unsubscribeFleet = subscribeDockAgents((items) => {
     liveAgents = [...items];
+    refreshOpenPeek(liveAgents);
     clampSelection();
     if (liveAgents.length === 0 && dockPane === "agents") dockPane = "todos";
     if (presentationEnabled && liveAgents.length > 0 && !current) {
@@ -832,7 +907,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     const id = rawId.trim();
     const item = liveAgents.find((entry) => entry.id === id);
     if (!id || !item) {
-      ctx.ui.notify(id ? `No live agent "${cleanInline(id, 40)}".` : "Usage: /agents open <id>.", "info");
+      ctx.ui.notify(id ? `No agent "${cleanInline(id, 40)}".` : "Usage: /agents open <id>.", "info");
       return;
     }
     if (!canSwitchToSession(item.lifecycle)) {
@@ -853,10 +928,33 @@ export function installTodoTools(pi: ExtensionAPI): void {
       ctx.ui.notify("Session switch is unavailable from this context.", "info");
       return;
     }
+    const otherLive = liveAgents.filter(
+      (entry) => entry.id !== item.id && !canSwitchToSession(entry.lifecycle),
+    );
+    if (otherLive.length > 0) {
+      const confirmed = await ctx.ui.confirm(
+        "Stop running agents and switch session?",
+        `Opening ${item.id} replaces this session and stops ${otherLive.length} other running ${otherLive.length === 1 ? "worker" : "workers"}. Continue?`,
+      );
+      if (!confirmed) return;
+    }
+    const current = liveAgents.find((entry) => entry.id === item.id);
+    if (!current || !canSwitchToSession(current.lifecycle)) {
+      ctx.ui.notify(`${item.id} is still ${current?.lifecycle ?? "unavailable"}; its session cannot be opened.`, "info");
+      return;
+    }
     try {
+      // Core switchSession awaits outgoing session_shutdown before opening the
+      // target runtime. task owns that shutdown and synchronously closes all
+      // retained workers, preventing a later task_send from reusing this file.
       await privileged.switchSession(path);
     } catch {
-      ctx.ui.notify(`Could not open ${item.id}'s session.`, "info");
+      try {
+        ctx.ui.notify(`Could not open ${item.id}'s session.`, "info");
+      } catch {
+        // A successful replacement invalidates this context; only real switch
+        // failures can normally reach here with a usable notification surface.
+      }
     }
   }
 
@@ -869,21 +967,27 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
     const id = rawId.trim();
     if (!liveAgents.length) {
-      ctx.ui.notify("No live agents.", "info");
+      ctx.ui.notify("No agents.", "info");
       return;
     }
     const item = id
       ? liveAgents.find((entry) => entry.id === id)
       : liveAgents[Math.min(selectedAgent, liveAgents.length - 1)];
     if (!item) {
-      ctx.ui.notify(id ? `No live agent "${cleanInline(id, 40)}".` : "No live agents.", "info");
+      ctx.ui.notify(id ? `No agent "${cleanInline(id, 40)}".` : "No agents.", "info");
       return;
     }
-    const resolved = await openPeek(ctx, item);
+    const privileged = ctx as ExtensionContext & {
+      switchSession?: (path: string) => Promise<{ cancelled: boolean }>;
+    };
+    const resolved = await openPeek(ctx, item, typeof privileged.switchSession === "function");
     if (resolved.open) {
-      // Switch needs ExtensionCommandContext; the /agents handler below
-      // holds it directly. Peek entry points resolve peek-only.
-      ctx.ui.notify("Run /agents open <id> to switch to this worker's session.", "info");
+      if (typeof privileged.switchSession === "function") {
+        // Re-resolve and recheck lifecycle immediately before activation.
+        await openAgentSession(ctx, item.id);
+      } else {
+        prepareOpenCommand(ctx, item);
+      }
     }
     if (currentCtx) renderPanel();
   }
@@ -935,11 +1039,19 @@ export function installTodoTools(pi: ExtensionAPI): void {
   });
   pi.events.on("pi:modes:changed", () => renderPanel());
 
+  pi.on("ui_prompt_start", () => {
+    uiPromptDepth += 1;
+  });
+  pi.on("ui_prompt_end", () => {
+    uiPromptDepth = Math.max(0, uiPromptDepth - 1);
+  });
+
   pi.on("session_start", (event: any, ctx: ExtensionContext) => {
     clearPanel();
     panelCollapsed = false;
     dockPane = "todos";
     currentCtx = ctx;
+    uiPromptDepth = 0;
     current = event?.reason === "new" ? undefined : reconstructTodoState(ctx);
     liveAgents = currentDockAgents();
     if (presentationEnabled && liveAgents.length > 0 && !current) {
@@ -963,6 +1075,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     clearPanel();
     current = undefined;
     currentCtx = undefined;
+    uiPromptDepth = 0;
     liveAgents = [];
     selectedAgent = 0;
     dockPane = "todos";

@@ -54,17 +54,18 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and the kit listens — no cross-extension import, no extra footer rows.
 
-Snapshots carry structural liveness (`phase`, running `tool`, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `fusion`) bounded at publish time. `fleetSnapshotKey()` covers those fields so a tool change or turn repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer.
+Snapshots carry structural liveness (`phase`, running `tool`, bounded activity target, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `fusion`) bounded at publish time. `fleetSnapshotKey()` covers those fields so a tool change or turn repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer. Live workers are listed first; bounded settled/failed history fills remaining slots so its transcript remains reachable.
 
 | Trigger | Effect |
 | --- | --- |
 | `todo_write` / `todo_read` | Mount or refresh the Todos pane. |
 | Live `task_start` / `task_chain` worker | Mount `[todos] / [agents N]`. Agents-only sessions open on Agents. |
-| Lone Fusion sidekick (`fusion`, 1 live worker) | No tabs: one inline sidekick line on the Todos pane, inside `TODO_LIST_MAX_LINES`. |
+| Lone Fusion sidekick (`fusion`, 1 worker) | Mount the same Agents tab used by every mode. |
 | `alt+t` or `/todos` | Collapse or expand the dock. |
 | `alt+a` | Toggle Todos / Agents when chrome is on. |
-| `/agents` | Switch to Agents. |
-| Last live worker settles | Drop the Agents tab; clear the dock if no todo list remains. |
+| `/agents` | Switch to Agents. Click a row or press Enter for a bounded peek; Esc/q/Ctrl+C closes it. |
+| Settled/failed worker | Keep bounded history visible. `o` prepares `/agents open <id>` without replacing any non-empty draft; `/agents peek <id>` can switch directly from its command context. Running workers remain read-only. Switching sessions runs task shutdown and closes every retained worker, so the UI requires confirmation when any other worker is still live. |
+| Last retained worker is closed/pruned | Drop the Agents tab; clear the dock if no todo list remains. |
 | `PI_APEX_UI=0` | Plain todo list only. No tabs; `alt+t` / `alt+a` / `/todos` / `/agents` stay registered but inactive, so a later live switch can enable them. |
 
 ## Behavior-mode transitions

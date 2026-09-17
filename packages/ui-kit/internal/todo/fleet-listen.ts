@@ -6,12 +6,15 @@ const ITEM_CAP = 8;
 
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
+const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
 export interface DockAgentActivity {
   /** Bounded tool name. */
   tool: string;
+  /** Bounded primary argument: file, command, query, or prompt. */
+  summary?: string;
   /** Activity status: "running" | "completed" | "error". */
   status: string;
 }
@@ -106,6 +109,10 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
         ? undefined
         : item.activity.slice(0, ACTIVITY_CAP).map((entry) => ({
             tool: String(entry?.tool ?? "").slice(0, TOOL_CHARS),
+            summary:
+              entry?.summary === undefined
+                ? undefined
+                : String(entry.summary ?? "").slice(0, SUMMARY_CHARS),
             status: String(entry?.status ?? ""),
           })),
   }));

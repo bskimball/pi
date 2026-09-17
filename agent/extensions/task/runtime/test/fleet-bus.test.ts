@@ -57,6 +57,7 @@ describe("fleet bus", () => {
       { waitingUi: 1 },
       { mission: "Steer the dock" },
       { fusion: false },
+      { sessionFile: "/tmp/worker.jsonl" },
     ]) {
       assert.notEqual(
         fleetSnapshotKey([{ ...base, ...delta }]),
@@ -82,7 +83,7 @@ describe("fleet bus", () => {
         mission: "y".repeat(200),
         fusion: true,
         activity: [
-          { tool: "z".repeat(100), status: "running" },
+          { tool: "z".repeat(100), summary: "s".repeat(200), status: "running" },
           { tool: "read", status: "completed" },
           { tool: "bash", status: "error" },
           { tool: "write", status: "completed" },
@@ -101,6 +102,7 @@ describe("fleet bus", () => {
     assert.equal(item.fusion, true);
     assert.equal(item.activity?.length, 4, "activity capped at 4 entries");
     assert.equal(item.activity?.[0]?.tool.length, 24, "activity tool bounded");
+    assert.equal(item.activity?.[0]?.summary?.length, 120, "activity summary bounded");
     assert.equal(item.activity?.[0]?.status, "running");
     assert.equal(item.sessionFile, undefined, "sessionFile absent stays undefined");
 
@@ -132,7 +134,7 @@ describe("fleet bus", () => {
       createdAt: 1,
       phase: "tool",
       tool: "bash",
-      activity: [{ tool: "bash", status: "running" }],
+      activity: [{ tool: "bash", summary: "npm test", status: "running" }],
     };
     const before = fleetSnapshotKey([base]);
     assert.equal(
@@ -155,10 +157,17 @@ describe("fleet bus", () => {
     );
     assert.notEqual(
       fleetSnapshotKey([
-        { ...base, activity: [{ tool: "bash", status: "completed" }] },
+        { ...base, activity: [{ tool: "bash", summary: "npm test", status: "completed" }] },
       ]),
       before,
       "tool end repaints via the activity status",
+    );
+    assert.notEqual(
+      fleetSnapshotKey([
+        { ...base, activity: [{ tool: "bash", summary: "npm run lint", status: "running" }] },
+      ]),
+      before,
+      "operation target change repaints",
     );
   });
 

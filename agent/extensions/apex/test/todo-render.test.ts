@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
+import {
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  VStack,
+  type Component,
+  type Terminal,
+} from "@earendil-works/pi-tui";
 
 const { dockClickResult, installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
 const { publishDockAgents, resetDockAgents } = await import(
@@ -1489,7 +1497,15 @@ describe("agents tab in all modes with selection and peek", () => {
     resetDockAgents();
     const mock = createMockPi(apexUi);
     let mountedComponent: any;
+    let mountedPanel: any;
     let setWidgetCalls = 0;
+    let terminalInput: ((data: string) => { consume?: boolean } | undefined) | undefined;
+    let overlayComponent: any;
+    let overlayDone: ((value: { open: boolean }) => void) | undefined;
+    let editorText = "";
+    let confirmResult = true;
+    const notifications: string[] = [];
+    const confirmations: string[] = [];
     const tuiCtx = {
       mode: "tui",
       hasUI: true,
@@ -1497,8 +1513,37 @@ describe("agents tab in all modes with selection and peek", () => {
         setWidget(_key: string, component: any) {
           setWidgetCalls += 1;
           mountedComponent = component;
+          mountedPanel = typeof component === "function" ? component(null, theme) : undefined;
         },
-        notify() {},
+        onTerminalInput(handler: typeof terminalInput) {
+          terminalInput = handler;
+          return () => { if (terminalInput === handler) terminalInput = undefined; };
+        },
+        custom(factory: any) {
+          return new Promise<{ open: boolean }>((resolve) => {
+            overlayDone = resolve;
+            overlayComponent = factory(
+              { requestRender() {} },
+              theme,
+              new KeybindingsManager(TUI_KEYBINDINGS),
+              (value: { open: boolean }) => {
+                overlayDone = undefined;
+                overlayComponent = undefined;
+                resolve(value);
+              },
+            );
+          });
+        },
+        getEditorText: () => editorText,
+        setEditorText(value: string) { editorText = value; },
+        notify(message: string) { notifications.push(message); },
+        async confirm(title: string, message: string) {
+          confirmations.push(`${title}: ${message}`);
+          mock.emit("ui_prompt_start", {}, tuiCtx);
+          await Promise.resolve();
+          mock.emit("ui_prompt_end", {}, tuiCtx);
+          return confirmResult;
+        },
       },
     } as any;
     mock.emit("session_start", { reason: "new" }, tuiCtx);
@@ -1510,10 +1555,19 @@ describe("agents tab in all modes with selection and peek", () => {
         const factory = mountedComponent as
           | ((tui: unknown, theme: unknown) => { render: (width: number) => string[] })
           | undefined;
-        const comp = typeof factory === "function" ? factory(null, theme) : undefined;
+        const comp = mountedPanel ?? (typeof factory === "function" ? factory(null, theme) : undefined);
         return comp?.render ? comp.render(width) : [];
       },
+      panel: () => mountedPanel,
+      overlay: () => overlayComponent,
+      input: (data: string) => terminalInput?.(data),
+      editorText: () => editorText,
+      setEditorText: (value: string) => { editorText = value; },
+      notifications,
+      confirmations,
+      setConfirmResult: (value: boolean) => { confirmResult = value; },
       shutdown() {
+        overlayDone?.({ open: false });
         publishDockAgents([]);
         mock.emit("session_shutdown", {}, tuiCtx);
       },
@@ -1546,8 +1600,8 @@ describe("agents tab in all modes with selection and peek", () => {
     fusion: true,
     sessionFile: "/tmp/worker-session.jsonl",
     activity: [
-      { tool: "read", status: "completed" },
-      { tool: "bash", status: "running" },
+      { tool: "read", summary: "packages/ui-kit/internal/todo/todo-tools.ts", status: "completed" },
+      { tool: "bash", summary: "npm run typecheck", status: "running" },
     ],
     ...overrides,
   });
@@ -1590,11 +1644,9 @@ describe("agents tab in all modes with selection and peek", () => {
     }
   });
 
-  it("declines focus and capture on agent-row clicks", () => {
-    // Regression test for the input freeze: a click result that omits
-    // `focus`/`capture` lets dispatchMouseEvent default them in ways that
-    // steal the editor (focusTarget) or wedge gestures (mouseCapture).
-    // The dock must claim the row WITHOUT either.
+  it("claims agent-row clicks without requesting focus or capture", () => {
+    // Dock clicks are passive layout interactions; overlay focus is owned by
+    // ui.custom, not by the widget that initiated it.
     const seen: string[] = [];
     const hit = dockClickResult(
       {
@@ -1633,13 +1685,331 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.deepEqual(seen, ["row:0"], "passed-through input fires no row callback");
   });
 
+  it("routes click-peek Esc and post-close typing through the real TUI input pipeline", async () => {
+    class FakeTerminal implements Terminal {
+      columns = 80;
+      rows = 24;
+      kittyProtocolActive = false;
+      input: (data: string) => void = () => {};
+      start(onInput: (data: string) => void): void { this.input = onInput; }
+      stop(): void {}
+      async drainInput(): Promise<void> {}
+      write(): void {}
+      moveBy(): void {}
+      hideCursor(): void {}
+      showCursor(): void {}
+      clearLine(): void {}
+      clearFromCursor(): void {}
+      clearScreen(): void {}
+      setTitle(): void {}
+      setProgress(): void {}
+    }
+    class InputSink implements Component {
+      readonly keys: string[] = [];
+      render(): string[] { return ["editor"]; }
+      handleInput(data: string): void { this.keys.push(data); }
+      invalidate(): void {}
+    }
+
+    resetDockAgents();
+    const mock = createMockPi("1");
+    const terminal = new FakeTerminal();
+    const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true });
+    const editor = new InputSink();
+    let panel: any;
+    const ctx = {
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        setWidget(_key: string, factory: any) {
+          panel = typeof factory === "function" ? factory(tui, theme) : undefined;
+        },
+        onTerminalInput(handler: any) { return tui.addInputListener(handler); },
+        custom(factory: any, options: any) {
+          return new Promise((resolve) => {
+            const close = (value: unknown) => { tui.hideOverlay(); resolve(value); };
+            const component = factory(tui, theme, new KeybindingsManager(TUI_KEYBINDINGS), close);
+            const overlayOptions = typeof options.overlayOptions === "function"
+              ? options.overlayOptions()
+              : options.overlayOptions;
+            tui.showOverlay(component, overlayOptions);
+          });
+        },
+        getEditorText: () => "",
+        setEditorText() {},
+        notify() {},
+      },
+    } as any;
+    const root = new VStack([
+      { component: editor, basis: 1 },
+      { component: { render: (width: number) => panel?.render(width) ?? [], handleMouse: (event: any) => panel?.handleMouse(event), invalidate() {} }, basis: 3 },
+    ]);
+    tui.setLayoutRoot(root);
+    tui.setFocus(editor);
+    tui.start();
+    try {
+      mock.emit("session_start", { reason: "new" }, ctx);
+      publishDockAgents([
+        worker({ id: "task_1", agent: "oracle", fusion: false }),
+        worker({ id: "task_2", agent: "artisan", fusion: false }),
+      ]);
+      await mock.commands.get("agents").handler("", ctx);
+      tui.renderNow(true);
+      // Editor owns row 0; dock header row 1; first agent row 2.
+      terminal.input("\u001b[<0;2;3M");
+      terminal.input("\u001b[<0;2;3m");
+      await Promise.resolve();
+      assert.notEqual(tui.getFocusedComponent(), editor, "custom overlay owns focus after click");
+      terminal.rows = 5;
+      assert.ok((tui.getFocusedComponent()?.render(80).length ?? Infinity) <= 5, "open peek follows a shorter terminal");
+      terminal.rows = 8;
+      assert.ok((tui.getFocusedComponent()?.render(80).length ?? Infinity) <= 8, "open peek follows a resized terminal");
+      terminal.input("\u001b[A");
+      assert.notEqual(tui.getFocusedComponent(), editor, "arrow reaches overlay without closing it");
+      terminal.input("\u001b");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(tui.getFocusedComponent(), editor, "Esc closes overlay and restores editor focus");
+      terminal.input("x");
+      assert.deepEqual(editor.keys, ["x"], "printable input reaches editor immediately after close");
+    } finally {
+      publishDockAgents([]);
+      mock.emit("session_shutdown", {}, ctx);
+      tui.stop({ preserveScreen: true });
+    }
+  });
+
+  it("clicks peek, overlay owns keys, and close restores editor input", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        worker({ id: "task_1", agent: "oracle", fusion: false }),
+        worker({ id: "task_2", agent: "artisan", fusion: false }),
+      ]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      assert.ok(dock.overlay(), "single click opens the peek overlay");
+      assert.equal(dock.input("\u001b[A"), undefined, "dock stands aside for overlay arrows");
+      dock.overlay().handleInput("\u001b[A");
+      assert.ok(dock.overlay(), "arrow escape sequence does not dismiss peek");
+      assert.equal(dock.input("\u001b"), undefined, "dock does not consume overlay Esc");
+      dock.overlay().handleInput("\u001b");
+      await Promise.resolve();
+      assert.equal(dock.overlay(), undefined, "Esc closes the overlay");
+      assert.equal(dock.input("x"), undefined, "ordinary printable input remains unclaimed");
+      assert.equal(dock.editorText(), "", "dock never rewrites editor text for a live worker");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("guards repeated click reentry and refreshes an open peek structurally", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({ fusion: true })]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      const first = dock.overlay();
+      assert.ok(first, "Fusion click opens one overlay");
+      publishDockAgents([worker({
+        fusion: true,
+        tool: "read",
+        activity: [{ tool: "read", summary: "C:/work/current.ts", status: "running" }],
+      })]);
+      assert.match(dock.overlay().render(80).join("\n"), /C:\/work\/current\.ts/, "open peek sees structural activity refresh");
+      assert.equal(dock.overlay(), first, "repeated click did not stack another overlay");
+      dock.overlay().handleInput("q");
+      await Promise.resolve();
+      assert.equal(dock.overlay(), undefined);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("prepares settled open command without overwriting a draft", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({ id: "task_done", lifecycle: "settled", fusion: false })]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      assert.match(dock.overlay().render(80).join("\n"), /prepare \/agents open/);
+      dock.overlay().handleInput("o");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(dock.editorText(), "/agents open task_done");
+      assert.equal(dock.input("\r"), undefined, "prepared command Enter belongs to the editor");
+      assert.equal(dock.input("\u001b[A"), undefined, "prepared command arrows belong to the editor");
+
+      dock.setEditorText("   ");
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      dock.overlay().handleInput("o");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(dock.editorText(), "   ", "whitespace-only draft is preserved exactly");
+
+      dock.setEditorText("keep my draft");
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      dock.overlay().handleInput("o");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(dock.editorText(), "keep my draft", "existing editor draft is preserved");
+      assert.match(dock.notifications.at(-1) ?? "", /Run \/agents open task_done/);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("lets privileged /agents peek switch settled sessions and gates live sessions", async () => {
+    const dock = mountPlan("1");
+    const switched: string[] = [];
+    dock.tuiCtx.switchSession = async (path: string) => {
+      switched.push(path);
+      return { cancelled: false };
+    };
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({
+        id: "task_done",
+        lifecycle: "settled",
+        fusion: false,
+        sessionFile: "/tmp/task_done.jsonl",
+      })]);
+      const settledPeek = dock.mock.commands.get("agents").handler("peek task_done", dock.tuiCtx);
+      await Promise.resolve();
+      dock.overlay().handleInput("o");
+      await settledPeek;
+      assert.deepEqual(switched, ["/tmp/task_done.jsonl"]);
+      assert.deepEqual(dock.confirmations, [], "settled-only history needs no confirmation");
+
+      publishDockAgents([worker({
+        id: "task_live",
+        lifecycle: "running",
+        fusion: false,
+        sessionFile: "/tmp/task_live.jsonl",
+      })]);
+      const livePeek = dock.mock.commands.get("agents").handler("peek task_live", dock.tuiCtx);
+      await Promise.resolve();
+      dock.overlay().handleInput("o");
+      assert.ok(dock.overlay(), "live worker refuses open result and keeps peek visible");
+      dock.overlay().handleInput("q");
+      await livePeek;
+      assert.deepEqual(switched, ["/tmp/task_done.jsonl"], "live worker never switches");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("confirms before a switch that stops other live workers", async () => {
+    const dock = mountPlan("1");
+    const switched: string[] = [];
+    dock.tuiCtx.switchSession = async (path: string) => {
+      switched.push(path);
+      return { cancelled: false };
+    };
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        worker({ id: "task_done", lifecycle: "settled", fusion: false, sessionFile: "/tmp/done.jsonl" }),
+        worker({ id: "task_live", lifecycle: "running", fusion: false, sessionFile: "/tmp/live.jsonl" }),
+      ]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+
+      dock.setConfirmResult(false);
+      await dock.mock.commands.get("agents").handler("open task_done", dock.tuiCtx);
+      assert.equal(dock.confirmations.length, 1);
+      assert.match(dock.confirmations[0], /stops 1 other running worker/);
+      assert.deepEqual(switched, [], "declining leaves every worker and session untouched");
+
+      dock.setConfirmResult(true);
+      await dock.mock.commands.get("agents").handler("open task_done", dock.tuiCtx);
+      assert.deepEqual(switched, ["/tmp/done.jsonl"], "accepting reaches switchSession");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("rechecks the selected lifecycle after confirmation", async () => {
+    const dock = mountPlan("1");
+    const switched: string[] = [];
+    dock.tuiCtx.switchSession = async (path: string) => {
+      switched.push(path);
+      return { cancelled: false };
+    };
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      const settled = worker({ id: "task_done", lifecycle: "settled", fusion: false, sessionFile: "/tmp/done.jsonl" });
+      const live = worker({ id: "task_live", lifecycle: "running", fusion: false, sessionFile: "/tmp/live.jsonl" });
+      publishDockAgents([settled, live]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.tuiCtx.ui.confirm = async () => {
+        dock.mock.emit("ui_prompt_start", {}, dock.tuiCtx);
+        assert.equal(dock.input("\u001b[B"), undefined, "dock relinquishes keys to the confirmation prompt");
+        publishDockAgents([{ ...settled, lifecycle: "running" }, live]);
+        dock.mock.emit("ui_prompt_end", {}, dock.tuiCtx);
+        return true;
+      };
+      await dock.mock.commands.get("agents").handler("open task_done", dock.tuiCtx);
+      assert.deepEqual(switched, [], "a resumed selected worker is never opened");
+      assert.match(dock.notifications.at(-1) ?? "", /still running/);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("uses a lone remaining row for the newest transcript line without a separator", () => {
+    const transcript = ["worker: old", "worker: newest"];
+    const lines = renderPeekBody(theme, 60, worker({
+      lifecycle: "settled",
+      activity: [
+        { tool: "read", status: "completed" },
+        { tool: "grep", status: "completed" },
+        { tool: "edit", status: "completed" },
+        { tool: "bash", status: "running" },
+      ],
+    }), {
+      transcript,
+      canOpenHere: true,
+      maxLines: 8,
+    });
+    assert.equal(lines.length, 8);
+    assert.match(lines.at(-1) ?? "", /worker: newest/);
+    assert.doesNotMatch(lines.at(-1) ?? "", /\u2500/);
+    assert.doesNotMatch(lines.join("\n"), /worker: old/);
+  });
+
+  it("budgets essential peek content at 5, 8, and 12 terminal rows", () => {
+    const transcript = Array.from({ length: 30 }, (_, index) => `worker: progress ${index}`);
+    for (const maxLines of [5, 8, 12]) {
+      const lines = renderPeekBody(theme, 60, worker({ lifecycle: "settled" }), {
+        transcript,
+        canOpenHere: true,
+        maxLines,
+      });
+      assert.ok(lines.length <= maxLines, `height ${maxLines}`);
+      assert.match(lines.join("\n"), /Steer the dock/);
+      assert.match(lines.join("\n"), /o: open session · esc\/q: close/);
+      if (maxLines >= 5) assert.match(lines.join("\n"), /npm run typecheck/);
+      if (maxLines >= 8) {
+        assert.match(lines.join("\n"), /worker: progress 29/, "newest progress retained");
+        assert.doesNotMatch(lines.join("\n"), /worker: progress 0/, "oldest progress dropped first");
+      }
+    }
+  });
+
   it("maps click y to the rendered agent row", () => {
     assert.equal(agentRowAtY(0, 2), undefined, "header row is not a worker");
     assert.equal(agentRowAtY(1, 2), 0);
     assert.equal(agentRowAtY(2, 2), 1);
     assert.equal(agentRowAtY(3, 2), undefined, "past the last row");
     assert.equal(agentRowAtY(1, 0), undefined, "no rows");
-    assert.equal(agentRowAtY(7, 8), undefined, "beyond the visible window");
+    assert.equal(agentRowAtY(7, 8), 6, "seventh retained worker remains selectable");
+    assert.equal(agentRowAtY(8, 8), 7, "eighth retained worker remains selectable");
+    assert.equal(agentRowAtY(9, 8), undefined, "past the retained fleet cap");
     assert.equal(agentRowAtY(NaN, 2), undefined);
   });
 
@@ -1658,12 +2028,12 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.match(live.join("\n"), /7\/40 turns/);
     assert.match(live.join("\n"), /read/);
     assert.match(live.join("\n"), /worker: reading the config/);
-    assert.match(live.join("\n"), /session still writing — open after settle/);
+    assert.match(live.join("\n"), /session still writing/);
     assert.doesNotMatch(live.join("\n"), /o: open session/);
     assert.ok(live.length <= TODO_LIST_MAX_LINES);
     assert.ok(live.every((line: string) => safeVisibleWidth(line) <= 80));
 
-    const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript });
+    const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript, canOpenHere: true });
     assert.match(settled.join("\n"), /o: open session/);
 
     const torn = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {});
@@ -1687,6 +2057,24 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.equal(turnCountText(38, Number.MAX_SAFE_INTEGER), "38 turns");
     assert.equal(turnCountText(38, 0), "38 turns");
     assert.equal(turnCountText(undefined, 40), undefined);
+  });
+
+  it("renders and identifies all eight retained workers", () => {
+    const items = Array.from({ length: 8 }, (_, index) => worker({
+      id: `task_${index + 1}`,
+      agent: index < 2 ? "oracle" : "artisan",
+      lifecycle: index < 6 ? "running" : "settled",
+      fusion: false,
+    }));
+    const lines = renderAgentList(theme, 100, items, {
+      tabs: { pane: "agents", agentCount: 8 },
+      selectedIndex: 7,
+    });
+    assert.equal(lines.length, 9, "header plus every retained worker");
+    assert.match(lines.at(-1) ?? "", /task_8/);
+    assert.match(lines.at(-1) ?? "", /\u25b8/, "eighth worker can be visibly selected");
+    assert.match(lines[0], /6 running/);
+    assert.match(lines[0], /2 settled/);
   });
 
   it("marks selection distinctly and keeps keyboard order", async () => {
