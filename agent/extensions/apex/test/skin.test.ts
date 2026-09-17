@@ -125,11 +125,13 @@ describe("apex presentation skins", () => {
       assert.equal(activeSkinName(), "claude");
       assert.equal(skinGlyphs().header, "●");
       assert.equal(skinGlyphs().receipt, "●");
-      assert.equal(skinGlyphs().rail, "⎿");
+      // The continuation rail stays a vertical connector: it is drawn once
+      // per continuation line, so a terminal corner would bracket every line.
+      assert.equal(skinGlyphs().rail, "│");
       assert.equal(composerPromptGlyph(), ">");
       assert.equal(TREE.header, "●");
       assert.equal(TREE.receipt, "●");
-      assert.equal(TREE.rail, "⎿");
+      assert.equal(TREE.rail, "│");
       // The terminal edge is square like HAL's; all other unspecified
       // tree edges keep their apex geometry.
       assert.equal(TREE.branch, APEX_GLYPHS.branch);
@@ -144,7 +146,7 @@ describe("apex presentation skins", () => {
       assert.equal(activeSkinName(), "hal");
       assert.equal(TREE.header, "■");
       assert.equal(TREE.receipt, "□");
-      assert.equal(TREE.rail, "⎿");
+      assert.equal(TREE.rail, "│");
       // HAL and Claude square the terminal tree edge; apex keeps the arc corner.
       assert.equal(TREE.last, "└─");
       assert.equal(composerPromptGlyph(), ">");

@@ -96,7 +96,11 @@ const TASK_CLAUDE_SKIN: TaskSkinGlyphs = {
   // 90-degree terminal edge, matching the ui-kit Claude skin so task cards
   // and tool receipts agree glyph for glyph.
   last: "\u2514\u2500",
-  rail: "\u23bf",
+  // Vertical connector, drawn once per continuation line. It must stay a
+  // vertical rail (│ U+2502) rather than a corner: a terminal corner such as
+  // ⎿ (U+23BF) repeats "the tree ends here" on every line, so multi-line
+  // output renders a bracket down the whole gutter, blank lines included.
+  rail: "\u2502",
   receipt: "\u25cf",
   hang: "   ",
   // Claude's status marks are square in the ui-kit skin (todo, notice, and
