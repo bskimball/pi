@@ -324,17 +324,37 @@ class DockPanel implements Component {
     return renderLinesSafely(this.build, width, this.hooks.fallback);
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== "click" || event.button !== "left") return undefined;
-    const rowIndex = agentRowAtY(Math.trunc(event.y), this.hooks.rowCount());
-    if (rowIndex === undefined) return undefined;
-    try {
-      this.hooks.onAgentRow(rowIndex);
-    } catch {
-      // A dock failure must not interrupt the TUI input path.
-    }
-    return { handled: true };
+    return dockClickResult(event, this.hooks);
   }
   invalidate(): void {}
+}
+
+/**
+ * Pure click-result contract for the dock panel, extracted so tests bind
+ * the exact object without instantiating the module-local class. Returns
+ * `{handled:true, focus:false, capture:false}` on agent rows (claim the
+ * row, take no focus, capture no gesture) and undefined otherwise.
+ */
+export function dockClickResult(
+  event: Pick<TuiMouseEvent, "type" | "button" | "y">,
+  hooks: {
+    onAgentRow: (rowIndex: number) => void;
+    rowCount: () => number;
+  },
+): TuiMouseEventResult | undefined {
+  if (event.type !== "click" || event.button !== "left") return undefined;
+  const rowIndex = agentRowAtY(Math.trunc(event.y), hooks.rowCount());
+  if (rowIndex === undefined) return undefined;
+  try {
+    hooks.onAgentRow(rowIndex);
+  } catch {
+    // A dock failure must not interrupt the TUI input path.
+  }
+  // Claim the click but decline focus AND capture: focus must stay with
+  // the editor (a claimed click without `focus` never calls setFocus —
+  // see applyMouseDispatchResult), and capture would wedge the press /
+  // release gesture tracking onto a component that never releases it.
+  return { handled: true, focus: false, capture: false };
 }
 
 // ---------------------------------------------------------------- install
@@ -384,7 +404,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
     };
   }
 
-  /** Clamp the selection after the fleet changes; open rows stay valid. */  function clampSelection(): void {
+  /** Clamp the selection after the fleet changes; open rows stay valid. */
+  function clampSelection(): void {
     if (selectedAgent >= liveAgents.length) selectedAgent = Math.max(0, liveAgents.length - 1);
     if (selectedAgent < 0) selectedAgent = 0;
   }
@@ -619,17 +640,27 @@ export function installTodoTools(pi: ExtensionAPI): void {
   /**
    * Peek overlay for one worker. Overlay input is raw handleInput: Esc
    * dismisses, `o`/Enter resolves "open" for settled/failed workers only.
-   * Live workers peek read-only with the reason shown inline.
+   * Live workers peek read-only with the reason shown inline. Guarded so
+   * repeated clicks/Enters cannot stack multiple overlays: extra requests
+   * while one is open resolve immediately without opening another.
    */
+  let peekOpen = false;
   async function openPeek(ctx: ExtensionContext, item: DockAgentItem): Promise<{ open: boolean }> {
+    if (peekOpen) return { open: false };
     const transcript = peekTranscript(item);
     const switchable = canSwitchToSession(item.lifecycle);
-    const result = await ctx.ui.custom<{ open: boolean }>((_tui, theme, _keys, done) => ({
+    peekOpen = true;
+    let result: { open: boolean } | undefined;
+    try {
+      result = await ctx.ui.custom<{ open: boolean }>((_tui, theme, _keys, done) => ({
       render(width: number): string[] {
         return renderPeekBody(theme, width, item, { transcript });
       },
+      // Dismissal is deliberately permissive: an overlay the user cannot
+      // close wedges the whole TUI. Accept bare Esc, Esc arriving with
+      // trailing bytes, Ctrl+C, and q.
       handleInput(data: string): void {
-        if (data === "\u001b") {
+        if (data.startsWith("\u001b") || data === "\u0003" || data === "q" || data === "Q") {
           done({ open: false });
           return;
         }
@@ -642,6 +673,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
       overlay: true,
       overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" },
     });
+    } finally {
+      peekOpen = false;
+    }
     return result ?? { open: false };
   }
 
@@ -718,15 +752,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
             },
             {
               fallback: "[todo panel unavailable]",
+              // Click selects only. Opening the peek overlay from a click
+              // strands it: the overlay renders but never receives Esc,
+              // because the click that spawned it declines focus. Enter on
+              // the keyboard path opens it safely, since onTerminalInput is
+              // already receiving keys when it fires.
               onAgentRow: (rowIndex) => {
                 if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
                 clampSelection();
                 selectedAgent = rowIndex;
-                const item = liveAgents[rowIndex];
-                const host = currentCtx;
-                if (item && host) void openPeek(host, item).then(() => {
-                  if (currentCtx) renderPanel();
-                });
                 if (currentCtx) renderPanel();
               },
               rowCount: () => (dockPane === "agents" && !panelCollapsed ? liveAgents.length : 0),

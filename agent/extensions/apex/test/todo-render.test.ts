@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
-const { installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
+const { dockClickResult, installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
 const { publishDockAgents, resetDockAgents } = await import(
   "@pi/ui-kit/internal/todo/fleet-listen.ts"
 );
@@ -1588,6 +1588,49 @@ describe("agents tab in all modes with selection and peek", () => {
     } finally {
       dock.shutdown();
     }
+  });
+
+  it("declines focus and capture on agent-row clicks", () => {
+    // Regression test for the input freeze: a click result that omits
+    // `focus`/`capture` lets dispatchMouseEvent default them in ways that
+    // steal the editor (focusTarget) or wedge gestures (mouseCapture).
+    // The dock must claim the row WITHOUT either.
+    const seen: string[] = [];
+    const hit = dockClickResult(
+      {
+        type: "click",
+        button: "left",
+        y: 1,
+      } as any,
+      {
+        onAgentRow: (rowIndex: number) => {
+          seen.push(`row:${rowIndex}`);
+        },
+        rowCount: () => 1,
+      },
+    );
+    assert.ok(hit, "agent row claims the click");
+    assert.equal(hit?.handled, true);
+    assert.equal((hit as any)?.focus, false, "must not take keyboard focus from the editor");
+    assert.equal((hit as any)?.capture, false, "must not capture the press/release gesture");
+    assert.deepEqual(seen, ["row:0"]);
+    assert.equal(
+      dockClickResult({ type: "click", button: "left", y: 0 } as any, {
+        onAgentRow: () => seen.push("header"),
+        rowCount: () => 1,
+      }),
+      undefined,
+      "header clicks pass through",
+    );
+    assert.equal(
+      dockClickResult({ type: "move", button: "none", y: 1 } as any, {
+        onAgentRow: () => seen.push("move"),
+        rowCount: () => 1,
+      }),
+      undefined,
+      "non-click input passes through",
+    );
+    assert.deepEqual(seen, ["row:0"], "passed-through input fires no row callback");
   });
 
   it("maps click y to the rendered agent row", () => {
