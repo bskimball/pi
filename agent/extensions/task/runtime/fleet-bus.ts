@@ -29,6 +29,8 @@ export interface FleetSnapshotItem {
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
   mission?: string;
+  /** Last steer/follow_up for this generation; queued until the worker picks it up. */
+  directive?: { queued: boolean; text: string };
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
   /** Worker session file path, when reported by the task extension. */
@@ -43,9 +45,20 @@ const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
+function sanitizeDirective(
+  value: FleetSnapshotItem["directive"],
+): FleetSnapshotItem["directive"] {
+  if (value === undefined || value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const text = String((value as { text?: unknown }).text ?? "").slice(0, MISSION_CHARS);
+  if (!text) return undefined;
+  return { queued: Boolean((value as { queued?: unknown }).queued), text };
+}
+
 /**
  * Stable render key; heartbeat-only activity must not remount the fleet UI.
- * Structural fields (phase/tool/turns/generation/waitingUi/mission/fusion
+ * Structural fields (phase/tool/turns/generation/waitingUi/mission/directive/fusion
  * and the bounded recent-activity list) repaint; raw lastEventAt churn
  * never does. Tool start/end changes the activity list, so it repaints;
  * streaming deltas never touch the ledger (see below), so they cannot.
@@ -56,7 +69,7 @@ export function fleetSnapshotKey(
   return items
     .map(
       (item) =>
-        `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.fusion ? "1" : ""}\0${item.sessionFile ?? ""}\0${(item.activity ?? []).map((entry) => `${entry.tool}:${entry.summary ?? ""}:${entry.status}`).join(",")}`,
+        `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.directive ? `${item.directive.queued ? "q" : "d"}:${item.directive.text}` : ""}\0${item.fusion ? "1" : ""}\0${item.sessionFile ?? ""}\0${(item.activity ?? []).map((entry) => `${entry.tool}:${entry.summary ?? ""}:${entry.status}`).join(",")}`,
     )
     .join("\n");
 }
@@ -105,6 +118,7 @@ export function publishFleetSnapshot(items: readonly FleetSnapshotItem[]): void 
       item.mission === undefined
         ? undefined
         : String(item.mission ?? "").slice(0, MISSION_CHARS),
+    directive: sanitizeDirective(item.directive),
     fusion: item.fusion === undefined ? undefined : Boolean(item.fusion),
     sessionFile:
       item.sessionFile === undefined ? undefined : String(item.sessionFile ?? ""),

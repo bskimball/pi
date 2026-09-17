@@ -327,6 +327,8 @@ interface Worker extends RuntimeEventWorker {
   lastWaitTimeoutAt?: number;
   lastWaitTimeoutSec?: number;
   lastWaitGeneration?: number;
+  /** Last steer/follow_up for this generation; queued until the child queue drains. */
+  directive?: { queued: boolean; text: string };
   /** Fusion's sole persistent counterpart; never participates in fallback. */
   fusion?: boolean;
   fusionParentSessionId?: string;
@@ -826,6 +828,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         generation: worker.generation,
         waitingUi: worker.pendingUi.size,
         mission: worker.mission,
+        directive: worker.directive,
         fusion: worker.fusion,
         sessionFile: worker.sessionFile,
         activity,
@@ -1156,8 +1159,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       worker.pendingUi.clear();
       worker.pendingSteer = 0;
       worker.pendingFollowUp = 0;
+      worker.directive = undefined;
       worker.lifecycle = "running";
       touch(worker);
+      syncFleetWidget();
 
       const response = await client.request(
         { type: "prompt", message: worker.initialPrompt },
@@ -1312,6 +1317,13 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     worker.reportError = evaluation.error;
   };
 
+  const applyDirectiveQueue = (worker: Worker) => {
+    if (!worker.directive?.queued) return;
+    if (worker.pendingSteer + worker.pendingFollowUp === 0) {
+      worker.directive = { queued: false, text: worker.directive.text };
+    }
+  };
+
   const settleGeneration = (
     worker: Worker,
     lifecycle: "settled" | "failed",
@@ -1324,7 +1336,19 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const handleRpcEvent = (worker: Worker, event: Record<string, unknown>) => {
+    const type = String(event.type ?? "");
+    const priorLifecycle = worker.lifecycle;
     runtime.handleEvent(worker, event, eventHooks);
+    if (type === "queue_update") applyDirectiveQueue(worker);
+    // A queued follow_up starts a new generation from settled/failed via
+    // agent_start; that is the delivery moment, not the prior settlement.
+    if (
+      type === "agent_start" &&
+      (priorLifecycle === "settled" || priorLifecycle === "failed") &&
+      worker.directive?.queued
+    ) {
+      worker.directive = { queued: false, text: worker.directive.text };
+    }
     persistWorker(worker);
     syncFleetWidget();
   };
@@ -1340,6 +1364,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const startGeneration = (worker: Worker) => runtime.startGeneration(worker);
+  const startPromptGeneration = (worker: Worker) => {
+    startGeneration(worker);
+    worker.directive = undefined;
+  };
 
   type FusionPair = {
     lead: { provider: string; modelId: string; thinking?: string };
@@ -1355,7 +1383,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // a parallel closure variable, so modes:changed and configure stay in sync.
   const fusionLifecycle = new FusionLifecycle<Worker>({
     listWorkers: () => workers.values(),
-    startGeneration: (worker) => runtime.startGeneration(worker),
+    startGeneration: (worker) => startPromptGeneration(worker),
     settleFailed: (worker, error) => {
       settleGeneration(worker, "failed", { error });
     },
@@ -2637,7 +2665,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           worker.mission = missionFromPrompt(message);
           worker.fallbackReplaySafe = true;
           writeLastPhase(`task_send:prompt:enter id=${id}`);
-          startGeneration(worker);
+          startPromptGeneration(worker);
           syncFleetWidget();
           writeLastPhase(`task_send:prompt:rpc id=${id} gen=${worker.generation}`);
           // Settlement-or-park semantics live in the Fusion lifecycle owner:
@@ -2693,6 +2721,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             }
           }
           worker.pendingSteer += 1;
+          worker.directive = { queued: true, text: missionFromPrompt(message) };
           worker.fallbackReplaySafe = false;
           worker.modelError = undefined;
           worker.fallbackEpoch += 1;
@@ -2701,6 +2730,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           if (worker.lifecycle === "retrying") worker.lifecycle = "running";
           armIdle(worker);
           notifySubscribers(worker);
+          syncFleetWidget();
           return textResult(
             [
               `${id} steer queued.`,
@@ -2742,6 +2772,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           }
         }
         worker.pendingFollowUp += 1;
+        worker.directive = { queued: true, text: missionFromPrompt(message) };
         worker.fallbackReplaySafe = false;
         worker.modelError = undefined;
         worker.fallbackEpoch += 1;
@@ -2750,6 +2781,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         if (worker.lifecycle === "retrying") worker.lifecycle = "running";
         armIdle(worker);
         notifySubscribers(worker);
+        syncFleetWidget();
         return textResult(
           [
             `${id} follow_up queued.`,

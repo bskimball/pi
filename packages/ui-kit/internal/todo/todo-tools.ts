@@ -26,6 +26,9 @@ import {
   agentRowAtY,
   buildTodoList,
   canSwitchToSession,
+  clampPeekScroll,
+  layoutPeekTranscript,
+  peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
   renderPlainTodoList,
@@ -484,9 +487,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
   }
 
-  /** Bounded tail read of a worker session file for the peek overlay. */
+  /** Bounded tail read of a worker session file for the session view. */
   const TRANSCRIPT_TAIL_BYTES = 32 * 1024;
-  const TRANSCRIPT_TAIL_LINES = 40;
+  const TRANSCRIPT_TAIL_LINES = 160;
 
   /**
    * Minimal transcript line formatter: role + text, tool calls as names.
@@ -643,16 +646,17 @@ export function installTodoTools(pi: ExtensionAPI): void {
   }
 
   /**
-   * Peek overlay for one worker. Overlay input is raw handleInput: Esc
-   * dismisses, `o`/Enter resolves "open" for settled/failed workers only.
-   * Live workers peek read-only with the reason shown inline. Guarded so
-   * repeated clicks/Enters cannot stack multiple overlays: extra requests
+   * Full-pane session view for one worker. Overlay input is raw handleInput:
+   * Esc/q returns to the lead, `o`/Enter resolves "open" for settled/failed
+   * workers only. Live workers stay read-only with the reason shown inline.
+   * Guarded so repeated clicks/Enters cannot stack views: extra requests
    * while one is open resolve immediately without opening another.
    */
   let peekOpen = false;
   let peekItemId: string | undefined;
   let peekSnapshot: DockAgentItem | undefined;
   let peekTranscriptLines: string[] = [];
+  let peekScrollOffset: number | undefined;
   let peekInvalidate: (() => void) | undefined;
 
   function refreshOpenPeek(items: readonly DockAgentItem[]): void {
@@ -662,7 +666,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
     peekSnapshot = next;
     // Structural fleet publications are the refresh boundary. This bounded
     // file read never occurs in render and streaming heartbeat deltas do not
-    // publish a new snapshot.
+    // publish a new snapshot. Pinned views stay pinned so new tail lines
+    // appear; an explicit scroll offset is left in place.
     peekTranscriptLines = peekTranscript(next);
     peekInvalidate?.();
   }
@@ -677,19 +682,37 @@ export function installTodoTools(pi: ExtensionAPI): void {
     peekItemId = item.id;
     peekSnapshot = item;
     peekTranscriptLines = peekTranscript(item);
+    peekScrollOffset = undefined;
     let result: { open: boolean } | undefined;
     try {
-      let currentRows = () => 12;
+      let currentRows = () => 24;
+      let currentWidth = 80;
       result = await ctx.ui.custom<{ open: boolean }>(
         (tui, theme, keys, done) => {
-          currentRows = () => Math.max(3, Math.min(12, tui.terminal?.rows ?? 12));
-          peekInvalidate = requestHostRender;
+          currentRows = () => Math.max(3, Math.min(80, tui.terminal?.rows ?? 24));
+          peekInvalidate = () => {
+            requestHostRender();
+            try {
+              tui.requestRender();
+            } catch {
+              // Overlay paint is best-effort; the host path still runs.
+            }
+          };
+          const scrollBy = (delta: number): void => {
+            const current = peekSnapshot ?? item;
+            const body = peekTranscriptBudget(currentWidth, current, currentRows());
+            const rows = layoutPeekTranscript(theme, currentWidth, peekTranscriptLines);
+            peekScrollOffset = clampPeekScroll(rows.length, body, peekScrollOffset, delta);
+            peekInvalidate?.();
+          };
           return {
             render(width: number): string[] {
+              currentWidth = width;
               return renderPeekBody(theme, width, peekSnapshot ?? item, {
                 transcript: peekTranscriptLines,
                 canOpenHere,
                 maxLines: currentRows(),
+                scrollOffset: peekScrollOffset,
               });
             },
             handleInput(data: string): void {
@@ -700,6 +723,36 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 data === "Q"
               ) {
                 done({ open: false });
+                return;
+              }
+              if (data === "\u001b[A" || data === "\u001bOA") {
+                scrollBy(-1);
+                return;
+              }
+              if (data === "\u001b[B" || data === "\u001bOB") {
+                scrollBy(1);
+                return;
+              }
+              if (data === "\u001b[5~") {
+                const current = peekSnapshot ?? item;
+                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                scrollBy(-Math.max(1, body));
+                return;
+              }
+              if (data === "\u001b[6~") {
+                const current = peekSnapshot ?? item;
+                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                scrollBy(Math.max(1, body));
+                return;
+              }
+              if (data === "g" || data === "\u001b[H" || data === "\u001b[1~") {
+                peekScrollOffset = 0;
+                peekInvalidate?.();
+                return;
+              }
+              if (data === "G" || data === "\u001b[F" || data === "\u001b[4~") {
+                peekScrollOffset = undefined;
+                peekInvalidate?.();
                 return;
               }
               if (
@@ -717,9 +770,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
         {
           overlay: true,
           overlayOptions: () => ({
-            width: "80%",
-            maxHeight: currentRows(),
-            anchor: "center",
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "top-left",
+            margin: 0,
           }),
         },
       );
@@ -728,6 +782,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       peekItemId = undefined;
       peekSnapshot = undefined;
       peekTranscriptLines = [];
+      peekScrollOffset = undefined;
       peekInvalidate = undefined;
     }
     return result ?? { open: false };

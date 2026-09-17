@@ -56,6 +56,7 @@ describe("fleet bus", () => {
       { generation: 4 },
       { waitingUi: 1 },
       { mission: "Steer the dock" },
+      { directive: { queued: true, text: "Stop and answer" } },
       { fusion: false },
       { sessionFile: "/tmp/worker.jsonl" },
     ]) {
@@ -81,6 +82,7 @@ describe("fleet bus", () => {
         generation: 3,
         waitingUi: 2,
         mission: "y".repeat(200),
+        directive: { queued: true, text: "z".repeat(200) },
         fusion: true,
         activity: [
           { tool: "z".repeat(100), summary: "s".repeat(200), status: "running" },
@@ -94,6 +96,8 @@ describe("fleet bus", () => {
     const [item] = currentFleetSnapshot();
     assert.equal(item.tool?.length, 24, "tool bounded to 24 chars");
     assert.equal(item.mission?.length, 80, "mission bounded to 80 chars");
+    assert.equal(item.directive?.text.length, 80, "directive text bounded to 80 chars");
+    assert.equal(item.directive?.queued, true);
     assert.equal(item.phase, "tool");
     assert.equal(item.turns, 7);
     assert.equal(item.maxTurns, 40);
@@ -122,8 +126,49 @@ describe("fleet bus", () => {
     assert.equal(bare.generation, undefined);
     assert.equal(bare.waitingUi, undefined);
     assert.equal(bare.mission, undefined);
+    assert.equal(bare.directive, undefined);
     assert.equal(bare.fusion, undefined);
     assert.equal(bare.activity, undefined);
+
+    publishFleetSnapshot([
+      {
+        id: "task_4",
+        agent: "scout",
+        lifecycle: "running",
+        createdAt: 4,
+        directive: { queued: false, text: "" },
+      } as any,
+    ]);
+    assert.equal(
+      currentFleetSnapshot()[0]?.directive,
+      undefined,
+      "empty directive text is omitted",
+    );
+  });
+
+  it("repaints on a directive-only change", () => {
+    const base = {
+      id: "task_1",
+      agent: "scout",
+      lifecycle: "running",
+      createdAt: 1,
+      mission: "Steer the dock",
+    };
+    const before = fleetSnapshotKey([base]);
+    assert.notEqual(
+      fleetSnapshotKey([{ ...base, directive: { queued: true, text: "Stop editing" } }]),
+      before,
+      "queued directive is structural",
+    );
+    assert.notEqual(
+      fleetSnapshotKey([
+        { ...base, directive: { queued: true, text: "Stop editing" } },
+      ]),
+      fleetSnapshotKey([
+        { ...base, directive: { queued: false, text: "Stop editing" } },
+      ]),
+      "queued vs delivered is structural",
+    );
   });
 
   it("repaints on activity changes but not on heartbeats", () => {

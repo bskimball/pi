@@ -19,6 +19,9 @@ const {
   agentRowAtY,
   buildTodoList,
   canSwitchToSession,
+  clampPeekScroll,
+  layoutPeekTranscript,
+  peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
   renderPlainTodoList,
@@ -1169,11 +1172,12 @@ describe("dock tabs and agents pane", () => {
           lifecycle: "running",
           createdAt: now - 4 * 60_000,
           lastEventAt: now - 4 * 60_000,
+          mission: "Audit the proxy layer",
         },
         {
           id: "task_2",
           agent: "artisan",
-          lifecycle: "done",
+          lifecycle: "settled",
           createdAt: now - 9 * 60_000,
           lastEventAt: now - 60_000,
         },
@@ -1188,6 +1192,111 @@ describe("dock tabs and agents pane", () => {
     assert.match(text, /oracle/);
     assert.match(text, /running/);
     assert.match(text, /artisan/);
+    assert.match(text, /Audit the proxy layer/);
+    assert.match(text, /settled/);
+    const wideRow = lines[1] ?? "";
+    assert.match(wideRow, /task_1/);
+    assert.match(wideRow, /Audit the proxy layer/);
+    assert.match(wideRow, /running/);
+    const tight = renderAgentList(
+      theme,
+      36,
+      [{
+        id: "task_2",
+        agent: "sidekick",
+        lifecycle: "running",
+        phase: "model",
+        createdAt: now - 8_000,
+        lastEventAt: now - 8_000,
+        mission: "Rewrite the entire session switcher into a nested workspace",
+      }],
+      { now },
+    );
+    const tightRow = tight[1] ?? "";
+    assert.match(tightRow, /task_2/);
+    assert.match(tightRow, /thinking/);
+    assert.match(tightRow, /8s/);
+    assert.match(tightRow, /\.\.\./);
+    assert.doesNotMatch(tightRow, /nested workspace/);
+    const queued = renderAgentList(
+      theme,
+      100,
+      [{
+        id: "task_3",
+        agent: "oracle",
+        lifecycle: "running",
+        createdAt: now - 4 * 60_000,
+        lastEventAt: now - 4 * 60_000,
+        mission: "Audit the proxy layer",
+        directive: { queued: true, text: "Stop and summarize" },
+      }],
+      { now },
+    );
+    const queuedRow = queued[1] ?? "";
+    assert.match(queuedRow, /queued: Stop and summarize/);
+    assert.doesNotMatch(queuedRow, /Audit the proxy layer/);
+    const delivered = renderAgentList(
+      theme,
+      100,
+      [{
+        id: "task_3",
+        agent: "oracle",
+        lifecycle: "running",
+        createdAt: now - 4 * 60_000,
+        lastEventAt: now - 4 * 60_000,
+        mission: "Audit the proxy layer",
+        directive: { queued: false, text: "Stop and summarize" },
+      }],
+      { now },
+    );
+    const deliveredRow = delivered[1] ?? "";
+    assert.match(deliveredRow, /Stop and summarize/);
+    assert.doesNotMatch(deliveredRow, /queued:/);
+    assert.doesNotMatch(deliveredRow, /Audit the proxy layer/);
+    const waiting = renderAgentList(
+      theme,
+      100,
+      [{
+        id: "task_3",
+        agent: "oracle",
+        lifecycle: "running",
+        createdAt: now - 4 * 60_000,
+        lastEventAt: now - 4 * 60_000,
+        waitingUi: 1,
+        mission: "Audit the proxy layer",
+        directive: { queued: true, text: "Stop and summarize" },
+      }],
+      { now },
+    );
+    const waitingRow = waiting[1] ?? "";
+    assert.match(waitingRow, /waiting for reply/);
+    assert.match(waitingRow, /Audit the proxy layer/);
+    assert.doesNotMatch(waitingRow, /Stop and summarize/);
+    const tightDirective = renderAgentList(
+      theme,
+      48,
+      [{
+        id: "task_4",
+        agent: "sidekick",
+        lifecycle: "running",
+        phase: "model",
+        createdAt: now - 8_000,
+        lastEventAt: now - 8_000,
+        mission: "Keep the original mission",
+        directive: {
+          queued: true,
+          text: "Rewrite the entire session switcher into a nested workspace",
+        },
+      }],
+      { now },
+    );
+    const tightDirectiveRow = tightDirective[1] ?? "";
+    assert.match(tightDirectiveRow, /task_4/);
+    assert.match(tightDirectiveRow, /thinking/);
+    assert.match(tightDirectiveRow, /8s/);
+    assert.match(tightDirectiveRow, /queued:/);
+    assert.match(tightDirectiveRow, /\.\.\./);
+    assert.doesNotMatch(tightDirectiveRow, /nested workspace/);
     // The agents pane shares the todo dock's flat identity: no receipt-tree
     // chrome, and body rows hang at the same two-space inset as todo rows.
     assert.ok(!text.includes("\u25c6"), "diamond header glyph");
@@ -1817,10 +1926,11 @@ describe("agents tab in all modes with selection and peek", () => {
       assert.ok(first, "Fusion click opens one overlay");
       publishDockAgents([worker({
         fusion: true,
+        mission: "Inspect C:/work/current.ts",
         tool: "read",
         activity: [{ tool: "read", summary: "C:/work/current.ts", status: "running" }],
       })]);
-      assert.match(dock.overlay().render(80).join("\n"), /C:\/work\/current\.ts/, "open peek sees structural activity refresh");
+      assert.match(dock.overlay().render(80).join("\n"), /Inspect C:\/work\/current\.ts/, "open peek sees structural mission refresh");
       assert.equal(dock.overlay(), first, "repeated click did not stack another overlay");
       dock.overlay().handleInput("q");
       await Promise.resolve();
@@ -1838,7 +1948,7 @@ describe("agents tab in all modes with selection and peek", () => {
       await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
       dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
       await Promise.resolve();
-      assert.match(dock.overlay().render(80).join("\n"), /prepare \/agents open/);
+      assert.match(dock.overlay().render(80).join("\n"), /prepare \/agents open \(ends lead\)/);
       dock.overlay().handleInput("o");
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(dock.editorText(), "/agents open task_done");
@@ -1974,11 +2084,11 @@ describe("agents tab in all modes with selection and peek", () => {
     }), {
       transcript,
       canOpenHere: true,
-      maxLines: 8,
+      maxLines: 5,
     });
-    assert.equal(lines.length, 8);
-    assert.match(lines.at(-1) ?? "", /worker: newest/);
-    assert.doesNotMatch(lines.at(-1) ?? "", /\u2500/);
+    assert.ok(lines.length <= 5);
+    assert.match(lines.at(-1) ?? "", /esc: back to lead/);
+    assert.match(lines.join("\n"), /worker: newest/);
     assert.doesNotMatch(lines.join("\n"), /worker: old/);
   });
 
@@ -1991,10 +2101,9 @@ describe("agents tab in all modes with selection and peek", () => {
         maxLines,
       });
       assert.ok(lines.length <= maxLines, `height ${maxLines}`);
-      assert.match(lines.join("\n"), /Steer the dock/);
-      assert.match(lines.join("\n"), /o: open session · esc\/q: close/);
-      if (maxLines >= 5) assert.match(lines.join("\n"), /npm run typecheck/);
-      if (maxLines >= 8) {
+      assert.match(lines.join("\n"), /mission: Steer the dock/);
+      assert.match(lines.join("\n"), /o: open session \(ends lead\) · esc: back to lead/);
+      if (maxLines >= 5) {
         assert.match(lines.join("\n"), /worker: progress 29/, "newest progress retained");
         assert.doesNotMatch(lines.join("\n"), /worker: progress 0/, "oldest progress dropped first");
       }
@@ -2022,23 +2131,78 @@ describe("agents tab in all modes with selection and peek", () => {
     ];
     const live = renderPeekBody(theme, 80, worker({ lifecycle: "running" }), { transcript });
     assert.match(live.join("\n"), /sidekick/);
-    assert.match(live.join("\n"), /Steer the dock/);
+    assert.match(live.join("\n"), /mission: Steer the dock/);
     assert.match(live.join("\n"), /gen 3/);
     assert.match(live.join("\n"), /running bash/);
     assert.match(live.join("\n"), /7\/40 turns/);
     assert.match(live.join("\n"), /read/);
     assert.match(live.join("\n"), /worker: reading the config/);
     assert.match(live.join("\n"), /session still writing/);
+    assert.match(live.join("\n"), /esc: back to lead/);
     assert.doesNotMatch(live.join("\n"), /o: open session/);
     assert.ok(live.length <= TODO_LIST_MAX_LINES);
     assert.ok(live.every((line: string) => safeVisibleWidth(line) <= 80));
 
     const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript, canOpenHere: true });
-    assert.match(settled.join("\n"), /o: open session/);
+    assert.match(settled.join("\n"), /o: open session \(ends lead\)/);
+    assert.match(settled.join("\n"), /esc: back to lead/);
 
     const torn = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {});
     assert.match(torn.join("\n"), /transcript unavailable/);
     assert.ok(torn.length <= TODO_LIST_MAX_LINES);
+
+    const directed = worker({
+      lifecycle: "running",
+      directive: { queued: true, text: "Stop and summarize" },
+    });
+    const directedBody = renderPeekBody(theme, 80, directed, { transcript });
+    assert.match(directedBody.join("\n"), /mission: Steer the dock/);
+    assert.match(directedBody.join("\n"), /queued: Stop and summarize/);
+    const deliveredBody = renderPeekBody(theme, 80, worker({
+      lifecycle: "running",
+      directive: { queued: false, text: "Stop and summarize" },
+    }), { transcript });
+    assert.match(deliveredBody.join("\n"), /directive: Stop and summarize/);
+    assert.doesNotMatch(deliveredBody.join("\n"), /queued:/);
+
+    const longTranscript = Array.from({ length: 20 }, (_, index) => `worker: progress ${index}`);
+    const maxLines = 12;
+    const withDirective = worker({
+      lifecycle: "running",
+      directive: { queued: true, text: "Stop and summarize" },
+    });
+    const without = worker({ lifecycle: "running" });
+    const directedBudget = peekTranscriptBudget(80, withDirective, maxLines);
+    const plainBudget = peekTranscriptBudget(80, without, maxLines);
+    assert.equal(directedBudget, plainBudget - 1, "directive occupies one chrome row");
+    const wrapped = layoutPeekTranscript(theme, 80, longTranscript);
+    const page = Math.max(1, directedBudget);
+    const offset = clampPeekScroll(wrapped.length, directedBudget, undefined, -page);
+    const scrolled = renderPeekBody(theme, 80, withDirective, {
+      transcript: longTranscript,
+      maxLines,
+      scrollOffset: offset,
+    });
+    assert.ok(scrolled.length <= maxLines);
+    assert.match(scrolled.join("\n"), /queued: Stop and summarize/);
+    assert.match(scrolled.at(-1) ?? "", /esc: back to lead/);
+    assert.doesNotMatch(scrolled.join("\n"), /worker: progress 19/);
+    const tightPeek = renderPeekBody(theme, 80, withDirective, {
+      transcript: longTranscript,
+      maxLines: 5,
+    });
+    assert.ok(tightPeek.length <= 5);
+    assert.match(tightPeek.join("\n"), /mission: Steer the dock/);
+    assert.doesNotMatch(tightPeek.join("\n"), /queued:/, "directive yields before the transcript vanishes");
+    assert.match(tightPeek.join("\n"), /worker: progress 19/);
+    const tiny = renderPeekBody(theme, 20, withDirective, {
+      transcript: longTranscript,
+      maxLines: 3,
+    });
+    assert.ok(tiny.length <= 3);
+    assert.ok(tiny.every((line: string) => safeVisibleWidth(line) <= 20));
+    assert.match(tiny.at(-1) ?? "", /esc: back to lead/);
+    assert.doesNotMatch(tiny.join("\n"), /queued:/);
   });
 
   it("gates session switch on settled/failed only", () => {
@@ -2244,11 +2408,14 @@ describe("agents tab in all modes with selection and peek", () => {
         { tool: "write", status: "completed" },
         { tool: "extra", status: "completed" },
       ],
-    }), { transcript });
-    const activityRows = capped.filter((line: string) => line.includes("\u25aa"));
-    assert.ok(activityRows.length <= 4, "activity list capped at 4 rows");
+    }), {
+      transcript: [...transcript, `worker: ${"word ".repeat(80)}end`],
+      maxLines: 12,
+    });
     assert.ok(capped.every((line: string) => safeVisibleWidth(line) <= 80));
-    assert.ok(capped.length <= TODO_LIST_MAX_LINES);
+    assert.ok(capped.length <= 12);
+    assert.match(capped.at(-1) ?? "", /esc: back to lead/);
+    assert.match(capped.join("\n"), /session still writing/);
     const missing = renderPeekBody(theme, 80, item, {});
     assert.match(missing.join("\n"), /transcript unavailable/);
   });

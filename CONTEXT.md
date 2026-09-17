@@ -54,7 +54,7 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and the kit listens — no cross-extension import, no extra footer rows.
 
-Snapshots carry structural liveness (`phase`, running `tool`, bounded activity target, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `fusion`) bounded at publish time. `fleetSnapshotKey()` covers those fields so a tool change or turn repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer. Live workers are listed first; bounded settled/failed history fills remaining slots so its transcript remains reachable.
+Snapshots carry structural liveness (`phase`, running `tool`, bounded activity target, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `directive`, `fusion`) bounded at publish time. `directive` is the last `task_send` steer or follow_up for this generation: `queued: true` until the child queue drains (steer at the next model-call boundary; follow_up only after settle, when the next generation starts). Rows show `queued: <text>` vs plain `<text>` so a pending steer is never the current task. `waitingUi` still owns the state column (`waiting for reply`); then directive, then mission. `fleetSnapshotKey()` covers those fields so a tool change, turn, or directive-only update repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer. Live workers are listed first; bounded settled/failed history fills remaining slots so its transcript remains reachable. The full-pane view keeps labeled mission and directive lines; the directive yields before the transcript window disappears, and `peekTranscriptBudget` counts the same chrome as the renderer.
 
 | Trigger | Effect |
 | --- | --- |
@@ -63,8 +63,8 @@ Snapshots carry structural liveness (`phase`, running `tool`, bounded activity t
 | Lone Fusion sidekick (`fusion`, 1 worker) | Mount the same Agents tab used by every mode. |
 | `alt+t` or `/todos` | Collapse or expand the dock. |
 | `alt+a` | Toggle Todos / Agents when chrome is on. |
-| `/agents` | Switch to Agents. Click a row or press Enter for a bounded peek; Esc/q/Ctrl+C closes it. |
-| Settled/failed worker | Keep bounded history visible. `o` prepares `/agents open <id>` without replacing any non-empty draft; `/agents peek <id>` can switch directly from its command context. Running workers remain read-only. Switching sessions runs task shutdown and closes every retained worker, so the UI requires confirmation when any other worker is still live. |
+| `/agents` | Switch to Agents. Click a row or press Enter for a full-pane live session view (JSONL tail, not a session switch). Esc/q returns to the lead. |
+| Settled/failed worker | Keep bounded history visible. From the session view, `o` prepares `/agents open <id>` without replacing any non-empty draft; `/agents peek <id>` can switch directly from its command context. Running workers remain read-only (`session still writing`). Switching sessions runs task shutdown and closes every retained worker, so the UI requires confirmation when any other worker is still live. |
 | Last retained worker is closed/pruned | Drop the Agents tab; clear the dock if no todo list remains. |
 | `PI_APEX_UI=0` | Plain todo list only. No tabs; `alt+t` / `alt+a` / `/todos` / `/agents` stay registered but inactive, so a later live switch can enable them. |
 

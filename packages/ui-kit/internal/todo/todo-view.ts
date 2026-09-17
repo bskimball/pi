@@ -11,6 +11,7 @@
 import {
   padStartToWidth,
   safeTruncateToWidth,
+  safeVisibleWidth,
   wrapPlainText,
 } from "../presentation/safe-text-layout.ts";
 import { cleanInline, fitLine } from "../presentation/ui-common.ts";
@@ -42,10 +43,14 @@ const HANG_INSET = " ".repeat(TITLE_INDENT);
  */
 const MORE_GLYPH = "\u22ee"; // ⋮
 
-/** Upper bound on rendered recent-activity rows in the peek overlay. */
-const PEEK_ACTIVITY_ROWS = 4;
-/** Transcript tail lines rendered in the peek overlay. */
-const PEEK_TRANSCRIPT_LINES = 12;
+/** Mission wrap cap in the full-pane session view. */
+const PEEK_MISSION_LINES = 3;
+/** Directive stays one labeled line so it can yield before the transcript. */
+const PEEK_DIRECTIVE_LINES = 1;
+/** Wrap cap per transcript entry so one hostile line cannot fill the pane. */
+const PEEK_ENTRY_WRAP = 6;
+/** Hard ceiling on the full-pane view; the live height comes from the terminal. */
+const PEEK_MAX_LINES = 80;
 /** The fleet bus hard cap; every retained worker must remain selectable. */
 const AGENT_ROWS = 8;
 /** Rows the list is allowed to spend on items, before/after notes excluded. */
@@ -311,6 +316,8 @@ export interface DockAgentItem {
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
   mission?: string;
+  /** Last steer/follow_up for this generation; queued until the worker picks it up. */
+  directive?: { queued: boolean; text: string };
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
   /** Worker session file path, when reported by the task extension. */
@@ -351,6 +358,9 @@ const AGENT_LABELS: Record<string, string> = {
   retrying: "running",
   compacting: "running",
   aborting: "killed",
+  settled: "settled",
+  failed: "failed",
+  closed: "closed",
 };
 
 function agentAge(item: DockAgentItem, now: number): string {
@@ -370,6 +380,58 @@ function tabChip(
   return active
     ? theme.fg("accent", `[${text}]`)
     : theme.fg("muted", text);
+}
+
+/**
+ * One agents-pane row. Id, state, and age always survive; the current task
+ * (directive, else mission) is the first thing truncated when the row is
+ * too narrow. Absent current task keeps the prior four-field layout.
+ */
+function renderAgentRow(
+  theme: StatusTheme,
+  width: number,
+  item: DockAgentItem,
+  options: {
+    selected: boolean;
+    marker: string;
+    markerTone: string;
+    now: number;
+  },
+): string {
+  const title = cleanInline(item.agent, 40) || "agent";
+  const id = cleanInline(item.id, 40);
+  const state = workerStateText(item);
+  const age = agentAge(item, options.now);
+  const titleTone = options.selected ? "accent" : "text";
+  const lead = [
+    theme.fg(options.markerTone, options.marker),
+    theme.fg(titleTone, title),
+    theme.fg("dim", id),
+  ].join(" ");
+  const trail = [theme.fg("muted", state), theme.fg("dim", age)].join(" ");
+  const current = agentCurrentTask(item);
+  const prefix = ROW_INSET + lead;
+  if (!current) {
+    return fitLine(prefix, trail, width);
+  }
+  const trailWidth = safeVisibleWidth(trail);
+  const prefixWidth = safeVisibleWidth(prefix);
+  const currentBudget = Math.max(0, width - prefixWidth - trailWidth - 2);
+  if (currentBudget <= 0) {
+    return fitLine(prefix, trail, width);
+  }
+  const currentText = ellipsizeToWidth(current, currentBudget);
+  if (!currentText) return fitLine(prefix, trail, width);
+  const left = `${prefix} ${theme.fg(options.selected ? "accent" : "text", currentText)}`;
+  return fitLine(left, trail, width);
+}
+
+/** Truncate plain mission text; ellipsis only when the budget can hold it. */
+function ellipsizeToWidth(text: string, budget: number): string {
+  if (budget <= 0) return "";
+  if (safeVisibleWidth(text) <= budget) return text;
+  if (budget <= 3) return safeTruncateToWidth(text, budget);
+  return `${safeTruncateToWidth(text, budget - 3)}...`;
 }
 
 export function renderDockTabs(
@@ -434,22 +496,13 @@ export function renderAgentList(
   const rows = items.slice(0, AGENT_ROWS).map((item, rowIndex) => {
     const glyph = AGENT_GLYPHS[item.lifecycle] ?? skinGlyphs().statusIdle;
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
-    const title = cleanInline(item.agent, 40) || "agent";
-    const state = workerStateText(item);
     const selected = options.selectedIndex === rowIndex;
-    const marker = selected ? "\u25b8" : glyph;
-    const markerTone = selected ? "accent" : tone;
-    return safeTruncateToWidth(
-      ROW_INSET +
-        [
-          theme.fg(markerTone, marker),
-          theme.fg(selected ? "accent" : "text", title),
-          theme.fg("dim", cleanInline(item.id, 40)),
-          theme.fg("muted", state),
-          theme.fg("dim", agentAge(item, now)),
-        ].join(" "),
-      width,
-    );
+    return renderAgentRow(theme, width, item, {
+      selected,
+      marker: selected ? "\u25b8" : glyph,
+      markerTone: selected ? "accent" : tone,
+      now,
+    });
   });
   return [safeTruncateToWidth(truthfulHeader, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
 }
@@ -494,6 +547,23 @@ export function canSwitchToSession(lifecycle: unknown): boolean {
   return lifecycle === "settled" || lifecycle === "failed";
 }
 
+/** Queued vs delivered copy for the last steer/follow_up. */
+function directiveText(item: DockAgentItem): string {
+  const text = safeText(item.directive?.text, 80);
+  if (!text) return "";
+  return item.directive?.queued ? `queued: ${text}` : text;
+}
+
+/**
+ * Current-task middle field. waitingUi already owns the state column, so a
+ * queued/delivered directive must not replace "waiting for reply". Otherwise
+ * directive beats mission; absent both keeps the prior four-field layout.
+ */
+function agentCurrentTask(item: DockAgentItem): string {
+  if ((finiteNum(item.waitingUi) ?? 0) > 0) return safeText(item.mission, 80);
+  return directiveText(item) || safeText(item.mission, 80);
+}
+
 /** Live worker state line shared by the agents rows and the peek overlay. */
 export function workerStateText(item: DockAgentItem): string {
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
@@ -506,11 +576,161 @@ export function workerStateText(item: DockAgentItem): string {
   return label;
 }
 
+/** Footer hints for the full-pane session view. */
+export function peekControlsText(
+  item: DockAgentItem,
+  options: { canOpenHere?: boolean } = {},
+): string {
+  const back = "esc: back to lead";
+  if (canSwitchToSession(item.lifecycle)) {
+    const open = options.canOpenHere
+      ? "o: open session (ends lead)"
+      : "o: prepare /agents open (ends lead)";
+    return `${open} · ${back}`;
+  }
+  return metaText([back, "session still writing"]);
+}
+
+function peekHeaderText(item: DockAgentItem, now: number): string {
+  const generation = finiteNum(item.generation);
+  return metaText([
+    safeText(item.agent, 40) || "agent",
+    safeText(item.id, 40),
+    generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
+    workerStateText(item),
+    turnCountText(item.turns, item.maxTurns),
+    agentAge(item, now),
+  ]);
+}
+
+function peekMissionText(item: DockAgentItem): string {
+  return safeText(item.mission, 200) || safeText(item.id, 40) || "session";
+}
+
+function peekLabeledMission(item: DockAgentItem): string {
+  return `mission: ${peekMissionText(item)}`;
+}
+
+function peekLabeledDirective(item: DockAgentItem): string {
+  const text = safeText(item.directive?.text, 80);
+  if (!text) return "";
+  return item.directive?.queued ? `queued: ${text}` : `directive: ${text}`;
+}
+
 /**
- * Read-only peek overlay body for one worker: mission plus live state plus
- * the bounded recent-activity list plus the newest transcript lines that fit.
- * Never opens a SessionManager; the transcript tail is injected by the
- * caller (bounded read + tolerant parse live in todo-tools).
+ * Header chrome above the transcript: labeled mission, then a directive
+ * line only when at least one transcript row would still remain.
+ */
+function layoutPeekChrome(
+  item: DockAgentItem,
+  width: number,
+  maxLines: number,
+): { missionRows: string[]; directiveRows: string[] } {
+  const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
+  const missionBudget = Math.max(1, Math.min(PEEK_MISSION_LINES, capped - 3));
+  const missionRows = wrapPlainText(peekLabeledMission(item), width, {
+    hangingIndent: 0,
+    maxLines: missionBudget,
+  });
+  const labeled = peekLabeledDirective(item);
+  if (!labeled || capped <= 3) {
+    return { missionRows, directiveRows: [] };
+  }
+  const remaining = capped - (1 + missionRows.length + 1 + 1);
+  // Need two free rows: one for the directive, one so the transcript is not
+  // squeezed out. A 5-row pane with a 1-row mission therefore drops it.
+  if (remaining < 2) return { missionRows, directiveRows: [] };
+  return {
+    missionRows,
+    directiveRows: wrapPlainText(labeled, width, {
+      hangingIndent: 0,
+      maxLines: PEEK_DIRECTIVE_LINES,
+    }),
+  };
+}
+
+function peekTranscriptTone(line: string): "warning" | "text" | "muted" {
+  if (line.startsWith("lead:")) return "warning";
+  if (line.startsWith("worker:")) return "text";
+  return "muted";
+}
+
+function wrapTranscriptEntry(
+  theme: StatusTheme,
+  width: number,
+  line: string,
+): string[] {
+  const wrapped = wrapPlainText(line, width, { hangingIndent: 2, maxLines: PEEK_ENTRY_WRAP });
+  const tone = peekTranscriptTone(line);
+  return wrapped.map((row) => safeTruncateToWidth(theme.fg(tone, row), width));
+}
+
+/** Transcript rows that fit under header + mission + directive + separator + footer. */
+export function peekTranscriptBudget(
+  width: number,
+  item: DockAgentItem,
+  maxLines: number,
+): number {
+  const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
+  if (width <= 0 || capped <= 3) return 0;
+  const chrome = layoutPeekChrome(item, width, capped);
+  return Math.max(
+    0,
+    capped - (1 + chrome.missionRows.length + chrome.directiveRows.length + 1 + 1),
+  );
+}
+
+/** Flatten a bounded transcript into wrapped, themed rows. */
+export function layoutPeekTranscript(
+  theme: StatusTheme,
+  width: number,
+  transcript: readonly string[],
+): string[] {
+  if (width <= 0) return [];
+  const rows: string[] = [];
+  for (const line of transcript) {
+    rows.push(...wrapTranscriptEntry(theme, width, line));
+  }
+  return rows;
+}
+
+/**
+ * Visible transcript window. `offset` is the first visible wrapped row;
+ * `undefined` pins to the bottom so live output stays in view.
+ */
+export function peekTranscriptWindow(
+  rows: readonly string[],
+  bodyLines: number,
+  offset?: number,
+): { lines: string[]; offset: number; pinned: boolean } {
+  const budget = Math.max(0, bodyLines);
+  if (budget <= 0 || rows.length === 0) {
+    return { lines: [], offset: 0, pinned: true };
+  }
+  const maxOffset = Math.max(0, rows.length - budget);
+  const pinned = offset === undefined;
+  const start = pinned ? maxOffset : Math.max(0, Math.min(maxOffset, Math.trunc(offset)));
+  return { lines: rows.slice(start, start + budget), offset: start, pinned };
+}
+
+export function clampPeekScroll(
+  rowCount: number,
+  bodyLines: number,
+  offset: number | undefined,
+  delta: number,
+): number | undefined {
+  const maxOffset = Math.max(0, rowCount - Math.max(0, bodyLines));
+  if (maxOffset <= 0) return undefined;
+  const from = offset === undefined ? maxOffset : offset;
+  const next = Math.max(0, Math.min(maxOffset, from + delta));
+  return next >= maxOffset ? undefined : next;
+}
+
+/**
+ * Full-pane session view for one worker: header, wrapped mission, optional
+ * directive, transcript window, footer. Never opens a SessionManager; the
+ * transcript tail is injected by the caller (bounded read + tolerant parse
+ * live in todo-tools).
  */
 export function renderPeekBody(
   theme: StatusTheme,
@@ -521,86 +741,53 @@ export function renderPeekBody(
     transcript?: string[];
     canOpenHere?: boolean;
     maxLines?: number;
+    scrollOffset?: number;
   } = {},
 ): string[] {
   if (width <= 0) return [];
   const now = options.now ?? Date.now();
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
-  const state = workerStateText(item);
-  const generation = finiteNum(item.generation);
-  const detail = metaText([
-    generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
-    state,
-    turnCountText(item.turns, item.maxTurns),
-    agentAge(item, now),
-  ]);
-  const maxLines = Math.max(3, Math.min(TODO_LIST_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
-  const lines = [
-    safeTruncateToWidth(
-      `${theme.fg("accent", safeText(item.agent, 40) || "agent")} ${theme.fg("dim", safeText(item.id, 40))} ${theme.fg("muted", safeText(item.mission, 80) || item.id)}`,
-      width,
-    ),
-    safeTruncateToWidth(
-      `${theme.fg("dim", MORE_GLYPH)} ${theme.fg(waiting ? "warning" : "muted", detail)}`,
-      width,
-    ),
-  ];
-  const activityBudget = Math.max(0, Math.min(PEEK_ACTIVITY_ROWS, maxLines - 3));
-  const entries = activityBudget > 0
-    ? (item.activity ?? []).slice(-activityBudget)
-    : [];
-  for (const entry of entries) {
-    const name = safeText(readProp(entry, "tool"), 24) || "tool";
-    const summary = safeText(readProp(entry, "summary"), 120);
-    const status = safeText(readProp(entry, "status"), 16);
-    const tone = status === "error" ? "error" : status === "running" ? "warning" : "dim";
-    lines.push(
-      safeTruncateToWidth(
-        `${ROW_INSET}${theme.fg(tone, "\u25aa")} ${theme.fg("text", name)}${summary ? ` ${theme.fg("muted", summary)}` : ""}${status ? ` ${theme.fg("dim", status)}` : ""}`,
-        width,
-      ),
-    );
+  const maxLines = Math.max(3, Math.min(PEEK_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
+  const header = safeTruncateToWidth(
+    theme.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
+    width,
+  );
+  const controls = safeTruncateToWidth(
+    theme.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
+    width,
+  );
+  const chrome = layoutPeekChrome(item, width, maxLines);
+  const missionRows = chrome.missionRows.map((row) =>
+    safeTruncateToWidth(theme.fg("text", row), width),
+  );
+  const directiveTone = item.directive?.queued ? "warning" : "text";
+  const directiveRows = chrome.directiveRows.map((row) =>
+    safeTruncateToWidth(theme.fg(directiveTone, row), width),
+  );
+  const used = 1 + missionRows.length + directiveRows.length + 1 + 1;
+  const bodyBudget = Math.max(0, maxLines - used);
+  const separator = safeTruncateToWidth(
+    theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
+    width,
+  );
+  const lines = [header, ...missionRows, ...directiveRows];
+  if (maxLines <= 3) {
+    if (maxLines >= 3) lines.push(controls);
+    return lines.slice(0, maxLines);
   }
-  if (!entries.length && maxLines >= 4) {
-    lines.push(
-      safeTruncateToWidth(
-        `${ROW_INSET}${theme.fg("dim", "\u25aa")} ${theme.fg("muted", "no recent activity")}`,
-        width,
-      ),
-    );
-  }
-  // Keep controls above the optional transcript so a short terminal never
-  // clips the only way out of the overlay.
-  let controls = "session still writing · esc/q: close";
-  if (canSwitchToSession(item.lifecycle)) {
-    controls = options.canOpenHere
-      ? "o: open session · esc/q: close"
-      : "o: prepare /agents open · esc/q: close";
-  }
-  lines.push(safeTruncateToWidth(theme.fg("dim", controls), width));
-
-  const remaining = Math.max(0, maxLines - lines.length);
-  if (remaining > 0) {
-    const transcript = (options.transcript ?? []).slice(-PEEK_TRANSCRIPT_LINES);
-    if (transcript.length) {
-      if (remaining === 1) {
-        lines.push(safeTruncateToWidth(theme.fg("muted", transcript.at(-1) ?? ""), width));
-      } else {
-        const newest = transcript.slice(-(remaining - 1));
-        lines.push(
-          safeTruncateToWidth(
-            theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
-            width,
-          ),
-        );
-        for (const entry of newest) {
-          lines.push(safeTruncateToWidth(theme.fg("muted", entry), width));
-        }
-      }
-    } else {
+  lines.push(separator);
+  const rawTranscript = options.transcript ?? [];
+  if (bodyBudget > 0) {
+    if (!rawTranscript.length) {
       lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+    } else {
+      const wrapped = layoutPeekTranscript(theme, width, rawTranscript);
+      const windowed = peekTranscriptWindow(wrapped, bodyBudget, options.scrollOffset);
+      if (windowed.lines.length) lines.push(...windowed.lines);
+      else lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
     }
   }
+  lines.push(controls);
   return lines.slice(0, maxLines);
 }
 

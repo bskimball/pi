@@ -10,6 +10,17 @@ const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
+function sanitizeDirective(
+  value: DockAgentItem["directive"],
+): DockAgentItem["directive"] {
+  if (value === undefined || value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const text = String((value as { text?: unknown }).text ?? "").slice(0, MISSION_CHARS);
+  if (!text) return undefined;
+  return { queued: Boolean((value as { queued?: unknown }).queued), text };
+}
+
 export interface DockAgentActivity {
   /** Bounded tool name. */
   tool: string;
@@ -36,6 +47,8 @@ export interface DockAgentItem {
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
   mission?: string;
+  /** Last steer/follow_up for this generation; queued until the worker picks it up. */
+  directive?: { queued: boolean; text: string };
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
   /** Worker session file path, when reported by the task extension. */
@@ -101,6 +114,7 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
       item.mission === undefined
         ? undefined
         : String(item.mission ?? "").slice(0, MISSION_CHARS),
+    directive: sanitizeDirective(item.directive),
     fusion: item.fusion === undefined ? undefined : Boolean(item.fusion),
     sessionFile:
       item.sessionFile === undefined ? undefined : String(item.sessionFile ?? ""),
