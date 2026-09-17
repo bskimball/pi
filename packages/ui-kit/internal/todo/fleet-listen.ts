@@ -7,6 +7,14 @@ const ITEM_CAP = 8;
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
 const MISSION_CHARS = 80;
+const ACTIVITY_CAP = 4;
+
+export interface DockAgentActivity {
+  /** Bounded tool name. */
+  tool: string;
+  /** Activity status: "running" | "completed" | "error". */
+  status: string;
+}
 
 export interface DockAgentItem {
   id: string;
@@ -27,6 +35,10 @@ export interface DockAgentItem {
   mission?: string;
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
+  /** Worker session file path, when reported by the task extension. */
+  sessionFile?: string;
+  /** Recent tool activity, oldest first; at most 4 entries. */
+  activity?: DockAgentActivity[];
 }
 
 type FleetListener = (items: readonly DockAgentItem[]) => void;
@@ -87,6 +99,15 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
         ? undefined
         : String(item.mission ?? "").slice(0, MISSION_CHARS),
     fusion: item.fusion === undefined ? undefined : Boolean(item.fusion),
+    sessionFile:
+      item.sessionFile === undefined ? undefined : String(item.sessionFile ?? ""),
+    activity:
+      item.activity === undefined
+        ? undefined
+        : item.activity.slice(0, ACTIVITY_CAP).map((entry) => ({
+            tool: String(entry?.tool ?? "").slice(0, TOOL_CHARS),
+            status: String(entry?.status ?? ""),
+          })),
   }));
   const state = bus();
   state.items = next;

@@ -3,6 +3,13 @@
 
 export const FLEET_BUS_KEY = "__piTaskFleetBus";
 
+export interface FleetSnapshotActivity {
+  /** Bounded tool name. */
+  tool: string;
+  /** Activity status: "running" | "completed" | "error". */
+  status: string;
+}
+
 export interface FleetSnapshotItem {
   id: string;
   agent: string;
@@ -22,22 +29,32 @@ export interface FleetSnapshotItem {
   mission?: string;
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
+  /** Worker session file path, when reported by the task extension. */
+  sessionFile?: string;
+  /** Recent tool activity, oldest first; at most 4 entries. */
+  activity?: FleetSnapshotActivity[];
 }
 
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
 const MISSION_CHARS = 80;
+const ACTIVITY_CAP = 4;
 
 /**
  * Stable render key; heartbeat-only activity must not remount the fleet UI.
- * Structural fields (phase/tool/turns/generation/waitingUi/mission/fusion)
- * repaint; raw lastEventAt churn never does.
+ * Structural fields (phase/tool/turns/generation/waitingUi/mission/fusion
+ * and the bounded recent-activity list) repaint; raw lastEventAt churn
+ * never does. Tool start/end changes the activity list, so it repaints;
+ * streaming deltas never touch the ledger (see below), so they cannot.
  */
 export function fleetSnapshotKey(
   items: readonly FleetSnapshotItem[],
 ): string {
   return items
-    .map((item) => `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.fusion ? "1" : ""}`)
+    .map(
+      (item) =>
+        `${item.id}\0${item.agent}\0${item.lifecycle}\0${item.createdAt}\0${item.phase ?? ""}\0${item.tool ?? ""}\0${item.turns ?? ""}\0${item.generation ?? ""}\0${item.waitingUi ?? ""}\0${item.mission ?? ""}\0${item.fusion ? "1" : ""}\0${(item.activity ?? []).map((entry) => `${entry.tool}:${entry.status}`).join(",")}`,
+    )
     .join("\n");
 }
 
@@ -86,6 +103,15 @@ export function publishFleetSnapshot(items: readonly FleetSnapshotItem[]): void 
         ? undefined
         : String(item.mission ?? "").slice(0, MISSION_CHARS),
     fusion: item.fusion === undefined ? undefined : Boolean(item.fusion),
+    sessionFile:
+      item.sessionFile === undefined ? undefined : String(item.sessionFile ?? ""),
+    activity:
+      item.activity === undefined
+        ? undefined
+        : item.activity.slice(0, ACTIVITY_CAP).map((entry) => ({
+            tool: String(entry?.tool ?? "").slice(0, TOOL_CHARS),
+            status: String(entry?.status ?? ""),
+          })),
   }));
   const state = bus();
   state.items = next;

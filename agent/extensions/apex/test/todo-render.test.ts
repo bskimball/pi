@@ -8,11 +8,14 @@ const { publishDockAgents, resetDockAgents } = await import(
 );
 const {
   TODO_LIST_MAX_LINES,
+  agentRowAtY,
   buildTodoList,
+  canSwitchToSession,
   renderAgentList,
+  renderPeekBody,
   renderPlainTodoList,
-  renderSidekickLine,
   renderTodoList,
+  turnCountText,
 } = await import("@pi/ui-kit/internal/todo/todo-view.ts");
 
 function createMockPi(apexUi = "1") {
@@ -1481,7 +1484,7 @@ describe("fusion close backstop", () => {
   });
 });
 
-describe("fusion single-sidekick dock line", () => {
+describe("agents tab in all modes with selection and peek", () => {
   function mountPlan(apexUi = "1") {
     resetDockAgents();
     const mock = createMockPi(apexUi);
@@ -1527,7 +1530,7 @@ describe("fusion single-sidekick dock line", () => {
     );
   }
 
-  const sidekick = (overrides: Record<string, unknown> = {}) => ({
+  const worker = (overrides: Record<string, unknown> = {}) => ({
     id: "task_sidekick",
     agent: "sidekick",
     lifecycle: "running",
@@ -1541,45 +1544,187 @@ describe("fusion single-sidekick dock line", () => {
     waitingUi: 0,
     mission: "Steer the dock",
     fusion: true,
+    sessionFile: "/tmp/worker-session.jsonl",
+    activity: [
+      { tool: "read", status: "completed" },
+      { tool: "bash", status: "running" },
+    ],
     ...overrides,
   });
 
-  it("appends exactly one bounded line to the todos pane", async () => {
+  it("shows the agents tab for N==1 in a non-Fusion mode", async () => {
     const dock = mountPlan("1");
     try {
       await writePlan(dock.mock, dock.tuiCtx);
       const mountedOnce = dock.setWidgetCalls();
-      publishDockAgents([sidekick()]);
-      assert.equal(dock.setWidgetCalls(), mountedOnce, "sidekick tick repaints in place");
+      publishDockAgents([worker({ fusion: false, agent: "scout", id: "task_1" })]);
+      assert.equal(dock.setWidgetCalls(), mountedOnce, "agent tick repaints in place");
       const lines = dock.render(80);
       assert.ok(lines.length <= TODO_LIST_MAX_LINES, `within ${TODO_LIST_MAX_LINES} lines`);
       assert.match(lines.join("\n"), /Review the crash/, "todos stay visible");
-      const sidekickRows = lines.filter((line) => line.includes("sidekick"));
-      assert.equal(sidekickRows.length, 1, "exactly one sidekick row");
-      const row = sidekickRows[0];
-      assert.match(row, /sidekick/);
-      assert.match(row, /gen 3/);
-      assert.match(row, /running bash/);
-      assert.match(row, /7\/40/);
-      assert.match(row, /Steer the dock/);
-      assert.doesNotMatch(lines[0], /\[todos\]/, "no tab strip for the lone sidekick");
-      assert.doesNotMatch(lines.join("\n"), /agents 1/, "no agents tab for the lone sidekick");
+      assert.match(lines[0], /\[todos\]/, "tab strip shows for N==1");
+      assert.match(lines[0], /agents 1/);
       for (const line of lines) {
         assert.ok(safeVisibleWidth(line) <= 80, `"${line}" exceeds width budget`);
       }
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      const agents = dock.render(80);
+      assert.match(agents.join("\n"), /scout/, "agents pane lists the worker");
+      assert.ok(agents.length <= TODO_LIST_MAX_LINES);
     } finally {
       dock.shutdown();
     }
   });
 
-  it("leads with waiting for reply while blocked on a question", async () => {
+  it("renders the todos pane with no agents exactly as at HEAD", async () => {
     const dock = mountPlan("1");
     try {
       await writePlan(dock.mock, dock.tuiCtx);
-      publishDockAgents([sidekick({ waitingUi: 2, tool: "bash" })]);
-      const rows = dock.render(80).filter((line) => line.includes("sidekick"));
-      assert.equal(rows.length, 1);
-      assert.match(rows[0], /waiting for reply/, "blocked signal wins over the tool name");
+      const lines = dock.render(80);
+      assert.match(lines.join("\n"), /Review the crash/);
+      assert.doesNotMatch(lines.join("\n"), /agents/);
+      assert.doesNotMatch(lines.join("\n"), /sidekick/);
+      assert.ok(lines.length <= TODO_LIST_MAX_LINES);
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("maps click y to the rendered agent row", () => {
+    assert.equal(agentRowAtY(0, 2), undefined, "header row is not a worker");
+    assert.equal(agentRowAtY(1, 2), 0);
+    assert.equal(agentRowAtY(2, 2), 1);
+    assert.equal(agentRowAtY(3, 2), undefined, "past the last row");
+    assert.equal(agentRowAtY(1, 0), undefined, "no rows");
+    assert.equal(agentRowAtY(7, 8), undefined, "beyond the visible window");
+    assert.equal(agentRowAtY(NaN, 2), undefined);
+  });
+
+  it("renders the peek body bounded with transcript tail", () => {
+    const transcript = [
+      "lead: please audit the proxy",
+      "worker: reading the config",
+      "tool read",
+      "worker: done",
+    ];
+    const live = renderPeekBody(theme, 80, worker({ lifecycle: "running" }), { transcript });
+    assert.match(live.join("\n"), /sidekick/);
+    assert.match(live.join("\n"), /Steer the dock/);
+    assert.match(live.join("\n"), /gen 3/);
+    assert.match(live.join("\n"), /running bash/);
+    assert.match(live.join("\n"), /7\/40 turns/);
+    assert.match(live.join("\n"), /read/);
+    assert.match(live.join("\n"), /worker: reading the config/);
+    assert.match(live.join("\n"), /session still writing — open after settle/);
+    assert.doesNotMatch(live.join("\n"), /o: open session/);
+    assert.ok(live.length <= TODO_LIST_MAX_LINES);
+    assert.ok(live.every((line: string) => safeVisibleWidth(line) <= 80));
+
+    const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript });
+    assert.match(settled.join("\n"), /o: open session/);
+
+    const torn = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {});
+    assert.match(torn.join("\n"), /transcript unavailable/);
+    assert.ok(torn.length <= TODO_LIST_MAX_LINES);
+  });
+
+  it("gates session switch on settled/failed only", () => {
+    assert.equal(canSwitchToSession("settled"), true);
+    assert.equal(canSwitchToSession("failed"), true);
+    assert.equal(canSwitchToSession("running"), false);
+    assert.equal(canSwitchToSession("starting"), false);
+    assert.equal(canSwitchToSession("retrying"), false);
+    assert.equal(canSwitchToSession("compacting"), false);
+    assert.equal(canSwitchToSession("aborting"), false);
+    assert.equal(canSwitchToSession(undefined), false);
+  });
+
+  it("guards unbounded turn caps in shared turn text", () => {
+    assert.equal(turnCountText(7, 40), "7/40 turns");
+    assert.equal(turnCountText(38, Number.MAX_SAFE_INTEGER), "38 turns");
+    assert.equal(turnCountText(38, 0), "38 turns");
+    assert.equal(turnCountText(undefined, 40), undefined);
+  });
+
+  it("marks selection distinctly and keeps keyboard order", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        worker({ id: "task_1", agent: "oracle", fusion: false }),
+        worker({ id: "task_2", agent: "artisan", fusion: false }),
+      ]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      const agents = dock.render(80);
+      assert.match(agents[1], /\u25b8/, "first row selected with a distinct marker");
+      assert.doesNotMatch(agents[1], /^  [\u25cb\u25cf\u25a1\u25a0] /, "selection marker is not a todo glyph");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("withholds the switch affordance for live workers in peek", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({ waitingUi: 2, tool: "bash" })]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      const rows = dock.render(80).filter((line) => line.includes("waiting for reply"));
+      assert.equal(rows.length, 1, "blocked signal wins over the tool name");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("peeks the agents pane with rows, selection, and toggle", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker()]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      const agents = dock.render(80);
+      assert.match(agents.join("\n"), /sidekick/, "pane names the actor");
+      assert.match(agents.join("\n"), /running/);
+      assert.ok(agents.length <= TODO_LIST_MAX_LINES, `within ${TODO_LIST_MAX_LINES} lines`);
+      assert.ok(agents.every((line: string) => safeVisibleWidth(line) <= 80));
+      // Toggling back lands on todos; settling the sidekick cannot strand
+      // the dock on an empty agents pane (liveAgents empty resets to todos).
+      await dock.mock.shortcuts.get("alt+a").handler(dock.tuiCtx);
+      assert.match(dock.render(80).join("\n"), /Review the crash/);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      publishDockAgents([]);
+      assert.match(dock.render(80).join("\n"), /Review the crash/, "empty agents resets to todos");
+    } finally {
+      dock.shutdown();
+    }
+  });
+
+  it("never exceeds TODO_LIST_MAX_LINES with a full plan", async () => {
+    const dock = mountPlan("1");
+    try {
+      await dock.mock.latestTool("todo_write").execute(
+        "call_1",
+        {
+          todos: Array.from({ length: 24 }, (_, index) => ({
+            content: `Item ${index + 1} with enough text to reach the edge`,
+            status: index === 0 ? "in_progress" : "pending",
+          })),
+        },
+        undefined,
+        undefined,
+        dock.tuiCtx,
+      );
+      publishDockAgents([worker()]);
+      for (const width of [40, 80, 120]) {
+        const lines = dock.render(width);
+        assert.ok(
+          lines.length <= TODO_LIST_MAX_LINES,
+          `width ${width}: ${lines.length} lines exceeds ${TODO_LIST_MAX_LINES}`,
+        );
+        for (const line of lines) {
+          assert.ok(safeVisibleWidth(line) <= width, `width ${width}: "${line}"`);
+        }
+      }
     } finally {
       dock.shutdown();
     }
@@ -1606,7 +1751,7 @@ describe("fusion single-sidekick dock line", () => {
     }
   });
 
-  it("shows tabs instead of the inline line for a lone non-fusion worker", async () => {
+  it("shows the agents tab for a lone worker without special-casing", async () => {
     const dock = mountPlan("1");
     try {
       await writePlan(dock.mock, dock.tuiCtx);
@@ -1614,8 +1759,9 @@ describe("fusion single-sidekick dock line", () => {
         { id: "task_1", agent: "scout", lifecycle: "running", createdAt: 1 },
       ]);
       const lines = dock.render(80);
-      assert.match(lines[0], /\[todos\]/, "tab strip stays for non-fusion workers");
-      assert.doesNotMatch(lines.join("\n"), /sidekick/);
+      assert.match(lines[0], /\[todos\]/, "tab strip shows for N==1");
+      assert.match(lines[0], /agents 1/);
+      assert.doesNotMatch(lines.join("\n"), /sidekick/, "no legacy inline strip");
     } finally {
       dock.shutdown();
     }
@@ -1625,7 +1771,7 @@ describe("fusion single-sidekick dock line", () => {
     const dock = mountPlan("0");
     try {
       await writePlan(dock.mock, dock.tuiCtx);
-      publishDockAgents([sidekick()]);
+      publishDockAgents([worker()]);
       const lines = dock.render(80);
       assert.match(lines.join("\n"), /Review the crash/);
       assert.doesNotMatch(lines.join("\n"), /sidekick/, "no chrome while disabled");
@@ -1635,21 +1781,45 @@ describe("fusion single-sidekick dock line", () => {
     }
   });
 
-  it("keeps renderSidekickLine to one bounded row at every width", () => {
-    const item = sidekick({
+  it("keeps renderPeekBody bounded with torn or missing transcripts", () => {
+    const item = worker({
       tool: "bash",
+      turns: 38,
       mission: "A mission label that keeps going past any sane dock width",
       maxTurns: Number.MAX_SAFE_INTEGER,
     });
+    const transcript = [
+      "lead: please audit the proxy",
+      "worker: reading the config",
+      "tool read",
+    ];
     for (const width of [20, 40, 80]) {
-      const row = renderSidekickLine(theme, width, item);
-      assert.equal(row.includes("\n"), false, `width ${width}: single row`);
-      assert.ok(safeVisibleWidth(row) <= width, `width ${width}: "${row}"`);
-      assert.doesNotMatch(row, /9007199254740991/, "no raw MAX_SAFE_INTEGER in the dock");
+      const body = renderPeekBody(theme, width, item, { transcript });
+      assert.ok(body.length >= 2, `width ${width}: header + state`);
+      for (const row of body) {
+        assert.equal(row.includes("\n"), false, `width ${width}: single row each`);
+        assert.ok(safeVisibleWidth(row) <= width, `width ${width}: "${row}"`);
+      }
+      assert.doesNotMatch(body.join("\n"), /9007199254740991/, "no raw MAX_SAFE_INTEGER in the overlay");
     }
-    const wide = renderSidekickLine(theme, 80, item);
-    assert.match(wide, /turn 7/, "unbounded fusion cap renders as turn N");
-    assert.deepEqual(renderSidekickLine(theme, 0, item), "");
+    const wide = renderPeekBody(theme, 80, item, { transcript });
+    assert.match(wide.join("\n"), /38 turns/, "unbounded fusion cap renders as N turns");
+    assert.deepEqual(renderPeekBody(theme, 0, item), []);
+    const capped = renderPeekBody(theme, 80, worker({
+      activity: [
+        { tool: "x".repeat(100), status: "completed" },
+        { tool: "bash", status: "error" },
+        { tool: "read", status: "running" },
+        { tool: "write", status: "completed" },
+        { tool: "extra", status: "completed" },
+      ],
+    }), { transcript });
+    const activityRows = capped.filter((line: string) => line.includes("\u25aa"));
+    assert.ok(activityRows.length <= 4, "activity list capped at 4 rows");
+    assert.ok(capped.every((line: string) => safeVisibleWidth(line) <= 80));
+    assert.ok(capped.length <= TODO_LIST_MAX_LINES);
+    const missing = renderPeekBody(theme, 80, item, {});
+    assert.match(missing.join("\n"), /transcript unavailable/);
   });
 });
 

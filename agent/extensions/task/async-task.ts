@@ -346,6 +346,15 @@ function ensureSessionDir(instanceId: string): string {
 }
 
 
+/**
+ * Turn counter for worker surfaces. Fusion workers run uncapped
+ * (Number.MAX_SAFE_INTEGER), so a raw `turns/maxTurns` ratio would leak
+ * the sentinel into the transcript; render those as `N turns`.
+ */
+function turnCountText(turns: number, maxTurns: number): string {
+  return maxTurns > 0 && maxTurns <= 100_000 ? `${turns}/${maxTurns} turns` : `${turns} turns`;
+}
+
 function renderWorkerCard(
   view: WorkerView,
   theme: any,
@@ -363,11 +372,11 @@ function renderWorkerCard(
           : view.waitingUi.length || view.lifecycle === "retrying"
             ? "warning"
             : "accent";
-    const meta = [
+const meta = [
       view.model,
       view.thinking && `think:${view.thinking}`,
       `gen:${view.generation}`,
-      `${view.turns}/${view.maxTurns} turns`,
+      turnCountText(view.turns, view.maxTurns),
     ]
       .filter(Boolean)
       .join(" · ");
@@ -791,6 +800,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             activity.startedAt >= latest.startedAt ? activity : latest,
           ).tool
         : undefined;
+      // Bounded tail of the full ledger (most recent last); summaries stay
+      // off the bus because they carry unbounded user text.
+      const activity = worker.ledger
+        .snapshot()
+        .slice(-4)
+        .map((entry) => ({ tool: entry.tool, status: entry.status }));
       items.push({
         id: worker.id,
         agent: worker.agent,
@@ -805,6 +820,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         waitingUi: worker.pendingUi.size,
         mission: worker.mission,
         fusion: worker.fusion,
+        sessionFile: worker.sessionFile,
+        activity,
       });
     }
     return items;
@@ -2372,7 +2389,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             meta: metaText([
               view.agent,
               `gen ${view.generation}`,
-              `${view.turns}/${view.maxTurns} turns`,
+              turnCountText(view.turns, view.maxTurns),
               running ? `${running} running` : undefined,
               view.waitingUi.length
                 ? `${view.waitingUi.length} awaiting reply`
@@ -2515,7 +2532,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
               view.agent,
               workerStateLabel(view),
               `gen ${view.generation}`,
-              `${view.turns}/${view.maxTurns} turns`,
+              turnCountText(view.turns, view.maxTurns),
               view.countsTowardCap ? "holds slot" : undefined,
               expanded ? view.model : undefined,
             ]),

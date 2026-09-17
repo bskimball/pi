@@ -42,6 +42,10 @@ const HANG_INSET = " ".repeat(TITLE_INDENT);
  */
 const MORE_GLYPH = "\u22ee"; // ⋮
 
+/** Upper bound on rendered recent-activity rows in the peek overlay. */
+const PEEK_ACTIVITY_ROWS = 4;
+/** Transcript tail lines rendered in the peek overlay. */
+const PEEK_TRANSCRIPT_LINES = 12;
 /** Rows the list is allowed to spend on items, before/after notes excluded. */
 const ROWS_COLLAPSED = 6;
 const ROWS_EXPANDED = 10;
@@ -279,6 +283,13 @@ export interface DockTabOptions {
   detail?: string;
 }
 
+export interface DockAgentActivity {
+  /** Bounded tool name. */
+  tool: string;
+  /** Activity status: "running" | "completed" | "error". */
+  status: string;
+}
+
 export interface DockAgentItem {
   id: string;
   agent: string;
@@ -298,6 +309,8 @@ export interface DockAgentItem {
   mission?: string;
   /** True for Fusion's single persistent sidekick. */
   fusion?: boolean;
+  /** Recent tool activity, oldest first; at most 4 entries. */
+  activity?: DockAgentActivity[];
 }
 
 const AGENT_GLYPHS: Record<string, string> = {
@@ -378,6 +391,7 @@ export function renderAgentList(
     collapsed?: boolean;
     tabs?: DockTabOptions;
     now?: number;
+    selectedIndex?: number;
   } = {},
 ): string[] {
   if (width <= 0) return [];
@@ -400,17 +414,20 @@ export function renderAgentList(
       ),
     ].slice(0, TODO_LIST_MAX_LINES);
   }
-  const rows = items.slice(0, ROWS_COLLAPSED).map((item) => {
+  const rows = items.slice(0, ROWS_COLLAPSED).map((item, rowIndex) => {
     const glyph = AGENT_GLYPHS[item.lifecycle] ?? skinGlyphs().statusIdle;
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
-    const label = AGENT_LABELS[item.lifecycle] ?? item.lifecycle;
     const title = cleanInline(item.agent, 40) || "agent";
+    const state = workerStateText(item);
+    const selected = options.selectedIndex === rowIndex;
+    const marker = selected ? "\u25b8" : glyph;
+    const markerTone = selected ? "accent" : tone;
     return safeTruncateToWidth(
       ROW_INSET +
         [
-          theme.fg(tone, glyph),
-          theme.fg("text", title),
-          theme.fg("muted", label),
+          theme.fg(markerTone, marker),
+          theme.fg(selected ? "accent" : "text", title),
+          theme.fg("muted", state),
           theme.fg("dim", agentAge(item, now)),
         ].join(" "),
       width,
@@ -419,63 +436,136 @@ export function renderAgentList(
   return [safeTruncateToWidth(header, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
 }
 
+/**
+ * Map a box-local click y to a rendered agent-row index. The agents pane
+ * renders header at row 0 and one row per worker after it, so y - 1 is the
+ * index; anything outside the visible rows is not a row. Pure function so
+ * tests exercise the mapping without a synthetic TUI.
+ */
+export function agentRowAtY(
+  y: number,
+  rowCount: number,
+  visibleRows = ROWS_COLLAPSED,
+): number | undefined {
+  if (!Number.isInteger(y) || y < 1) return undefined;
+  const index = y - 1;
+  if (index < 0 || index >= rowCount || index >= visibleRows) return undefined;
+  return index;
+}
+
 /** Finite number from an untrusted value, or undefined. */
 function finiteNum(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * One persistent line for Fusion's single sidekick, appended to the todos
- * pane so the dock answers "what is it doing right now" at zero token
- * cost. Exactly one row, clipped right through safeTruncateToWidth:
- *
- *   ● sidekick · gen 3 · running bash · 7/40 · 2m
- *
- * The waiting-UI signal leads the detail (the worker is blocked asking a
- * question); otherwise the middle prefers phase/tool and falls back to the
- * lifecycle label. A real turn cap renders as `turns/maxTurns`; an
- * unbounded Fusion cap renders as `turn N`. The mission trails so state
- * clips last. Glyph and tones come from the active skin and theme only.
- */
-export function renderSidekickLine(
-  theme: StatusTheme,
-  width: number,
-  item: DockAgentItem,
-  options: { now?: number } = {},
-): string {
-  if (width <= 0) return "";
-  const now = options.now ?? Date.now();
+/** Guarded turn counter shared by the agents pane and the peek overlay. */
+export function turnCountText(turns: unknown, maxTurns: unknown): string | undefined {
+  if (typeof turns !== "number" || !Number.isFinite(turns)) return undefined;
+  const capped =
+    typeof maxTurns === "number" &&
+    Number.isFinite(maxTurns) &&
+    maxTurns > 0 &&
+    maxTurns <= 100_000
+      ? `/${Math.trunc(maxTurns)}`
+      : "";
+  return `${Math.trunc(turns)}${capped} turns`;
+}
+
+/** True when the worker session may be opened: settled or failed only. */
+export function canSwitchToSession(lifecycle: unknown): boolean {
+  return lifecycle === "settled" || lifecycle === "failed";
+}
+
+/** Live worker state line shared by the agents rows and the peek overlay. */
+export function workerStateText(item: DockAgentItem): string {
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
-  const glyph = skinGlyphs().statusActive;
-  const tone = waiting ? "warning" : (AGENT_TONES[item.lifecycle] ?? "muted");
   const label =
     (AGENT_LABELS[item.lifecycle] ?? safeText(item.lifecycle, 16)) || "agent";
   const tool = safeText(item.tool, 24);
-  const middle = waiting
-    ? "waiting for reply"
-    : tool
-      ? `${label} ${tool}`
-      : item.lifecycle === "running" && item.phase === "model"
-        ? "thinking"
-        : label;
+  if (waiting) return "waiting for reply";
+  if (tool) return `${label} ${tool}`;
+  if (item.lifecycle === "running" && item.phase === "model") return "thinking";
+  return label;
+}
+
+/**
+ * Read-only peek overlay body for one worker: mission plus live state plus
+ * the bounded recent-activity list plus a transcript tail, oldest first.
+ * Never opens a SessionManager; the transcript tail is injected by the
+ * caller (bounded read + tolerant parse live in todo-tools).
+ */
+export function renderPeekBody(
+  theme: StatusTheme,
+  width: number,
+  item: DockAgentItem,
+  options: { now?: number; transcript?: string[] } = {},
+): string[] {
+  if (width <= 0) return [];
+  const now = options.now ?? Date.now();
+  const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
+  const state = workerStateText(item);
   const generation = finiteNum(item.generation);
-  const turns = finiteNum(item.turns);
-  const maxTurns = finiteNum(item.maxTurns);
   const detail = metaText([
     generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
-    middle,
-    turns === undefined
-      ? undefined
-      : maxTurns !== undefined && maxTurns > 0 && maxTurns <= 100_000
-        ? `${Math.trunc(turns)}/${Math.trunc(maxTurns)}`
-        : `turn ${Math.trunc(turns)}`,
+    state,
+    turnCountText(item.turns, item.maxTurns),
     agentAge(item, now),
-    safeText(item.mission, 80) || undefined,
   ]);
-  return safeTruncateToWidth(
-    `${ROW_INSET}${theme.fg(tone, glyph)} ${theme.fg("text", "sidekick")} ${theme.fg(waiting ? "warning" : "muted", detail)}`,
-    width,
+  const lines = [
+    safeTruncateToWidth(
+      `${theme.fg("accent", safeText(item.agent, 40) || "agent")} ${theme.fg("muted", safeText(item.mission, 80) || item.id)}`,
+      width,
+    ),
+    safeTruncateToWidth(
+      `${theme.fg("dim", MORE_GLYPH)} ${theme.fg(waiting ? "warning" : "muted", detail)}`,
+      width,
+    ),
+  ];
+  const entries = (item.activity ?? []).slice(0, PEEK_ACTIVITY_ROWS);
+  for (const entry of entries) {
+    const name = safeText(readProp(entry, "tool"), 24) || "tool";
+    const status = safeText(readProp(entry, "status"), 16);
+    const tone = status === "error" ? "error" : status === "running" ? "warning" : "dim";
+    lines.push(
+      safeTruncateToWidth(
+        `${ROW_INSET}${theme.fg(tone, "\u25aa")} ${theme.fg("text", name)}${status ? ` ${theme.fg("dim", status)}` : ""}`,
+        width,
+      ),
+    );
+  }
+  if (!entries.length) {
+    lines.push(
+      safeTruncateToWidth(
+        `${ROW_INSET}${theme.fg("dim", "\u25aa")} ${theme.fg("muted", "no recent activity")}`,
+        width,
+      ),
+    );
+  }
+  const tail = (options.transcript ?? []).slice(-PEEK_TRANSCRIPT_LINES);
+  if (tail.length) {
+    lines.push(
+      safeTruncateToWidth(theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))), width),
+    );
+    for (const entry of tail) {
+      lines.push(safeTruncateToWidth(theme.fg("muted", entry), width));
+    }
+  } else {
+    lines.push(
+      safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width),
+    );
+  }
+  lines.push(
+    safeTruncateToWidth(
+      theme.fg(
+        "dim",
+        canSwitchToSession(item.lifecycle)
+          ? "o: open session · esc: close"
+          : "session still writing — open after settle · esc: close",
+      ),
+      width,
+    ),
   );
+  return lines.slice(0, TODO_LIST_MAX_LINES);
 }
 
 /**

@@ -81,6 +81,13 @@ describe("fleet bus", () => {
         waitingUi: 2,
         mission: "y".repeat(200),
         fusion: true,
+        activity: [
+          { tool: "z".repeat(100), status: "running" },
+          { tool: "read", status: "completed" },
+          { tool: "bash", status: "error" },
+          { tool: "write", status: "completed" },
+          { tool: "extra", status: "completed" },
+        ],
       } as any,
     ]);
     const [item] = currentFleetSnapshot();
@@ -92,6 +99,15 @@ describe("fleet bus", () => {
     assert.equal(item.generation, 3);
     assert.equal(item.waitingUi, 2);
     assert.equal(item.fusion, true);
+    assert.equal(item.activity?.length, 4, "activity capped at 4 entries");
+    assert.equal(item.activity?.[0]?.tool.length, 24, "activity tool bounded");
+    assert.equal(item.activity?.[0]?.status, "running");
+    assert.equal(item.sessionFile, undefined, "sessionFile absent stays undefined");
+
+    publishFleetSnapshot([
+      { id: "task_3", agent: "scout", lifecycle: "running", createdAt: 3, sessionFile: "/tmp/w.jsonl" } as any,
+    ]);
+    assert.equal(currentFleetSnapshot()[0]?.sessionFile, "/tmp/w.jsonl");
 
     publishFleetSnapshot([
       { id: "task_2", agent: "scout", lifecycle: "running", createdAt: 2 },
@@ -105,6 +121,45 @@ describe("fleet bus", () => {
     assert.equal(bare.waitingUi, undefined);
     assert.equal(bare.mission, undefined);
     assert.equal(bare.fusion, undefined);
+    assert.equal(bare.activity, undefined);
+  });
+
+  it("repaints on activity changes but not on heartbeats", () => {
+    const base = {
+      id: "task_1",
+      agent: "scout",
+      lifecycle: "running",
+      createdAt: 1,
+      phase: "tool",
+      tool: "bash",
+      activity: [{ tool: "bash", status: "running" }],
+    };
+    const before = fleetSnapshotKey([base]);
+    assert.equal(
+      fleetSnapshotKey([{ ...base, lastEventAt: 99_999 }]),
+      before,
+      "pure heartbeat does not change the key",
+    );
+    assert.notEqual(
+      fleetSnapshotKey([
+        {
+          ...base,
+          activity: [
+            { tool: "bash", status: "running" },
+            { tool: "read", status: "completed" },
+          ],
+        },
+      ]),
+      before,
+      "tool start repaints via the activity list",
+    );
+    assert.notEqual(
+      fleetSnapshotKey([
+        { ...base, activity: [{ tool: "bash", status: "completed" }] },
+      ]),
+      before,
+      "tool end repaints via the activity status",
+    );
   });
 
   it("publishes a snapshot to subscribers without stacking widgets", () => {

@@ -16,13 +16,19 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type {
+  Component,
+  TuiMouseEvent,
+  TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import {
   CANONICAL_STATUSES,
-  TODO_LIST_MAX_LINES,
+  agentRowAtY,
   buildTodoList,
+  canSwitchToSession,
   renderAgentList,
+  renderPeekBody,
   renderPlainTodoList,
-  renderSidekickLine,
   renderTodoList,
   type DockPane,
   type TodoItem,
@@ -38,10 +44,8 @@ import {
   apexPresentationEnabled,
   withApexPresentation,
 } from "../presentation/presentation.ts";
-import {
-  padStartToWidth,
-  safeTruncateToWidth,
-} from "../presentation/safe-text-layout.ts";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { renderLinesSafely, padStartToWidth, safeTruncateToWidth } from "../presentation/safe-text-layout.ts";
 import {
   DURATION_COLUMN,
   TREE,
@@ -300,6 +304,39 @@ export function reconstructTodoState(
   return lastValidView;
 }
 
+/**
+ * Dock panel: the WidthText render path plus row click handling for the
+ * agents pane. Clicks map box-local y to a rendered agent row (header at
+ * row 0, one row per worker after it); only agent rows claim the click.
+ * Keyboard selection lives on the shortcuts/commands below; this class
+ * only routes pointer input into the same row callback.
+ */
+class DockPanel implements Component {
+  constructor(
+    private readonly build: (width: number) => string[],
+    private readonly hooks: {
+      fallback: string;
+      onAgentRow: (rowIndex: number) => void;
+      rowCount: () => number;
+    },
+  ) {}
+  render(width: number): string[] {
+    return renderLinesSafely(this.build, width, this.hooks.fallback);
+  }
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "click" || event.button !== "left") return undefined;
+    const rowIndex = agentRowAtY(Math.trunc(event.y), this.hooks.rowCount());
+    if (rowIndex === undefined) return undefined;
+    try {
+      this.hooks.onAgentRow(rowIndex);
+    } catch {
+      // A dock failure must not interrupt the TUI input path.
+    }
+    return { handled: true };
+  }
+  invalidate(): void {}
+}
+
 // ---------------------------------------------------------------- install
 
 export function installTodoTools(pi: ExtensionAPI): void {
@@ -309,8 +346,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let panelCollapsed = false;
   let dockPane: DockPane = "todos";
   let liveAgents: DockAgentItem[] = currentDockAgents();
+  /** Selected agents-pane row; clamped on every fleet update. */
+  let selectedAgent = 0;
   let dockMounted = false;
   let unsubscribeFleet = () => {};
+  let removeDockInput: (() => void) | undefined;
   const PANEL_KEY = "todo-list";
   const TOGGLE_HINT = "alt+t";
   const SWITCH_HINT = "alt+a";
@@ -320,6 +360,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
     const ctx = currentCtx;
     const wasMounted = dockMounted;
     dockMounted = false;
+    removeDockInput?.();
+    removeDockInput = undefined;
     if (wasMounted) writeLastPhase("todo-dock:unmount");
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
     try {
@@ -333,26 +375,288 @@ export function installTodoTools(pi: ExtensionAPI): void {
     return Boolean(current) || (presentationEnabled && liveAgents.length > 0);
   }
 
-  /**
-   * Fusion's sole persistent sidekick, when it is the only live worker.
-   * Rendered as one inline line on the todos pane (no second pane worth
-   * switching to); the multi-worker agents tab is untouched. Suppressed
-   * while presentation is disabled, where the dock stays a plain list.
-   */
-  function fusionSidekick(): DockAgentItem | undefined {
-    if (!presentationEnabled || liveAgents.length !== 1) return undefined;
-    const only = liveAgents[0];
-    return only?.fusion === true ? only : undefined;
-  }
-
   function dockTabs() {
     if (!liveAgents.length) return undefined;
-    if (fusionSidekick()) return undefined;
     return {
       pane: dockPane,
       agentCount: liveAgents.length,
       switchHint: presentationEnabled ? SWITCH_HINT : undefined,
     };
+  }
+
+  /** Clamp the selection after the fleet changes; open rows stay valid. */  function clampSelection(): void {
+    if (selectedAgent >= liveAgents.length) selectedAgent = Math.max(0, liveAgents.length - 1);
+    if (selectedAgent < 0) selectedAgent = 0;
+  }
+
+  /**
+   * Move the agents-pane selection and repaint the live host. No remount:
+   * the DockPanel factory closes over this state, so a state change plus
+   * requestHostRender is the whole update path.
+   */
+  function moveSelection(delta: number): void {
+    if (!liveAgents.length) return;
+    clampSelection();
+    const next = Math.max(0, Math.min(liveAgents.length - 1, selectedAgent + delta));
+    if (next === selectedAgent) return;
+    selectedAgent = next;
+    if (currentCtx) renderPanel();
+  }
+
+  /**
+   * Dock keyboard input. Active while the agents pane is visible:
+   * up/down move the row selection, Enter peeks the selected worker,
+   * Esc returns to todos. Wired through onTerminalInput (raw data) with
+   * the shared tui.select keybindings plus literal-sequence fallback.
+   */
+  function dockInputHandler(data: string): { consume?: boolean } | undefined {
+    if (!presentationEnabled || !currentCtx?.hasUI || currentCtx.mode !== "tui") return undefined;
+    if (!dockMounted || dockPane !== "agents" || panelCollapsed || !liveAgents.length) return undefined;
+    if (data === "\u001b") {
+      switchPane(currentCtx, "todos");
+      return { consume: true };
+    }
+    const up = data === "\u001b[A" || data === "\u001b[D";
+    const down = data === "\u001b[B" || data === "\u001b[C" || data === "\t";
+    if (up || down) {
+      moveSelection(up ? -1 : 1);
+      return { consume: true };
+    }
+    if (data === "\r" || data === "\n") {
+      const host = currentCtx;
+      if (host) void peekSelected(host);
+      return { consume: true };
+    }
+    return undefined;
+  }
+
+  /**
+   * Read one property from a hostile value. Getters, proxy traps, and
+   * revoked proxies all throw on plain member access, so every read here
+   * is guarded; the peer helper in todo-view.ts stays presentation-side.
+   */
+  function readProp(source: unknown, key: string): unknown {
+    if (source === null || (typeof source !== "object" && typeof source !== "function")) {
+      return undefined;
+    }
+    try {
+      return (source as Record<string, unknown>)[key];
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Number of entries in a hostile array value, capped. */
+  function boundedLength(value: unknown, cap: number): number {
+    if (!Array.isArray(value)) return 0;
+    try {
+      const length = value.length;
+      if (typeof length !== "number" || !Number.isFinite(length)) return 0;
+      return Math.max(0, Math.min(cap, Math.trunc(length)));
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Bounded tail read of a worker session file for the peek overlay. */
+  const TRANSCRIPT_TAIL_BYTES = 32 * 1024;
+  const TRANSCRIPT_TAIL_LINES = 40;
+
+  /**
+   * Minimal transcript line formatter: role + text, tool calls as names.
+   * The kit cannot import task-side extractAssistantText (no
+   * cross-extension imports), so this hand-rolls the same shape from the
+   * parsed JSONL entries with kit text helpers only.
+   */
+  function formatTranscriptTail(text: string): string[] {
+    const rawLines = text.split("\n");
+    // Skip the trailing partial line a live worker may still be writing.
+    const complete = text.endsWith("\n") ? rawLines : rawLines.slice(0, -1);
+    const out: string[] = [];
+    for (const raw of complete) {
+      const line = raw.trim();
+      if (!line) continue;
+      let entry: Record<string, unknown> | undefined;
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          entry = parsed as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+      if (!entry) continue;
+      const formatted = formatTranscriptEntry(entry);
+      if (formatted) out.push(formatted);
+    }
+    return out.slice(-TRANSCRIPT_TAIL_LINES);
+  }
+
+  function formatTranscriptEntry(entry: Record<string, unknown>): string | undefined {
+    let message: Record<string, unknown> | undefined;
+    try {
+      const raw = entry.message;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        message = raw as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+    if (!message) return undefined;
+    const role = (() => {
+      try {
+        return String(message.role ?? "");
+      } catch {
+        return "";
+      }
+    })();
+    if (role === "toolResult") {
+      const name = cleanInline((() => {
+        try {
+          return message.toolName ?? "";
+        } catch {
+          return "";
+        }
+      })(), 40);
+      return name ? `tool ${name}` : undefined;
+    }
+    const content = (() => {
+      try {
+        return message.content;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (typeof content === "string") {
+      return transcriptLine(role, cleanInline(content, 120));
+    }
+    if (!Array.isArray(content)) return undefined;
+    const parts: string[] = [];
+    const count = boundedLength(content, 8);
+    for (let index = 0; index < count; index++) {
+      let part: Record<string, unknown> | undefined;
+      try {
+        const raw = (content as unknown[])[index];
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          part = raw as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+      if (!part) continue;
+      let kind = "";
+      try {
+        kind = String(part.type ?? "");
+      } catch {
+        continue;
+      }
+      if (kind === "text") {
+        const text = cleanInline((() => {
+          try {
+            return part.text ?? "";
+          } catch {
+            return "";
+          }
+        })(), 120);
+        if (text) parts.push(text);
+      } else if (kind === "toolCall") {
+        const name = cleanInline((() => {
+          try {
+            return part.name ?? "";
+          } catch {
+            return "";
+          }
+        })(), 40);
+        if (name) parts.push(`tool ${name}`);
+      }
+      if (parts.length >= 2) break;
+    }
+    if (!parts.length) return undefined;
+    return transcriptLine(role, parts.join(" · "));
+  }
+
+  function transcriptLine(role: string, text: string): string | undefined {
+    if (!text) return undefined;
+    const speaker = role === "assistant" ? "worker" : role === "user" ? "lead" : role || "msg";
+    return `${cleanInline(speaker, 12)}: ${cleanInline(text, 120)}`;
+  }
+
+  function readTranscriptTail(path: string): string[] {
+    let handle: number | undefined;
+    try {
+      const stat = statSync(path);
+      if (!stat.isFile()) return [];
+      const size = Math.max(0, Math.min(stat.size, TRANSCRIPT_TAIL_BYTES));
+      if (size <= 0) return [];
+      handle = openSync(path, "r");
+      const buffer = Buffer.alloc(size);
+      readSync(handle, buffer, 0, size, Math.max(0, stat.size - size));
+      return formatTranscriptTail(buffer.toString("utf8"));
+    } catch {
+      return [];
+    } finally {
+      if (handle !== undefined) {
+        try {
+          closeSync(handle);
+        } catch {
+          // Best effort; a failed close must not break the overlay.
+        }
+      }
+    }
+  }
+  function peekTranscript(item: DockAgentItem): string[] {
+    try {
+      const path = typeof readProp(item, "sessionFile") === "string"
+        ? (readProp(item, "sessionFile") as string)
+        : undefined;
+      if (!path) return [];
+      return readTranscriptTail(path);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Peek overlay for one worker. Overlay input is raw handleInput: Esc
+   * dismisses, `o`/Enter resolves "open" for settled/failed workers only.
+   * Live workers peek read-only with the reason shown inline.
+   */
+  async function openPeek(ctx: ExtensionContext, item: DockAgentItem): Promise<{ open: boolean }> {
+    const transcript = peekTranscript(item);
+    const switchable = canSwitchToSession(item.lifecycle);
+    const result = await ctx.ui.custom<{ open: boolean }>((_tui, theme, _keys, done) => ({
+      render(width: number): string[] {
+        return renderPeekBody(theme, width, item, { transcript });
+      },
+      handleInput(data: string): void {
+        if (data === "\u001b") {
+          done({ open: false });
+          return;
+        }
+        if (data === "o" || data === "O" || data === "\r" || data === "\n") {
+          if (switchable) done({ open: true });
+        }
+      },
+      invalidate(): void {},
+    }), {
+      overlay: true,
+      overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" },
+    });
+    return result ?? { open: false };
+  }
+
+  /** Peek the selected agents-pane row; stash nothing, resolve inline. */
+  async function peekSelected(ctx: ExtensionContext): Promise<void> {
+    if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
+    clampSelection();
+    const item = liveAgents[selectedAgent];
+    if (!item) {
+      ctx.ui.notify("No live agents.", "info");
+      return;
+    }
+    currentCtx = ctx;
+    await openPeek(ctx, item);
+    if (currentCtx) renderPanel();
   }
 
   function renderPanel(): void {
@@ -374,38 +678,60 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
     writeLastPhase("todo-dock:mount");
     try {
+      // Keyboard selection rides onTerminalInput while the dock is mounted;
+      // the handler self-gates to the visible agents pane. One listener
+      // per mount, removed on unmount, so input never stacks.
+      removeDockInput?.();
+      removeDockInput = undefined;
+      try {
+        const host = ctx;
+        if (host?.hasUI && host.mode === "tui" && presentationEnabled) {
+          removeDockInput = host.ui.onTerminalInput(dockInputHandler);
+        }
+      } catch {
+        removeDockInput = undefined;
+      }
       ctx.ui.setWidget(
         PANEL_KEY,
         (_tui, theme) =>
-          new WidthText((width) => {
-            if (dockPane === "agents") {
-              return renderAgentList(theme, width, liveAgents, {
+          new DockPanel(
+            (width) => {
+              if (dockPane === "agents") {
+                return renderAgentList(theme, width, liveAgents, {
+                  collapsed: panelCollapsed,
+                  tabs: dockTabs(),
+                  selectedIndex: selectedAgent,
+                });
+              }
+              if (!current) {
+                return renderAgentList(theme, width, liveAgents, {
+                  collapsed: panelCollapsed,
+                  tabs: dockTabs(),
+                });
+              }
+              if (!presentationEnabled) return renderPlainTodoList(current, width);
+              return renderTodoList(theme, width, current, {
                 collapsed: panelCollapsed,
+                toggleHint: TOGGLE_HINT,
                 tabs: dockTabs(),
               });
-            }
-            if (!current) {
-              return renderAgentList(theme, width, liveAgents, {
-                collapsed: panelCollapsed,
-                tabs: dockTabs(),
-              });
-            }
-            if (!presentationEnabled) return renderPlainTodoList(current, width);
-            const lines = renderTodoList(theme, width, current, {
-              collapsed: panelCollapsed,
-              toggleHint: TOGGLE_HINT,
-              tabs: dockTabs(),
-            });
-            // Fusion single sidekick: one persistent line on the todos pane.
-            // It counts against TODO_LIST_MAX_LINES so the panel never grows
-            // past its current max height; collapsed stays header-only.
-            const sidekick = !panelCollapsed ? fusionSidekick() : undefined;
-            if (!sidekick) return lines;
-            return [
-              ...lines.slice(0, TODO_LIST_MAX_LINES - 1),
-              renderSidekickLine(theme, width, sidekick),
-            ];
-          }, "[todo panel unavailable]"),
+            },
+            {
+              fallback: "[todo panel unavailable]",
+              onAgentRow: (rowIndex) => {
+                if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
+                clampSelection();
+                selectedAgent = rowIndex;
+                const item = liveAgents[rowIndex];
+                const host = currentCtx;
+                if (item && host) void openPeek(host, item).then(() => {
+                  if (currentCtx) renderPanel();
+                });
+                if (currentCtx) renderPanel();
+              },
+              rowCount: () => (dockPane === "agents" && !panelCollapsed ? liveAgents.length : 0),
+            },
+          ),
         { placement: "aboveEditor" },
       );
       dockMounted = true;
@@ -449,12 +775,84 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   unsubscribeFleet = subscribeDockAgents((items) => {
     liveAgents = [...items];
+    clampSelection();
     if (liveAgents.length === 0 && dockPane === "agents") dockPane = "todos";
     if (presentationEnabled && liveAgents.length > 0 && !current) {
       dockPane = "agents";
     }
     if (currentCtx) renderPanel();
   });
+
+  /**
+   * Switch to a settled/failed worker's session. Called only from the
+   * /agents open handler, which holds ExtensionCommandContext — the one
+   * context that carries switchSession. Live workers are refused: the
+   * child is still appending to that file (no lock, append-per-entry).
+   */
+  async function openAgentSession(ctx: ExtensionContext, rawId: string): Promise<void> {
+    currentCtx = ctx;
+    if (!presentationEnabled) {
+      ctx.ui.notify("Todo panel controls are inactive while Apex presentation is disabled.", "info");
+      return;
+    }
+    const id = rawId.trim();
+    const item = liveAgents.find((entry) => entry.id === id);
+    if (!id || !item) {
+      ctx.ui.notify(id ? `No live agent "${cleanInline(id, 40)}".` : "Usage: /agents open <id>.", "info");
+      return;
+    }
+    if (!canSwitchToSession(item.lifecycle)) {
+      ctx.ui.notify(`${item.id} is still ${item.lifecycle}; its session is still being written. Open it after it settles.`, "info");
+      return;
+    }
+    const path = typeof readProp(item, "sessionFile") === "string"
+      ? (readProp(item, "sessionFile") as string)
+      : undefined;
+    if (!path) {
+      ctx.ui.notify(`${item.id} has no session file recorded.`, "info");
+      return;
+    }
+    const privileged = ctx as ExtensionContext & {
+      switchSession?: (path: string) => Promise<{ cancelled: boolean }>;
+    };
+    if (typeof privileged.switchSession !== "function") {
+      ctx.ui.notify("Session switch is unavailable from this context.", "info");
+      return;
+    }
+    try {
+      await privileged.switchSession(path);
+    } catch {
+      ctx.ui.notify(`Could not open ${item.id}'s session.`, "info");
+    }
+  }
+
+  /** Open peek for one worker from a command/shortcut context. */
+  async function peekAgent(ctx: ExtensionContext, rawId: string): Promise<void> {
+    currentCtx = ctx;
+    if (!presentationEnabled) {
+      ctx.ui.notify("Todo panel controls are inactive while Apex presentation is disabled.", "info");
+      return;
+    }
+    const id = rawId.trim();
+    if (!liveAgents.length) {
+      ctx.ui.notify("No live agents.", "info");
+      return;
+    }
+    const item = id
+      ? liveAgents.find((entry) => entry.id === id)
+      : liveAgents[Math.min(selectedAgent, liveAgents.length - 1)];
+    if (!item) {
+      ctx.ui.notify(id ? `No live agent "${cleanInline(id, 40)}".` : "No live agents.", "info");
+      return;
+    }
+    const resolved = await openPeek(ctx, item);
+    if (resolved.open) {
+      // Switch needs ExtensionCommandContext; the /agents handler below
+      // holds it directly. Peek entry points resolve peek-only.
+      ctx.ui.notify("Run /agents open <id> to switch to this worker's session.", "info");
+    }
+    if (currentCtx) renderPanel();
+  }
 
   // Always registered (no SDK unregister exists); togglePanel/switchPane
   // refuse while presentation is disabled, keeping the plain widget mounted.
@@ -473,8 +871,23 @@ export function installTodoTools(pi: ExtensionAPI): void {
       handler: async (_args, ctx) => togglePanel(ctx),
     });
     pi.registerCommand("agents", {
-      description: "Show live sub-agents in the todo dock",
-      handler: async (_args, ctx) => switchPane(ctx, "agents"),
+      description: "Show live sub-agents in the todo dock; /agents peek [id] opens a read-only view, /agents open <id> switches to a settled worker's session",
+      handler: async (args, ctx) => {
+        const [verb, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+        if (verb === "peek") {
+          await peekAgent(ctx, rest.join(" "));
+          return;
+        }
+        if (verb === "open") {
+          await openAgentSession(ctx, rest.join(" "));
+          return;
+        }
+        if (verb !== undefined) {
+          ctx.ui.notify(`Unknown /agents subcommand "${cleanInline(verb, 24)}". Use /agents, /agents peek [id], or /agents open <id>.`, "info");
+          return;
+        }
+        switchPane(ctx, "agents");
+      },
     });
   }
 
@@ -517,6 +930,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     current = undefined;
     currentCtx = undefined;
     liveAgents = [];
+    selectedAgent = 0;
     dockPane = "todos";
     unsubscribeFleet();
   });
