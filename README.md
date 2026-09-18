@@ -117,6 +117,15 @@ Work is operations-first: a lead and one persistent `sidekick`, using a dedicate
 
 Switching requires an idle lead and idle workers (a running dev server doesn't block it). A failed switch restores the prior tools/model/mode; if that recovery itself fails, input stays blocked until a `/mode` switch succeeds.
 
+## Slash prompts
+
+Live prompt templates under `agent/prompts/*.md` (discovery is non-recursive):
+
+- `/brainstorm [topic]` — diverge on architectural options; do not implement until asked to converge.
+- `/poteto [goal]` — match Investigation, Bug fix, Feature, Refactor, Prototype, or Unattended; copy those steps into the todo list (`skip: <reason>` stays visible); execute under the already-active `/mode`. Not a sixth behavior mode. `new task` re-matches. Playbooks: [`agent/prompts/poteto/`](agent/prompts/poteto/).
+
+`/browser`, `/deploy`, `/mode`, and `/orchestrate` are native commands, not prompt templates.
+
 ## Specialist roster
 
 Sub-agents are dispatched with `task` (synchronous, blocks for one final report) or `task_start`/`task_send`/`task_wait`/`task_close` (asynchronous, runs in the background while the lead keeps working). Each spawns its own `pi` process with its own model, thinking level, and tool set.

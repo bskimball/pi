@@ -71,6 +71,7 @@ export interface Observatory {
  */
 const PREFERRED = [
   "brainstorm",
+  "poteto",
   "browser",
   "deploy",
   "plan",

@@ -14,7 +14,7 @@ agent/
 ├── settings.json          # model, theme (currently claude-dark), tuiMode, compaction
 ├── models.json / mcp.json # provider + MCP configuration
 ├── agents/                # specialist briefs (_shared*.md are composed in)
-├── prompts/               # slash-command prompts (inactive/ = extension-owned)
+├── prompts/               # slash-command prompts (inactive/ = extension-owned; poteto/ = /poteto playbooks, not slash commands)
 ├── skills/                # local skills
 ├── themes/                # apex-dark.json, claude-dark.json
 ├── harness/                # runtime state: global memory, model circuits

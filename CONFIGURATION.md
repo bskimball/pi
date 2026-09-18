@@ -458,9 +458,14 @@ default.
 | `${@:N:L}` | `L` args starting at N |
 
 The filename (minus `.md`) becomes the `/name` command. This repo currently
-has one prompt template: `agent/prompts/brainstorm.md`
-(`argument-hint: "[topic]"`, uses `${@:-the current task}`); complexity
-review moved to the `simplify` skill (`agent/skills/simplify/SKILL.md`);
+has two live prompt templates: `agent/prompts/brainstorm.md`
+(`argument-hint: "[topic]"`, uses `${@:-the current task}`) and
+`agent/prompts/poteto.md` (`argument-hint: "[goal, or 'new task. <goal>']"`,
+uses `${@:-the current task}`). Playbooks for `/poteto` live in
+`agent/prompts/poteto/*.md` and are **not** slash commands — discovery is
+non-recursive, so that subdirectory is disclosed reference the router reads
+after match. Complexity review moved to the `simplify` skill
+(`agent/skills/simplify/SKILL.md`);
 `/browser` and
 `/deploy` are **not** prompt templates — they are native commands registered
 in code by `agent/extensions/prompt-commands.ts` via `pi.registerCommand()`
@@ -492,6 +497,7 @@ What this run covers, how arguments change that, and what is out.
 Ordered steps. Each step ends on a checkable completion criterion.
 Use a single leading-word heading for the work this prompt does:
 - brainstorm diverge phase: ## Diverge
+- poteto: ## Route (playbook files under `prompts/poteto/` own per-kind steps)
 - browser: ## Attach then ## Act (Attach reports connect status before Act begins)
 - deploy: ## Resolve then ## Delegate
 
