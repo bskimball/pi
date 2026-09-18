@@ -88,13 +88,16 @@ describe("standalone Task presentation", () => {
   it("supports both the global emergency opt-out and PI_TASK_UI", () => {
     const previousTask = process.env.PI_TASK_UI;
     const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     try {
       process.env.PI_APEX_UI = "1";
+      process.env.PI_UI_CHROME = "1";
       delete process.env.PI_TASK_UI;
       const enabled = [...register(ampTask), ...register(asyncTask)];
       assert.ok(enabled.some((tool) => typeof tool.renderResult === "function"));
 
       process.env.PI_APEX_UI = "0";
+      process.env.PI_UI_CHROME = "0";
       const globallyDisabled = [...register(ampTask), ...register(asyncTask)];
       for (const tool of globallyDisabled) {
         assert.equal(tool.renderCall, undefined, `${tool.name} global renderCall`);
@@ -102,6 +105,7 @@ describe("standalone Task presentation", () => {
       }
 
       process.env.PI_APEX_UI = "1";
+      process.env.PI_UI_CHROME = "1";
       process.env.PI_TASK_UI = "0";
       const disabled = [...register(ampTask), ...register(asyncTask)];
       for (const tool of disabled) {
@@ -115,6 +119,8 @@ describe("standalone Task presentation", () => {
       else process.env.PI_TASK_UI = previousTask;
       if (previousApex === undefined) delete process.env.PI_APEX_UI;
       else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
   });
 });

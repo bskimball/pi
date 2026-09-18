@@ -45,13 +45,17 @@ function context(args: any): any {
 }
 
 function withApexUi<T>(value: string, run: () => T): T {
-  const previous = process.env.PI_APEX_UI;
+  const previousApex = process.env.PI_APEX_UI;
+  const previousChrome = process.env.PI_UI_CHROME;
   process.env.PI_APEX_UI = value;
+  process.env.PI_UI_CHROME = value;
   try {
     return run();
   } finally {
-    if (previous === undefined) delete process.env.PI_APEX_UI;
-    else process.env.PI_APEX_UI = previous;
+    if (previousApex === undefined) delete process.env.PI_APEX_UI;
+    else process.env.PI_APEX_UI = previousApex;
+    if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+    else process.env.PI_UI_CHROME = previousChrome;
   }
 }
 
@@ -212,16 +216,20 @@ describe("apex mcp receipts", () => {
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     const proto = ToolExecutionComponent.prototype as any;
     const before = proto.getCallRenderer;
     process.env.PI_APEX_UI = "0";
+    process.env.PI_UI_CHROME = "0";
     try {
       installMcpReceipts();
       assert.equal(proto.getCallRenderer, before);
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
   });
 
@@ -505,8 +513,10 @@ describe("apex mcp receipts", () => {
       t.skip("no bundled core entry in this install");
       return;
     }
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     process.env.PI_APEX_UI = "1";
+    process.env.PI_UI_CHROME = "1";
     try {
       installMcpReceipts(); // kicks the fire-and-forget bundle patch
       const state = getHeadlessReceiptState();
@@ -540,8 +550,10 @@ describe("apex mcp receipts", () => {
         decided.renderResult,
       );
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
   });
 });

@@ -261,6 +261,7 @@ describe("apex presentation skins", () => {
   it("renders receipts end to end with the active skin", () => {
     initTheme("dark");
     const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     const previousSkin = process.env[SKIN_ENV_VAR];
     const renderGrep = () => {
       installBuiltinReceipts();
@@ -285,6 +286,7 @@ describe("apex presentation skins", () => {
     };
     try {
       process.env.PI_APEX_UI = "1";
+      process.env.PI_UI_CHROME = "1";
       process.env[SKIN_ENV_VAR] = "claude";
       const claude = renderGrep();
       assert.match(claude.call, /●/);
@@ -298,6 +300,8 @@ describe("apex presentation skins", () => {
     } finally {
       if (previousApex === undefined) delete process.env.PI_APEX_UI;
       else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
       if (previousSkin === undefined) delete process.env[SKIN_ENV_VAR];
       else process.env[SKIN_ENV_VAR] = previousSkin;
     }

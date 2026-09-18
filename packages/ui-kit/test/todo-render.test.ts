@@ -31,8 +31,10 @@ const {
 
 function createMockPi(apexUi = "1") {
   const previousApexUi = process.env.PI_APEX_UI;
+  const previousChrome = process.env.PI_UI_CHROME;
   const previousSkin = process.env.PI_UI_SKIN;
   process.env.PI_APEX_UI = apexUi;
+  process.env.PI_UI_CHROME = apexUi;
   // Pin the apex skin so a leaked PI_UI_SKIN=claude never changes assertions.
   delete process.env.PI_UI_SKIN;
   try {
@@ -89,6 +91,8 @@ function createMockPi(apexUi = "1") {
   } finally {
     if (previousApexUi === undefined) delete process.env.PI_APEX_UI;
     else process.env.PI_APEX_UI = previousApexUi;
+    if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+    else process.env.PI_UI_CHROME = previousChrome;
     if (previousSkin === undefined) delete process.env.PI_UI_SKIN;
     else process.env.PI_UI_SKIN = previousSkin;
   }
@@ -396,7 +400,8 @@ describe("apex todo receipts and tools", () => {
 
   it("re-registers todo receipts on live presentation switches without losing the plan", async () => {
     const mock = createMockPi("1");
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     const ctx = { mode: "noninteractive", hasUI: false } as any;
     try {
       const write = mock.latestTool("todo_write");
@@ -410,6 +415,7 @@ describe("apex todo receipts and tools", () => {
       );
 
       process.env.PI_APEX_UI = "0";
+      process.env.PI_UI_CHROME = "0";
       mock.emitEvent("pi:ui:changed");
       const stripped = mock.latestTool("todo_write");
       assert.equal(stripped.renderShell, undefined, "receipt stripped when disabled live");
@@ -418,6 +424,7 @@ describe("apex todo receipts and tools", () => {
       assert.equal(mock.latestTool("todo_read").renderCall, undefined, "read chrome stripped too");
 
       process.env.PI_APEX_UI = "1";
+      process.env.PI_UI_CHROME = "1";
       mock.emitEvent("pi:ui:changed");
       const restored = mock.latestTool("todo_write");
       assert.equal(typeof restored.renderCall, "function", "chrome restored on re-enable");
@@ -426,8 +433,10 @@ describe("apex todo receipts and tools", () => {
       const readAfter = await mock.latestTool("todo_read").execute("r", {}, undefined, undefined, ctx);
       assert.match(readAfter.content[0].text, /Surviving step/, "plan survives re-registration");
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
       mock.emit("session_shutdown", {}, ctx);
     }
   });
@@ -435,7 +444,8 @@ describe("apex todo receipts and tools", () => {
   it("drops the agents pane to plain todos on a live switch to disabled", async () => {
     resetDockAgents();
     const mock = createMockPi("1");
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     const notices: string[] = [];
     let mountedComponent: any;
     const tuiCtx = {
@@ -468,6 +478,7 @@ describe("apex todo receipts and tools", () => {
       assert.match(renderMounted().join("\n"), /scout/, "agents pane active while enabled");
 
       process.env.PI_APEX_UI = "0";
+      process.env.PI_UI_CHROME = "0";
       mock.emitEvent("pi:ui:changed");
       const plain = renderMounted();
       assert.match(plain.join("\n"), /Plain fallback step/, "dock falls back to the plan");
@@ -478,8 +489,10 @@ describe("apex todo receipts and tools", () => {
       assert.match(notices[notices.length - 1], /inactive while Apex presentation is disabled/);
       assert.match(renderMounted().join("\n"), /Plain fallback step/, "gated switch leaves the plain list");
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
       publishDockAgents([]);
       mock.emit("session_shutdown", {}, tuiCtx);
     }

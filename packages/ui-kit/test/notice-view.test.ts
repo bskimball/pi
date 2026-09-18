@@ -117,23 +117,30 @@ describe("bg-process settlement notice", () => {
       },
     };
 
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     process.env.PI_APEX_UI = "0";
+    process.env.PI_UI_CHROME = "0";
     try {
       installBgProcessReceipts(pi as any);
       assert.deepEqual(types, []);
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
 
     process.env.PI_APEX_UI = "1";
+    process.env.PI_UI_CHROME = "1";
     try {
       installBgProcessReceipts(pi as any);
       assert.deepEqual(types, [BG_PROCESS_SETTLED_TYPE]);
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
   });
 });

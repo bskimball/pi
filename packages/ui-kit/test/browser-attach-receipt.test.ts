@@ -37,13 +37,17 @@ function context(args: any, overrides: Record<string, unknown> = {}): any {
 }
 
 function withApexUi<T>(value: string, run: () => T): T {
-  const previous = process.env.PI_APEX_UI;
+  const previousApex = process.env.PI_APEX_UI;
+  const previousChrome = process.env.PI_UI_CHROME;
   process.env.PI_APEX_UI = value;
+  process.env.PI_UI_CHROME = value;
   try {
     return run();
   } finally {
-    if (previous === undefined) delete process.env.PI_APEX_UI;
-    else process.env.PI_APEX_UI = previous;
+    if (previousApex === undefined) delete process.env.PI_APEX_UI;
+    else process.env.PI_APEX_UI = previousApex;
+    if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+    else process.env.PI_UI_CHROME = previousChrome;
   }
 }
 
@@ -190,16 +194,20 @@ describe("apex browser_attach receipt", () => {
   });
 
   it("skips the wrap when PI_APEX_UI=0", () => {
-    const previous = process.env.PI_APEX_UI;
+    const previousApex = process.env.PI_APEX_UI;
+    const previousChrome = process.env.PI_UI_CHROME;
     const proto = ToolExecutionComponent.prototype as any;
     const before = proto.getCallRenderer;
     process.env.PI_APEX_UI = "0";
+    process.env.PI_UI_CHROME = "0";
     try {
       installBrowserAttachReceipts();
       assert.equal(proto.getCallRenderer, before);
     } finally {
-      if (previous === undefined) delete process.env.PI_APEX_UI;
-      else process.env.PI_APEX_UI = previous;
+      if (previousApex === undefined) delete process.env.PI_APEX_UI;
+      else process.env.PI_APEX_UI = previousApex;
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
     }
   });
 });

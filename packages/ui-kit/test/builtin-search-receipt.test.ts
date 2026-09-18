@@ -38,13 +38,17 @@ function context(args: any, overrides: Record<string, unknown> = {}): any {
 }
 
 function withApexUi<T>(value: string, run: () => T): T {
-  const previous = process.env.PI_APEX_UI;
+  const previousApex = process.env.PI_APEX_UI;
+  const previousChrome = process.env.PI_UI_CHROME;
   process.env.PI_APEX_UI = value;
+  process.env.PI_UI_CHROME = value;
   try {
     return run();
   } finally {
-    if (previous === undefined) delete process.env.PI_APEX_UI;
-    else process.env.PI_APEX_UI = previous;
+    if (previousApex === undefined) delete process.env.PI_APEX_UI;
+    else process.env.PI_APEX_UI = previousApex;
+    if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+    else process.env.PI_UI_CHROME = previousChrome;
   }
 }
 
