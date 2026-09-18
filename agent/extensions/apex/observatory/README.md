@@ -1,17 +1,12 @@
 # Observatory Landing Screen
 
-The blank-chat landing screen lives in `apex/observatory/` and is mounted by `apex-ui.ts` via `ctx.ui.setHeader(...)` as Pi's startup header — not an above-editor widget — so with `quietStartup` it is the opening screen and has the full `OBSERVATORY_MAX_LINES` (25) budget rather than the 10-line above-editor cap.
+The Observatory engine lives in `packages/ui-kit/observatory/`. Apex registers classic shark landing art and keeps preview harnesses here. The kit mounts the splash via `ctx.ui.setHeader(...)` as Pi's startup header — not an above-editor widget — so with `quietStartup` it is the opening screen and has the full `OBSERVATORY_MAX_LINES` (25) budget rather than the 10-line above-editor cap.
 
 ```text
-observatory/
-├── observatory.ts        composition, inventory, glyph shark tiers, selectors
-├── observatory-orb.ts    focus/selection state
-├── shark-art.ts          truecolor pixel bitmaps (ULTRA / WIDE / MID)
-├── hal-art.ts            truecolor HAL bitmaps, retained but not on the landing path
-├── pixel-art.ts          half-block pixel renderer + truecolor detection
-├── star-field.ts         background star rows
-├── preview.mjs           full-screen harness
-└── sky-preview.mjs       star-field-only harness
+packages/ui-kit/observatory/   engine, orb, classic shark landing, pixel-art, star-field
+apex/observatory/
+├── preview.mjs               full-screen harness
+└── sky-preview.mjs           star-field-only harness
 ```
 
 ## Passive splash vs. the interactive orb

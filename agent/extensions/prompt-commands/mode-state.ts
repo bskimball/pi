@@ -38,7 +38,18 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
   }
   return structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion });
 }
+/** Fusion-owned: persistent-sidekick modes do not expose chain/rebind. */
+export function toolsForFusion(names: string[]): string[] {
+  return names.filter(name => name !== "task_chain" && name !== "task_rebind");
+}
+
+/** Work-owned: no persistent sidekick, so chain/rebind stay off. Same availability as Fusion today. */
+export function toolsForWork(names: string[]): string[] {
+  return names.filter(name => name !== "task_chain" && name !== "task_rebind");
+}
+
 export function toolsForMode(mode: Mode, names: string[]): string[] {
-  if (mode === "fusion" || mode === "work") return names.filter(name => !["task_chain", "task_rebind"].includes(name));
+  if (mode === "fusion") return toolsForFusion(names);
+  if (mode === "work") return toolsForWork(names);
   return names;
 }

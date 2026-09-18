@@ -12,7 +12,7 @@ import {
   type WorkerLifecycle,
 } from "./worker-runtime.ts";
 import { parseReportSchema, reportInstruction } from "./report-schema.ts";
-import { missionFromPrompt } from "../presentation/task-view.ts";
+import { missionFromPrompt } from "./mission-from-prompt.ts";
 import type { ReportStatus } from "./report-schema.ts";
 
 export const FUSION_EPHEMERAL_AGENTS = [

@@ -82,7 +82,7 @@ describe("extension discovery layout", () => {
     assert.equal(relative.some((entry) => entry.includes("observatory/")), false);
     assert.equal(relative.some((entry) => entry.includes("runtime/")), false);
     assert.equal(relative.some((entry) => entry.includes("internal/")), false);
-    // Todo is Apex-owned. No legacy standalone unified-edit entry may
+    // Todo dock is kit-owned. No legacy standalone unified-edit entry may
     // register a second copy.
     assert.equal(relative.includes("todo-list.ts"), false);
     assert.equal(relative.some((entry) => entry.startsWith("unified-edit/")), false);

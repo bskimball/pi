@@ -3,22 +3,7 @@
 // Pure string helpers only — no rendering timers, no pi-tui components.
 
 import { cleanInline } from "./ui-common.ts";
-
-/**
- * Extract a short mission label from a multi-line task prompt.
- * Prefers a `goal:` line when present; otherwise the first non-empty line.
- */
-export function missionFromPrompt(prompt: string): string {
-  const lines = prompt
-    .split(/\r?\n/)
-    .map((line) => cleanInline(line, 180))
-    .filter(Boolean);
-  const goal = lines.find((line) => /^goal\s*:/i.test(line));
-  return cleanInline(
-    (goal ?? lines[0] ?? "Mission").replace(/^goal\s*:\s*/i, ""),
-    140,
-  );
-}
+export { missionFromPrompt } from "../runtime/mission-from-prompt.ts";
 
 /**
  * Compact primary-argument summary for a tool-call activity row.

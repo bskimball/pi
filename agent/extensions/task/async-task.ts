@@ -81,6 +81,7 @@ import {
 } from "./runtime/text-bounds.ts";
 import {
   fleetSnapshotKey,
+  isAgentWorkspaceOpen,
   publishFleetSnapshot,
   type FleetSnapshotItem,
 } from "./runtime/fleet-bus.ts";
@@ -3828,6 +3829,9 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     fusionLifecycle.isolateSession(ctx?.sessionManager?.getSessionId?.());
     if (ctx?.hasUI) removeFusionInputListener = ctx.ui.onTerminalInput(data => {
       if (data === "\u001b" && persistentSidekickMode() && uiPromptDepth === 0) {
+        // Overlay handleInput does not consume TUI listeners. Skip abort while
+        // the opaque Agents workspace owns Esc as "back to lead".
+        if (isAgentWorkspaceOpen()) return undefined;
         const worker = fusionWorker();
         if (worker && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") void abortWorkerAndEscalate(worker);
       }

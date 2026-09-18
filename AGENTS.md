@@ -45,6 +45,7 @@ agent/extensions/
 ├── read-guard.ts                          duplicate-image + downscale guard
 ├── user-profile.ts                        private user context injection
 ├── web-search.ts                          Exa search + fetch_content
+├── jev/                     → index.ts              Advisory Jev Choice/Score/Noul classifier (single tool)
 ├── at-path-complete.ts                    scoped @ listing for gitignored paths
 └── test/                                  cross-extension tests
 ```
@@ -63,12 +64,12 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 
 `apex/`, `claude/`, and `hal/` are separately discovered UI extensions. Shared receipts, layout, todo tools, and the single `ToolExecutionComponent` wrap live in `packages/ui-kit`. Deleting one UI directory uninstalls that look. See `CONTEXT.md` for presentation ownership.
 
-- `PI_APEX_UI=0` is the installation-wide presentation opt-out: it disables custom styling, chrome, and render hooks. Kit-owned tools remain registered and executable. The todo panel stays mounted as a plain, uncolored list.
-- `/ui` selects `pi` (stock Pi) or an **installed** UI (`apex`, `claude`, `hal`). Missing UI directories fail closed. Installed custom UIs set `PI_APEX_UI=1` and `PI_UI_SKIN` to their name. Claude uses round receipts and `claude-dark`; HAL uses square receipts, a truecolor orb+wordmark landing, quiet activity, and `hal-dark`. Glyphs are read at call time so a live `/ui` switch applies without a restart; unset `PI_UI_SKIN` falls back to Apex glyphs.
+- `PI_UI_CHROME=0` is the installation-wide presentation opt-out (`PI_APEX_UI=0` remains a deprecated alias; `PI_UI_CHROME` wins when both are set): it disables custom styling, chrome, and render hooks. Kit-owned tools remain registered and executable. The todo panel stays mounted as a plain, uncolored list.
+- `/ui` selects `pi` (stock Pi) or an **installed** UI (`apex`, `claude`, `hal`). Missing UI directories fail closed. Installed custom UIs set `PI_UI_CHROME=1` (and the `PI_APEX_UI` alias) and `PI_UI_SKIN` to their name. Claude uses round receipts and `claude-dark`; HAL uses square receipts, a truecolor orb+wordmark landing, quiet activity, and `hal-dark`. Glyphs are read at call time so a live `/ui` switch applies without a restart; unset `PI_UI_SKIN` falls back to Apex glyphs.
 - `/mode work` is operations-first and uses its own prompt rather than the coding-first `agent/SYSTEM.md`. It shares Fusion's persistent sidekick lifecycle and configured model pair but keeps the existing synchronous specialist roster available. Business workflows and integrations remain owned by their project; custom work agents are not bundled into this mode.
 - Async workers in every mode, including Fusion's lone sidekick, use the shared above-editor Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Click or Enter opens a bounded read-only peek. Settled/failed sessions switch directly only from `/agents peek <id>` or `/agents open <id>` command context; pointer/shortcut peeks prepare that explicit command without replacing a draft. Live JSONL writers are never switched into. Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
-- `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_APEX_UI=0` disables them too. Task children are spawned with `PI_APEX_UI=0` so workers never paint chrome.
-- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_APEX_UI=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
+- `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) disables them too. Task children are spawned with chrome off so workers never paint chrome.
+- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
 - There is no custom footer. Pi owns the footer.
 
 ### Rendering Constraints
@@ -88,7 +89,7 @@ Blank-chat landing is mounted via `ctx.ui.setHeader(...)`. Apex shark/star art l
 
 ### Crash And Stability Diagnostics
 
-`crash-logger.ts` installs the segmenter shield, last-phase breadcrumbs, and terminal-restore watchdog independent of `PI_APEX_UI`. See `CONTEXT.md` § "Long-session and subagent stability" for the full mechanism.
+`crash-logger.ts` installs the segmenter shield, last-phase breadcrumbs, and terminal-restore watchdog independent of `PI_UI_CHROME`. See `CONTEXT.md` § "Long-session and subagent stability" for the full mechanism.
 
 Logs: `agent/logs/pi-crash.log` (fatal JS), `agent/logs/pi-render.log` (render failures), `agent/logs/pi-lifecycle.log` (compaction, exits), `agent/logs/pi-lsp.log` (LSP diagnostic probes). Read these before blaming a provider or subagent on an unclean session death.
 
@@ -99,7 +100,7 @@ npm run typecheck                                        # tsc --noEmit, whole c
 npm run lint                                             # oxlint, .oxlintrc.json defaults
 node --experimental-transform-types --test agent/extensions/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/lsp/test/*.test.ts
-node --experimental-transform-types --test agent/extensions/apex/test/*.test.ts
+node --experimental-transform-types --test packages/ui-kit/test/*.test.ts
 node --experimental-transform-types --test agent/extensions/task/*.test.ts agent/extensions/task/presentation/*.test.ts agent/extensions/task/runtime/test/*.test.ts
 ```
 

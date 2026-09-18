@@ -9,6 +9,7 @@ import { TREE, cleanInline, fitLine } from "./ui-common.ts";
 
 export interface StatusTheme {
   fg(token: string, text: string): string;
+  bg?(token: string, text: string): string;
 }
 
 export interface TreeRow {

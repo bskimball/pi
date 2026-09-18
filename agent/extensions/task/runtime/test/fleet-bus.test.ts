@@ -3,9 +3,11 @@ import { beforeEach, describe, it } from "node:test";
 import {
   currentFleetSnapshot,
   fleetSnapshotKey,
+  isAgentWorkspaceOpen,
   publishFleetSnapshot,
   resetFleetBus,
   subscribeFleetSnapshot,
+  WORKSPACE_OPEN_KEY,
 } from "../fleet-bus.ts";
 
 beforeEach(() => {
@@ -234,5 +236,13 @@ describe("fleet bus", () => {
     stop();
     publishFleetSnapshot([]);
     assert.deepEqual(seen, [0, 1]);
+  });
+
+  it("exposes the Agents workspace-open flag Fusion Escape abort reads", () => {
+    assert.equal(isAgentWorkspaceOpen(), false);
+    (globalThis as typeof globalThis & { [WORKSPACE_OPEN_KEY]?: boolean })[WORKSPACE_OPEN_KEY] = true;
+    assert.equal(isAgentWorkspaceOpen(), true);
+    resetFleetBus();
+    assert.equal(isAgentWorkspaceOpen(), false);
   });
 });

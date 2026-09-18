@@ -5,7 +5,7 @@ import {
   RANDOM_INDICATOR_INTERVAL_MS,
   WORKING_MESSAGES,
   buildWorkingIndicator as buildApexWorkingIndicator,
-} from "../working.ts";
+} from "../apex/working.ts";
 import {
   CLAUDE_INDICATOR_FRAME_COUNT,
   CLAUDE_WORKING_INTERVAL_MS,
@@ -14,13 +14,13 @@ import {
   CLAUDE_WORKING_WEIGHTS,
   buildWorkingIndicator as buildClaudeWorkingIndicator,
   claudeWorkingTonesFor,
-} from "../../claude/working.ts";
+} from "../claude/working.ts";
 import {
   HAL_DEFAULT_CANDIDATE,
   HAL_INDICATOR_CANDIDATES,
   HAL_WORKING_MESSAGES,
   buildWorkingIndicator as buildHalWorkingIndicator,
-} from "../../hal/working.ts";
+} from "../hal/working.ts";
 import { SKIN_ENV_VAR } from "@pi/ui-kit";
 import { safeVisibleWidth } from "@pi/ui-kit";
 

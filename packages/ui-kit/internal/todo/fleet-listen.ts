@@ -2,7 +2,21 @@
 // Same global key as task/runtime/fleet-bus.ts; no cross-extension import.
 
 const FLEET_BUS_KEY = "__piTaskFleetBus";
+const WORKSPACE_OPEN_KEY = "__piAgentWorkspaceOpen";
 const ITEM_CAP = 8;
+
+type WorkspaceRoot = typeof globalThis & {
+  [WORKSPACE_OPEN_KEY]?: boolean;
+};
+
+/** True while the opaque Agents workspace overlay is open. Fusion Escape abort reads this. */
+export function isAgentWorkspaceOpen(): boolean {
+  return Boolean((globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY]);
+}
+
+export function setAgentWorkspaceOpen(open: boolean): void {
+  (globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY] = open;
+}
 
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
@@ -148,4 +162,5 @@ export function resetDockAgents(): void {
   const existing = root[FLEET_BUS_KEY];
   if (existing) existing.listeners.clear();
   root[FLEET_BUS_KEY] = { items: [], listeners: new Set() };
+  setAgentWorkspaceOpen(false);
 }

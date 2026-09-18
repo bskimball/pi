@@ -2,8 +2,8 @@
 // expanded panel, and the transcript receipt across terminal widths, flags any
 // line that overflows its budget, and exits nonzero on a bound failure.
 //
-//   node --experimental-transform-types agent/extensions/apex/internal/todo/todo-preview.mjs
-//   node --experimental-transform-types agent/extensions/apex/internal/todo/todo-preview.mjs 44 100
+//   node --experimental-transform-types packages/ui-kit/internal/todo/todo-preview.mjs
+//   node --experimental-transform-types packages/ui-kit/internal/todo/todo-preview.mjs 44 100
 
 import {
   TODO_LIST_MAX_LINES,

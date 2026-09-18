@@ -104,6 +104,7 @@ function processMetadata(): string {
       WT_SESSION: process.env.WT_SESSION,
       COLORTERM: process.env.COLORTERM,
       MSYSTEM: process.env.MSYSTEM,
+      PI_UI_CHROME: process.env.PI_UI_CHROME,
       PI_APEX_UI: process.env.PI_APEX_UI,
     })}`,
   ].join("\n");

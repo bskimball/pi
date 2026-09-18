@@ -40,6 +40,7 @@ import {
 } from "./todo-view.ts";
 import {
   currentDockAgents,
+  setAgentWorkspaceOpen,
   subscribeDockAgents,
   type DockAgentItem,
 } from "./fleet-listen.ts";
@@ -433,7 +434,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
     if (!presentationEnabled || !currentCtx?.hasUI || currentCtx.mode !== "tui") return undefined;
     // ui.custom owns keyboard input while its overlay is focused. The editor
     // owns navigation and submit as soon as the user has composed any text,
-    // including a prepared `/agents open` command.
+    // including a prepared `/agents open` command. Fusion's Escape abort is
+    // gated on the shared workspace-open flag, not consume, so overlay Esc
+    // still reaches handleInput and closes the view.
     if (peekOpen || uiPromptDepth > 0) return undefined;
     if (!dockMounted || dockPane !== "agents" || panelCollapsed || !liveAgents.length) return undefined;
     try {
@@ -646,11 +649,13 @@ export function installTodoTools(pi: ExtensionAPI): void {
   }
 
   /**
-   * Full-pane session view for one worker. Overlay input is raw handleInput:
-   * Esc/q returns to the lead, `o`/Enter resolves "open" for settled/failed
-   * workers only. Live workers stay read-only with the reason shown inline.
-   * Guarded so repeated clicks/Enters cannot stack views: extra requests
-   * while one is open resolve immediately without opening another.
+   * Opaque full-pane workspace for one worker. Overlay input is raw handleInput:
+   * Esc/q returns to the lead without aborting the worker, `o`/Enter resolves
+   * "open" for settled/failed workers only. Live workers stay read-only with
+   * the reason shown inline. Guarded so repeated clicks/Enters cannot stack
+   * views: extra requests while one is open resolve immediately without opening
+   * another. Fusion's Escape abort is gated on this flag because overlay
+   * handleInput does not consume TUI input listeners.
    */
   let peekOpen = false;
   let peekItemId: string | undefined;
@@ -679,6 +684,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   ): Promise<{ open: boolean }> {
     if (peekOpen) return { open: false };
     peekOpen = true;
+    setAgentWorkspaceOpen(true);
     peekItemId = item.id;
     peekSnapshot = item;
     peekTranscriptLines = peekTranscript(item);
@@ -779,6 +785,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       );
     } finally {
       peekOpen = false;
+      setAgentWorkspaceOpen(false);
       peekItemId = undefined;
       peekSnapshot = undefined;
       peekTranscriptLines = [];

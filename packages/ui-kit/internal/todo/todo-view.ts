@@ -591,6 +591,41 @@ export function peekControlsText(
   return metaText([back, "session still writing"]);
 }
 
+/**
+ * Paint one workspace row as an even background band so overlay compositing
+ * cannot leave parent transcript cells visible beside or under the text.
+ * `customMessageBg` is the theme page surface used for custom UI blocks.
+ */
+function peekSurface(theme: StatusTheme | undefined): StatusTheme {
+  const fg =
+    theme && typeof theme.fg === "function"
+      ? theme.fg.bind(theme)
+      : (_token: string, text: string) => text;
+  const bg =
+    theme && typeof theme.bg === "function" ? theme.bg.bind(theme) : undefined;
+  return bg ? { fg, bg } : { fg };
+}
+
+function paintPeekRow(theme: StatusTheme, width: number, line: string): string {
+  if (width <= 0) return "";
+  const clipped = safeTruncateToWidth(line, width);
+  const fill = " ".repeat(Math.max(0, width - safeVisibleWidth(clipped)));
+  const plain = `${clipped}${fill}`;
+  if (typeof theme.bg !== "function") return plain;
+  try {
+    const open = theme.bg("customMessageBg", "\u0000").split("\u0000")[0] ?? "";
+    const painted = open
+      ? plain.replace(
+          /\x1b\[(?:0|49)m/g,
+          (reset) => `${reset}${open}`,
+        )
+      : plain;
+    return theme.bg("customMessageBg", painted);
+  } catch {
+    return plain;
+  }
+}
+
 function peekHeaderText(item: DockAgentItem, now: number): string {
   const generation = finiteNum(item.generation);
   return metaText([
@@ -727,13 +762,14 @@ export function clampPeekScroll(
 }
 
 /**
- * Full-pane session view for one worker: header, wrapped mission, optional
- * directive, transcript window, footer. Never opens a SessionManager; the
- * transcript tail is injected by the caller (bounded read + tolerant parse
- * live in todo-tools).
+ * Opaque full-pane workspace for one worker: header, wrapped mission,
+ * optional directive, transcript window, footer. Always returns exactly
+ * `maxLines` background-filled rows so overlay compositing cannot leak the
+ * parent transcript. Never opens a SessionManager; the transcript tail is
+ * injected by the caller (bounded read + tolerant parse live in todo-tools).
  */
 export function renderPeekBody(
-  theme: StatusTheme,
+  theme: StatusTheme | undefined,
   width: number,
   item: DockAgentItem,
   options: {
@@ -745,50 +781,56 @@ export function renderPeekBody(
   } = {},
 ): string[] {
   if (width <= 0) return [];
+  const surface = peekSurface(theme);
   const now = options.now ?? Date.now();
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
   const maxLines = Math.max(3, Math.min(PEEK_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
   const header = safeTruncateToWidth(
-    theme.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
+    surface.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
     width,
   );
   const controls = safeTruncateToWidth(
-    theme.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
+    surface.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
     width,
   );
   const chrome = layoutPeekChrome(item, width, maxLines);
   const missionRows = chrome.missionRows.map((row) =>
-    safeTruncateToWidth(theme.fg("text", row), width),
+    safeTruncateToWidth(surface.fg("text", row), width),
   );
   const directiveTone = item.directive?.queued ? "warning" : "text";
   const directiveRows = chrome.directiveRows.map((row) =>
-    safeTruncateToWidth(theme.fg(directiveTone, row), width),
+    safeTruncateToWidth(surface.fg(directiveTone, row), width),
   );
   const used = 1 + missionRows.length + directiveRows.length + 1 + 1;
   const bodyBudget = Math.max(0, maxLines - used);
   const separator = safeTruncateToWidth(
-    theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
+    surface.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
     width,
   );
   const lines = [header, ...missionRows, ...directiveRows];
   if (maxLines <= 3) {
     if (maxLines >= 3) lines.push(controls);
-    return lines.slice(0, maxLines);
+    const padded = lines.slice(0, maxLines);
+    while (padded.length < maxLines) padded.push("");
+    return padded.map((row) => paintPeekRow(surface, width, row));
   }
   lines.push(separator);
   const rawTranscript = options.transcript ?? [];
   if (bodyBudget > 0) {
     if (!rawTranscript.length) {
-      lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+      lines.push(safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), width));
     } else {
-      const wrapped = layoutPeekTranscript(theme, width, rawTranscript);
+      const wrapped = layoutPeekTranscript(surface, width, rawTranscript);
       const windowed = peekTranscriptWindow(wrapped, bodyBudget, options.scrollOffset);
       if (windowed.lines.length) lines.push(...windowed.lines);
-      else lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+      else lines.push(safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), width));
     }
   }
+  while (lines.length < maxLines - 1) lines.push("");
   lines.push(controls);
-  return lines.slice(0, maxLines);
+  const padded = lines.slice(0, maxLines);
+  while (padded.length < maxLines) padded.push("");
+  return padded.map((row) => paintPeekRow(surface, width, row));
 }
 
 /**

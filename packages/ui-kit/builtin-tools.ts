@@ -1,5 +1,5 @@
-// builtin-tools: Apex adapters for Pi's built-in bash/write tools, plus the
-// Apex-owned todo tools.
+// builtin-tools: kit adapters for Pi's built-in bash/write tools, plus the
+// kit-owned todo tools.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -240,10 +240,10 @@ export function installBuiltinTools(pi: ExtensionAPI): void {
 
 /**
  * The session todo dock (tools, above-editor panel, alt+t / `/todos`, alt+a /
- * `/agents`) must be installed even under PI_APEX_UI=0. The dock keeps an
+ * `/agents`) must be installed even under PI_UI_CHROME=0. The dock keeps an
  * unstyled plain todo widget mounted in that mode; styled chrome drops out
  * and the registered controls remain inactive until presentation is enabled.
  */
-export function installApexOwnedTools(pi: ExtensionAPI): void {
+export function installKitOwnedTools(pi: ExtensionAPI): void {
   installTodoTools(pi);
 }

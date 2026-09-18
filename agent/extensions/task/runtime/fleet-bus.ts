@@ -2,6 +2,16 @@
 // agents tab can share that widget without importing this extension.
 
 export const FLEET_BUS_KEY = "__piTaskFleetBus";
+export const WORKSPACE_OPEN_KEY = "__piAgentWorkspaceOpen";
+
+type WorkspaceRoot = typeof globalThis & {
+  [WORKSPACE_OPEN_KEY]?: boolean;
+};
+
+/** True while the opaque Agents workspace overlay is open. Fusion Escape abort reads this. */
+export function isAgentWorkspaceOpen(): boolean {
+  return Boolean((globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY]);
+}
 
 export interface FleetSnapshotActivity {
   /** Bounded tool name. */
@@ -166,4 +176,5 @@ export function resetFleetBus(): void {
   const existing = root[FLEET_BUS_KEY];
   if (existing) existing.listeners.clear();
   root[FLEET_BUS_KEY] = { items: [], listeners: new Set() };
+  (globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY] = false;
 }

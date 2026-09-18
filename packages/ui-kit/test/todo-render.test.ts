@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 const { dockClickResult, installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
-const { publishDockAgents, resetDockAgents } = await import(
+const { isAgentWorkspaceOpen, publishDockAgents, resetDockAgents } = await import(
   "@pi/ui-kit/internal/todo/fleet-listen.ts"
 );
 const {
@@ -1870,9 +1870,9 @@ describe("agents tab in all modes with selection and peek", () => {
       await Promise.resolve();
       assert.notEqual(tui.getFocusedComponent(), editor, "custom overlay owns focus after click");
       terminal.rows = 5;
-      assert.ok((tui.getFocusedComponent()?.render(80).length ?? Infinity) <= 5, "open peek follows a shorter terminal");
+      assert.equal(tui.getFocusedComponent()?.render(80).length, 5, "open peek fills a shorter terminal");
       terminal.rows = 8;
-      assert.ok((tui.getFocusedComponent()?.render(80).length ?? Infinity) <= 8, "open peek follows a resized terminal");
+      assert.equal(tui.getFocusedComponent()?.render(80).length, 8, "open peek fills a resized terminal");
       terminal.input("\u001b[A");
       assert.notEqual(tui.getFocusedComponent(), editor, "arrow reaches overlay without closing it");
       terminal.input("\u001b");
@@ -1899,6 +1899,7 @@ describe("agents tab in all modes with selection and peek", () => {
       dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
       await Promise.resolve();
       assert.ok(dock.overlay(), "single click opens the peek overlay");
+      assert.equal(isAgentWorkspaceOpen(), true, "workspace-open flag is set while peek is focused");
       assert.equal(dock.input("\u001b[A"), undefined, "dock stands aside for overlay arrows");
       dock.overlay().handleInput("\u001b[A");
       assert.ok(dock.overlay(), "arrow escape sequence does not dismiss peek");
@@ -1906,6 +1907,7 @@ describe("agents tab in all modes with selection and peek", () => {
       dock.overlay().handleInput("\u001b");
       await Promise.resolve();
       assert.equal(dock.overlay(), undefined, "Esc closes the overlay");
+      assert.equal(isAgentWorkspaceOpen(), false, "Esc clears the workspace-open flag without aborting");
       assert.equal(dock.input("x"), undefined, "ordinary printable input remains unclaimed");
       assert.equal(dock.editorText(), "", "dock never rewrites editor text for a live worker");
     } finally {
@@ -2086,7 +2088,8 @@ describe("agents tab in all modes with selection and peek", () => {
       canOpenHere: true,
       maxLines: 5,
     });
-    assert.ok(lines.length <= 5);
+    assert.equal(lines.length, 5);
+    assert.ok(lines.every((line: string) => safeVisibleWidth(line) === 60));
     assert.match(lines.at(-1) ?? "", /esc: back to lead/);
     assert.match(lines.join("\n"), /worker: newest/);
     assert.doesNotMatch(lines.join("\n"), /worker: old/);
@@ -2100,7 +2103,8 @@ describe("agents tab in all modes with selection and peek", () => {
         canOpenHere: true,
         maxLines,
       });
-      assert.ok(lines.length <= maxLines, `height ${maxLines}`);
+      assert.equal(lines.length, maxLines, `height ${maxLines}`);
+      assert.ok(lines.every((line: string) => safeVisibleWidth(line) === 60), `opaque width ${maxLines}`);
       assert.match(lines.join("\n"), /mission: Steer the dock/);
       assert.match(lines.join("\n"), /o: open session \(ends lead\) · esc: back to lead/);
       if (maxLines >= 5) {
@@ -2140,8 +2144,8 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.match(live.join("\n"), /session still writing/);
     assert.match(live.join("\n"), /esc: back to lead/);
     assert.doesNotMatch(live.join("\n"), /o: open session/);
-    assert.ok(live.length <= TODO_LIST_MAX_LINES);
-    assert.ok(live.every((line: string) => safeVisibleWidth(line) <= 80));
+    assert.equal(live.length, TODO_LIST_MAX_LINES);
+    assert.ok(live.every((line: string) => safeVisibleWidth(line) === 80));
 
     const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript, canOpenHere: true });
     assert.match(settled.join("\n"), /o: open session \(ends lead\)/);
@@ -2183,7 +2187,7 @@ describe("agents tab in all modes with selection and peek", () => {
       maxLines,
       scrollOffset: offset,
     });
-    assert.ok(scrolled.length <= maxLines);
+    assert.equal(scrolled.length, maxLines);
     assert.match(scrolled.join("\n"), /queued: Stop and summarize/);
     assert.match(scrolled.at(-1) ?? "", /esc: back to lead/);
     assert.doesNotMatch(scrolled.join("\n"), /worker: progress 19/);
@@ -2191,7 +2195,7 @@ describe("agents tab in all modes with selection and peek", () => {
       transcript: longTranscript,
       maxLines: 5,
     });
-    assert.ok(tightPeek.length <= 5);
+    assert.equal(tightPeek.length, 5);
     assert.match(tightPeek.join("\n"), /mission: Steer the dock/);
     assert.doesNotMatch(tightPeek.join("\n"), /queued:/, "directive yields before the transcript vanishes");
     assert.match(tightPeek.join("\n"), /worker: progress 19/);
@@ -2199,8 +2203,8 @@ describe("agents tab in all modes with selection and peek", () => {
       transcript: longTranscript,
       maxLines: 3,
     });
-    assert.ok(tiny.length <= 3);
-    assert.ok(tiny.every((line: string) => safeVisibleWidth(line) <= 20));
+    assert.equal(tiny.length, 3);
+    assert.ok(tiny.every((line: string) => safeVisibleWidth(line) === 20));
     assert.match(tiny.at(-1) ?? "", /esc: back to lead/);
     assert.doesNotMatch(tiny.join("\n"), /queued:/);
   });
@@ -2390,10 +2394,10 @@ describe("agents tab in all modes with selection and peek", () => {
     ];
     for (const width of [20, 40, 80]) {
       const body = renderPeekBody(theme, width, item, { transcript });
-      assert.ok(body.length >= 2, `width ${width}: header + state`);
+      assert.equal(body.length, TODO_LIST_MAX_LINES, `width ${width}: fills default pane`);
       for (const row of body) {
         assert.equal(row.includes("\n"), false, `width ${width}: single row each`);
-        assert.ok(safeVisibleWidth(row) <= width, `width ${width}: "${row}"`);
+        assert.equal(safeVisibleWidth(row), width, `width ${width}: opaque row`);
       }
       assert.doesNotMatch(body.join("\n"), /9007199254740991/, "no raw MAX_SAFE_INTEGER in the overlay");
     }
@@ -2412,12 +2416,42 @@ describe("agents tab in all modes with selection and peek", () => {
       transcript: [...transcript, `worker: ${"word ".repeat(80)}end`],
       maxLines: 12,
     });
-    assert.ok(capped.every((line: string) => safeVisibleWidth(line) <= 80));
-    assert.ok(capped.length <= 12);
+    assert.ok(capped.every((line: string) => safeVisibleWidth(line) === 80));
+    assert.equal(capped.length, 12);
     assert.match(capped.at(-1) ?? "", /esc: back to lead/);
     assert.match(capped.join("\n"), /session still writing/);
     const missing = renderPeekBody(theme, 80, item, {});
     assert.match(missing.join("\n"), /transcript unavailable/);
+  });
+
+  it("does not throw when peek theme is missing, method-bound, or lacks bgColors", () => {
+    const item = worker({ lifecycle: "running" });
+    const transcript = ["lead: hi"];
+    const none = renderPeekBody(undefined, 40, item, { transcript, maxLines: 8 });
+    assert.equal(none.length, 8);
+    assert.ok(none.every((row) => safeVisibleWidth(row) === 40));
+
+    const methodTheme = {
+      fg(this: { fgColors?: Record<string, string> }, _token: string, text: string) {
+        return this.fgColors ? text : text;
+      },
+      bg(this: { bgColors?: Record<string, string> }, token: string, text: string) {
+        const color = this.bgColors?.[token];
+        return color ? text : text;
+      },
+      bgColors: { customMessageBg: "#111" },
+    };
+    const painted = renderPeekBody(methodTheme, 40, item, { transcript, maxLines: 8 });
+    assert.equal(painted.length, 8);
+    assert.ok(painted.every((row) => safeVisibleWidth(row) === 40));
+
+    const extractedBg = {
+      fg: (_token: string, text: string) => text,
+      bg: methodTheme.bg,
+    };
+    const fallback = renderPeekBody(extractedBg, 40, item, { transcript, maxLines: 8 });
+    assert.equal(fallback.length, 8);
+    assert.ok(fallback.every((row) => safeVisibleWidth(row) === 40));
   });
 });
 

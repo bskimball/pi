@@ -27,6 +27,7 @@ directly.
 - [`agent/mcp.json` (local custom, MCP servers)](#agentmcpjson-local-custom-mcp-servers)
 - [`agent/models.json` (upstream Pi, custom providers/models)](#agentmodelsjson-upstream-pi-custom-providersmodels)
 - [`web-search.json` (local custom, web-search extension)](#web-searchjson-local-custom-web-search-extension)
+- [`jev.json` (local custom, Jev extension)](#jevjson-local-custom-jev-extension)
 - [`agent/settings.json` (upstream Pi)](#agentsettingsjson-upstream-pi)
 - [Agent markdown (`agent/agents/*.md`, local custom)](#agent-markdown-agentagentsmd-local-custom)
 - [Prompt template markdown (`agent/prompts/*.md`, upstream Pi)](#prompt-template-markdown-agentpromptsmd-upstream-pi)
@@ -314,6 +315,29 @@ env var is set, and is an explicit placeholder otherwise.
 
 ---
 
+## `jev.json` (local custom, Jev extension)
+
+**Loaded by:** `agent/extensions/jev/internal/client.ts` (config-root /
+expansion pattern copied from `agent/extensions/web-search.ts`; never imported).
+Reads the file fresh on each `jev` call, so key rotation needs no restart.
+
+**Location:** `configRoot/jev.json` (`PI_CODING_AGENT_DIR`, else
+`$XDG_CONFIG_HOME/pi`, else `~/.pi`). Ignored via `.gitignore`; there is no
+tracked example file. Never paste the real key in chat, tool arguments,
+results, logs, or session entries.
+
+| Field | Type | Description |
+|---|---|---|
+| `apiKey` | string | Jev API key (Typesafe path). Literal or single `$VAR`/`${VAR}` reference. |
+| `model` | string (optional) | Override. Defaults: `jev-1.13.0` direct, `typesafe/jev` on Cloudflare; remove it when switching providers. |
+| `provider` | `"typesafe"` \| `"cloudflare-workers-ai"` (optional) | Backend selector, default `"typesafe"`. Cloudflare auth resolves per call from Pi's configured Cloudflare credential (stored credential or `CLOUDFLARE_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`); no secrets stored in `jev.json`, no automatic fallback between providers. The gateway envelope `{result: {state, result, gatewayMetadata}}` is unwrapped (completed state required) before validation. |
+Unknown fields are ignored. Malformed JSON fails the call with an actionable
+config error and no request sent. A missing file selects the Typesafe backend
+and then requires the key. A missing file is not an error when the
+environment supplies the key.
+
+---
+
 ## `agent/settings.json` (upstream Pi)
 
 **Authoritative doc:** `node_modules/@earendil-works/pi-coding-agent/docs/settings.md`
@@ -338,12 +362,11 @@ locally by `mcp-adapter.ts` instead of loaded from this array; see the mcp.json
 section above for why),
 `skills` (registers the `pi-mcp-adapter` bundled skill directory so
 `mcp-scripting` is discoverable without loading the adapter twice),
-`compaction` (`reserveTokens: 44000`, leaving roughly 20% of the default
-220k-token context as headroom before between-run auto-compaction, while
-retaining the upstream `keepRecentTokens: 20000` behavior), `steeringMode`,
+`steeringMode`,
 `transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme` (`claude-dark`),
 `tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
 `openai-codex/*`, `xai/*`, `opencode/*`, and other providers for optional manual selection).
+Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
 Active default and subagent routes use `local-proxy` (for example
 `local-proxy/gpt-5.6-luna`, `local-proxy/gpt-5.6-sol`, `local-proxy/grok-4.5`,
@@ -542,12 +565,12 @@ files are ignored there).
 Unknown frontmatter fields are ignored. Name collisions across locations warn
 and keep the first skill found.
 
-This repo has three local skills under `agent/skills/`:
-`background-process/SKILL.md`, `generate-image/SKILL.md` (the latter ships a
-helper script, `generate_image.py`, alongside `SKILL.md` — skills are freeform
-directories beyond the required `SKILL.md`), and
-`mcp-scripting-recipes/SKILL.md` (server-agnostic local recipes that complement
-the adapter's authoritative `mcp-scripting` skill). The adapter skill itself is
+Local skills live under `agent/skills/` as `*/SKILL.md` directories (freeform
+beyond the required `SKILL.md`; `generate-image` ships `generate_image.py`).
+`typesafe-ai/SKILL.md` is the vendor TypeSafe skill; local `typesafe-ai/PI.md`
+pairs it with the existing Jev extension so in-session Choice/Score/Noul uses
+the `jev` tool instead of a second client. `mcp-scripting-recipes` complements
+the adapter's authoritative `mcp-scripting` skill. The adapter skill itself is
 loaded via `settings.skills`, not by copying it into `agent/skills/`.
 
 ---
@@ -581,9 +604,11 @@ reproduced here.
 `mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
 `crash-logger.ts`, `continual-memory.ts`, `read-guard.ts`,
 `at-path-complete.ts`),
-`agent/extensions/apex/`, `agent/extensions/task/`, and
+`agent/extensions/apex/`, `agent/extensions/task/`,
+`agent/extensions/jev/`, and
 `agent/extensions/lsp/` (declared directory extensions with private support
-directories: Apex UI, task cards/runtime, and LSP navigation respectively).
+directories: Apex UI, task cards/runtime, Jev classifier, and
+LSP navigation respectively).
 Flat `*.ts` files remain standalone extensions. Todo and edit tools are
 Apex-owned under `apex/internal/`. See `CONTEXT.md` for the local architecture
 (seams, tool receipts, agent catalog, sync-vs-async task tools, Apex UI

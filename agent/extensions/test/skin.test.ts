@@ -22,13 +22,13 @@ import {
   safeVisibleWidth,
   skinGlyphs,
 } from "@pi/ui-kit";
-import { registerApexLanding } from "../landing.ts";
-import { registerClaudeLanding } from "../../claude/landing.ts";
-import { registerHalLanding } from "../../hal/landing.ts";
-import { TREE as TASK_TREE } from "../../task/presentation/ui-common.ts";
-import { buildWorkingIndicator as buildApexIndicator } from "../working.ts";
-import { buildWorkingIndicator as buildClaudeIndicator } from "../../claude/working.ts";
-import { buildWorkingIndicator as buildHalIndicator } from "../../hal/working.ts";
+import { registerApexLanding } from "../apex/landing.ts";
+import { registerClaudeLanding } from "../claude/landing.ts";
+import { registerHalLanding } from "../hal/landing.ts";
+import { TREE as TASK_TREE } from "../task/presentation/ui-common.ts";
+import { buildWorkingIndicator as buildApexIndicator } from "../apex/working.ts";
+import { buildWorkingIndicator as buildClaudeIndicator } from "../claude/working.ts";
+import { buildWorkingIndicator as buildHalIndicator } from "../hal/working.ts";
 
 const { loadThemeFromPath } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/theme.js")).href);
 
@@ -142,7 +142,7 @@ describe("apex presentation skins", () => {
 
   it("renders HAL receipts and a bounded HAL landing with the real theme", () => {
     withSkin("hal", () => {
-      const theme = loadThemeFromPath(fileURLToPath(new URL("../../../themes/hal-dark.json", import.meta.url)), "truecolor");
+      const theme = loadThemeFromPath(fileURLToPath(new URL("../../themes/hal-dark.json", import.meta.url)), "truecolor");
       assert.equal(activeSkinName(), "hal");
       assert.equal(TREE.header, "■");
       assert.equal(TREE.receipt, "□");
@@ -208,7 +208,7 @@ describe("apex presentation skins", () => {
     // standalone row above it.
     const themes = ["apex-dark", "claude-dark", "hal-dark"].map((name) =>
       loadThemeFromPath(
-        fileURLToPath(new URL(`../../../themes/${name}.json`, import.meta.url)),
+        fileURLToPath(new URL(`../../themes/${name}.json`, import.meta.url)),
         "truecolor",
       ),
     );

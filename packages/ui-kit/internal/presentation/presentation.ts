@@ -4,11 +4,22 @@
 // boxed renderer shows the model-facing text content. Domain logic, details
 // payloads, and tool registration stay loaded either way.
 //
-// Same emergency opt-out as apex-ui: PI_APEX_UI=0.
+// Installation-wide chrome opt-out: PI_UI_CHROME=0. PI_APEX_UI=0 remains the
+// deprecated alias. When both are set, PI_UI_CHROME wins.
 
-/** True when Apex custom receipts/cards should attach to tools and notices. */
+export const UI_CHROME_ENV_VAR = "PI_UI_CHROME";
+export const UI_CHROME_LEGACY_ENV_VAR = "PI_APEX_UI";
+
+/** True when custom receipts/cards should attach to tools and notices. */
+export function uiChromeEnabled(): boolean {
+  const chrome = process.env[UI_CHROME_ENV_VAR];
+  if (chrome !== undefined) return chrome !== "0";
+  return process.env[UI_CHROME_LEGACY_ENV_VAR] !== "0";
+}
+
+/** @deprecated Use uiChromeEnabled. Kept so existing call sites keep working. */
 export function apexPresentationEnabled(): boolean {
-  return process.env.PI_APEX_UI !== "0";
+  return uiChromeEnabled();
 }
 
 /** Renderer slots that belong to the optional Apex presentation adapter. */

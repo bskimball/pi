@@ -21,7 +21,13 @@ export {
   safeVisibleWidth,
 } from "./internal/presentation/safe-text-layout.ts";
 export { reportRenderFailure } from "./internal/presentation/tool-receipt.ts";
-export { apexPresentationEnabled, withApexPresentation } from "./internal/presentation/presentation.ts";
+export {
+  UI_CHROME_ENV_VAR,
+  UI_CHROME_LEGACY_ENV_VAR,
+  apexPresentationEnabled,
+  uiChromeEnabled,
+  withApexPresentation,
+} from "./internal/presentation/presentation.ts";
 export { installSharedPresentation, installSharedTools, resetUiKitInstallForTests } from "./install.ts";
 export {
   OBSERVATORY_MAX_LINES,
@@ -58,3 +64,23 @@ export { intercomMessageLines, parseIntercomMessage } from "./internal/presentat
 export { noticeLines, type NoticeRow } from "./internal/presentation/notice-view.ts";
 export { buildTodoList, renderTodoList } from "./internal/todo/todo-view.ts";
 export { installUiHost, type UiHostOptions } from "./host.ts";
+export {
+  WORK_CREW_AGENTS,
+  agentParamDescription,
+  apexAgentList,
+  composeSpecialistSharedPrompts,
+  discoverAgents,
+  isProjectAgentFile,
+  isWorkCrewAgent,
+  modelAttempts,
+  parseAgentFile,
+  piAgentParamDescription,
+  readSharedFile,
+  resolveAgentThinking,
+  routingHint,
+  stderrDiagnostic,
+  workCrewList,
+  type AgentDef,
+  type SpecialistWorkerMode,
+  type WorkCrewAgent,
+} from "./internal/runtime/agent-discovery.ts";
