@@ -20,6 +20,8 @@ const MAX_ROUTED_SKILLS = 31;
 const MIN_PROMPT_CHARS = 24;
 /** Bounds the prompt text sent to Jev. Well under the client's 64,000-char request cap. */
 const MAX_PROMPT_CHARS = 8_000;
+/** Bounds the project-context slice sent with the prompt. Keeps per-turn input near current cost. */
+const MAX_CONTEXT_CHARS = 1_500;
 
 interface AdvisoryResult {
   status: "completed";
@@ -40,9 +42,45 @@ type AdvisoryOutcome = AdvisoryResult | AdvisoryFailure;
 /** Footer key for the ambient advisory status line. */
 const STATUS_KEY = "jev";
 
+/** AGENTS.md section that lists host workflows and the skill that owns each. */
+const SKILLS_SECTION_MARKER = "### Skills";
+
 interface AdvisoryMeter {
   calls: number;
   tokens: number;
+}
+
+/**
+ * Slice the host project's workflow index (AGENTS.md `### Skills` section) so
+ * Jev sees project context alongside the bare user prompt. The per-skill
+ * catalog remains the Choice options; this is state, not a second vote. It
+ * fails open: any misshape returns undefined and routing falls back to the
+ * bare prompt exactly as before.
+ */
+export function extractWorkflowIndex(
+  contextFiles: Array<{ path: string; content: string }> | undefined,
+  cwd: string,
+  maxChars = MAX_CONTEXT_CHARS,
+): string | undefined {
+  if (!contextFiles || contextFiles.length === 0 || maxChars <= 0) return undefined;
+  // Deepest project file wins; the global agent-dir context carries no skills table.
+  // No marker anywhere means the host declares no workflow index: stay on the
+  // bare prompt rather than mislabeling unrelated context as one.
+  const deepest = [...contextFiles]
+    .filter((file) => typeof file.content === "string")
+    .sort((a, b) => b.path.length - a.path.length)
+    .find((file) => file.content.includes(SKILLS_SECTION_MARKER));
+  if (!deepest) return undefined;
+  const markerAt = deepest.content.indexOf(SKILLS_SECTION_MARKER);
+  const section = deepest.content.slice(markerAt).trim();
+  if (!section) return undefined;
+  const label = deepest.path.replace(/\\/g, "/").split("/").at(-1) ?? deepest.path;
+  const prefix = `Project workflow index (${label}, cwd ${cwd.replace(/\\/g, "/")}):\n`;
+  const budget = Math.max(0, maxChars - prefix.length);
+  if (budget <= 1) return undefined;
+  // maxChars bounds the whole block: reserve one char so the ellipsis never overflows it.
+  const body = section.length > budget ? `${section.slice(0, budget - 1).trimEnd()}\u2026` : section;
+  return `${prefix}${body}`;
 }
 
 /** Record one automatic call and publish the running per-session total to the footer. */
@@ -290,7 +328,7 @@ export default function (pi: ExtensionAPI): void {
       });
       return undefined;
     }
-    const state = prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS) : prompt;
+    const trimmed = prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS) : prompt;
 
     // Skills that opt out of model invocation are never auto-suggested.
     const candidates: SkillCandidate[] = (event.systemPromptOptions?.skills ?? [])
@@ -330,6 +368,17 @@ export default function (pi: ExtensionAPI): void {
 
     const sources = turnSources(config).filter((source) => source !== "skill-router" || !!questions.skill);
     const deadlineMs = Math.max(questions.skill ? config.skillRouter.deadlineMs : 0, config.routingAdvisory.enabled ? config.routingAdvisory.deadlineMs : 0);
+    // Bare request plus the host workflow index: which project skills own which
+    // workflows. Case 16:511 needed this ("missed work-wise" named none of
+    // mail/calendar/Teams, but AGENTS.md maps those workflows to m365).
+    // Appended only when a skill Choice is actually being asked, so the
+    // routing-advisory-only path (bare prompt, guard Nouls) is untouched.
+    const workflowIndex = questions.skill
+      ? extractWorkflowIndex(event.systemPromptOptions?.contextFiles, ctx.cwd)
+      : undefined;
+    const state = workflowIndex
+      ? `User request:\n${trimmed}\n\n${workflowIndex}`
+      : trimmed;
     const epoch = sessionEpoch;
     const result = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
     if (epoch !== sessionEpoch) return undefined;
@@ -412,6 +461,7 @@ export default function (pi: ExtensionAPI): void {
         skill: questions.skill ? config.skillRouter.threshold : undefined,
         risk: config.routingAdvisory.enabled ? config.routingAdvisory.threshold : undefined,
       },
+      contextIncluded: questions.skill ? workflowIndex !== undefined : undefined,
     });
     publishStatus(ctx, advisoryMeter, result, notes.length > 0 ? notes.join(" · ") : "quiet");
     if (lines.length === 0) return undefined;

@@ -31,6 +31,8 @@ export interface TelemetryEvent {
   };
   thresholds?: { skill?: number; risk?: number; code?: number };
   skipReason?: "short-prompt" | "no-questions";
+  /** Skill-router only: whether the AGENTS.md workflow index rode along in state. */
+  contextIncluded?: boolean;
   toolCallId?: string;
   originatingToolCallId?: string;
   proxy?: "read-after-suggestion" | "edit-after-finding";

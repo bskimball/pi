@@ -112,7 +112,10 @@ Numeric values are clamped to their ranges. Each enabled evaluation is chained t
 the turn's abort signal and bounded by that feature's `deadlineMs`. A timeout, HTTP
 error, or malformed answer fails open: no advisory is added and the turn continues.
 Prompts shorter than 24 characters are not evaluated; longer prompt text is capped
-at 8,000 characters before it is sent to Jev.
+at 8,000 characters before it is sent to Jev. The skill router additionally appends
+up to 1,500 characters of project workflow index (the host AGENTS.md skills table).
+Telemetry records `contextIncluded` on skill-router evaluations so the before/after
+mix of bare vs. context-carrying calls is measurable in `pi-jev.jsonl`.
 
 All output is advisory. These features do not block or gate work, load a skill,
 revert an edit, dispatch a worker, or switch a model.
@@ -140,9 +143,16 @@ path starts or steers an extra model turn.
 ### Skill router
 
 The skill router (`internal/skill-router.ts`) runs on `before_agent_start`. It sends
-the user prompt and discovered skill catalog as one Choice question: each skill's
-description is an option, with `none_needed` reserved for requests that have no
-clear match. If a real skill wins with probability at or above `threshold`, the extension adds
+the user prompt **plus the host project's workflow index** (the `### Skills`
+table from the deepest loaded AGENTS.md context file, capped at 1,500 chars) as
+one Choice question: each skill's description is an option, with `none_needed`
+reserved for requests that have no clear match. A bare prompt often underdetermines
+the match — "anything I missed work-wise" names none of mail, calendar, or Teams,
+while the host table maps those workflows to `m365`. The catalog stays the options;
+the index is state, not a second vote. If no context file declares the table, routing
+falls back to the bare prompt exactly as before. The routing advisory's guard Nouls
+on the same call still see only the bare prompt. If a real skill wins with probability
+at or above `threshold`, the extension adds
 one model-visible `Jev suggestion` custom message naming the match. The lead still
 decides whether to read and use that skill; nothing is loaded automatically.
 
