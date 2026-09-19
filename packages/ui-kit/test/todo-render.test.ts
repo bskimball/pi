@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 const { dockClickResult, installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
+const { formatTranscriptTail } = await import("@pi/ui-kit/internal/todo/peek-tool-format.ts");
 const { isAgentWorkspaceOpen, publishDockAgents, resetDockAgents } = await import(
   "@pi/ui-kit/internal/todo/fleet-listen.ts"
 );
@@ -2465,6 +2466,136 @@ describe("agents tab in all modes with selection and peek", () => {
     const fallback = renderPeekBody(extractedBg, 40, item, { transcript, maxLines: 8 });
     assert.equal(fallback.length, 8);
     assert.ok(fallback.every((row) => safeVisibleWidth(row) === 40));
+  });
+
+  it("renders peek rows without background escape sequences", () => {
+    const item = worker({ lifecycle: "running" });
+    const bgTheme = {
+      fg: (_key: string, text: string) => text,
+      bg: (key: string, text: string) => (key === "customMessageBg" ? `\x1b[48;5;53m${text}\x1b[49m` : text),
+    };
+    for (const width of [20, 40, 80]) {
+      const lines = renderPeekBody(bgTheme, width, item, { transcript: ["worker: active"], maxLines: 10 });
+      assert.equal(lines.length, 10);
+      assert.ok(lines.every((row: string) => safeVisibleWidth(row) === width), `width ${width}`);
+      assert.ok(lines.every((row: string) => !row.includes("\x1b[48;5;53m")), "no background escape sequence");
+    }
+  });
+
+  it("insets peek content so no row starts flush at column 0 when width allows a gutter", () => {
+    const item = worker({ lifecycle: "running" });
+    for (const width of [40, 80]) {
+      const lines = renderPeekBody(theme, width, item, {
+        transcript: ["worker: reading file", "worker: editing file"],
+        maxLines: 12,
+      });
+      for (const line of lines) {
+        if (line.trim().length > 0) {
+          assert.ok(line.startsWith(" "), "non-empty content row must start with leading gutter space");
+        }
+      }
+    }
+  });
+
+  it("formats transcript tail with tool arguments and outcome details", () => {
+    const jsonl = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_read_1",
+              name: "read",
+              arguments: { path: "src/index.ts", offset: 10, limit: 40 },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId: "call_read_1",
+          toolName: "read",
+          isError: false,
+          details: { contentLength: 2400 },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_bash_1",
+              name: "bash",
+              arguments: { command: "npm test" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId: "call_bash_1",
+          toolName: "bash",
+          isError: false,
+          details: { exitCode: 0 },
+        },
+      }),
+    ].join("\n") + "\n";
+
+    const tail = formatTranscriptTail(jsonl);
+    assert.equal(tail.length, 2);
+    assert.match(tail[0]!, /worker: tool read src\/index\.ts:10\+40 · 2\.4k chars/);
+    assert.match(tail[1]!, /worker: tool bash npm test · exit 0/);
+  });
+
+  it("distinctly marks and styles errored tool results", () => {
+    const jsonl = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_fail_1",
+              name: "bash",
+              arguments: { command: "npm run test:broken" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId: "call_fail_1",
+          toolName: "bash",
+          isError: true,
+          content: [{ type: "text", text: "FAIL: syntax error in test" }],
+        },
+      }),
+    ].join("\n") + "\n";
+
+    const tail = formatTranscriptTail(jsonl);
+    assert.equal(tail.length, 1);
+    assert.match(tail[0]!, /tool bash npm run test:broken · FAIL: syntax error in test ×/);
+
+    const ansiTheme = {
+      fg: (key: string, text: string) => (key === "error" ? `\x1b[31m${text}\x1b[39m` : text),
+      bg: (_key: string, text: string) => text,
+    };
+    const rendered = renderPeekBody(ansiTheme, 80, worker({ lifecycle: "running" }), {
+      transcript: tail,
+      maxLines: 8,
+    });
+    assert.match(rendered.join("\n"), /\x1b\[31m.*syntax error.*×.*\x1b\[39m/);
   });
 });
 

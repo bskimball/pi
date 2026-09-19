@@ -610,20 +610,7 @@ function paintPeekRow(theme: StatusTheme, width: number, line: string): string {
   if (width <= 0) return "";
   const clipped = safeTruncateToWidth(line, width);
   const fill = " ".repeat(Math.max(0, width - safeVisibleWidth(clipped)));
-  const plain = `${clipped}${fill}`;
-  if (typeof theme.bg !== "function") return plain;
-  try {
-    const open = theme.bg("customMessageBg", "\u0000").split("\u0000")[0] ?? "";
-    const painted = open
-      ? plain.replace(
-          /\x1b\[(?:0|49)m/g,
-          (reset) => `${reset}${open}`,
-        )
-      : plain;
-    return theme.bg("customMessageBg", painted);
-  } catch {
-    return plain;
-  }
+  return `${clipped}${fill}`;
 }
 
 function peekHeaderText(item: DockAgentItem, now: number): string {
@@ -684,7 +671,8 @@ function layoutPeekChrome(
   };
 }
 
-function peekTranscriptTone(line: string): "warning" | "text" | "muted" {
+function peekTranscriptTone(line: string): "warning" | "text" | "muted" | "error" {
+  if (line.includes(" \u00d7") || line.endsWith("\u00d7")) return "error";
   if (line.startsWith("lead:")) return "warning";
   if (line.startsWith("worker:")) return "text";
   return "muted";
@@ -700,7 +688,7 @@ function wrapTranscriptEntry(
   return wrapped.map((row) => safeTruncateToWidth(theme.fg(tone, row), width));
 }
 
-/** Transcript rows that fit under header + mission + directive + separator + footer. */
+/** Transcript rows that fit under header + mission + directive + rules + footer. */
 export function peekTranscriptBudget(
   width: number,
   item: DockAgentItem,
@@ -708,10 +696,14 @@ export function peekTranscriptBudget(
 ): number {
   const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
   if (width <= 0 || capped <= 3) return 0;
-  const chrome = layoutPeekChrome(item, width, capped);
+  const gutter = width >= 20 ? 1 : 0;
+  const innerWidth = Math.max(1, width - gutter * 2);
+  const chrome = layoutPeekChrome(item, innerWidth, capped);
+  const rules = capped >= 6 ? 2 : 1;
+  const vPad = capped >= 14 ? 1 : 0;
   return Math.max(
     0,
-    capped - (1 + chrome.missionRows.length + chrome.directiveRows.length + 1 + 1),
+    capped - (vPad * 2 + 1 + chrome.missionRows.length + chrome.directiveRows.length + rules + 1),
   );
 }
 
@@ -785,49 +777,75 @@ export function renderPeekBody(
   const now = options.now ?? Date.now();
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
   const maxLines = Math.max(3, Math.min(PEEK_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
-  const header = safeTruncateToWidth(
+
+  // Inset horizontal padding for content within the overlay pane
+  const gutter = width >= 20 ? 1 : 0;
+  const pad = " ".repeat(gutter);
+  const innerWidth = Math.max(1, width - gutter * 2);
+
+  const header = pad + safeTruncateToWidth(
     surface.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
-    width,
+    innerWidth,
   );
-  const controls = safeTruncateToWidth(
+  const controls = pad + safeTruncateToWidth(
     surface.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
-    width,
+    innerWidth,
   );
-  const chrome = layoutPeekChrome(item, width, maxLines);
+  const chrome = layoutPeekChrome(item, innerWidth, maxLines);
   const missionRows = chrome.missionRows.map((row) =>
-    safeTruncateToWidth(surface.fg("text", row), width),
+    pad + safeTruncateToWidth(surface.fg("text", row), innerWidth),
   );
   const directiveTone = item.directive?.queued ? "warning" : "text";
   const directiveRows = chrome.directiveRows.map((row) =>
-    safeTruncateToWidth(surface.fg(directiveTone, row), width),
+    pad + safeTruncateToWidth(surface.fg(directiveTone, row), innerWidth),
   );
-  const used = 1 + missionRows.length + directiveRows.length + 1 + 1;
+  const rules = maxLines >= 6 ? 2 : 1;
+  const vPad = maxLines >= 14 ? 1 : 0;
+  const used = vPad * 2 + 1 + missionRows.length + directiveRows.length + rules + 1;
   const bodyBudget = Math.max(0, maxLines - used);
-  const separator = safeTruncateToWidth(
-    surface.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
-    width,
+  const topRule = pad + safeTruncateToWidth(
+    surface.fg("borderMuted", "\u2500".repeat(innerWidth)),
+    innerWidth,
   );
-  const lines = [header, ...missionRows, ...directiveRows];
+  const bottomRule = pad + safeTruncateToWidth(
+    surface.fg("borderMuted", "\u2500".repeat(innerWidth)),
+    innerWidth,
+  );
+
+  const lines: string[] = [];
+  if (vPad > 0) lines.push("");
+  lines.push(header, ...missionRows, ...directiveRows);
   if (maxLines <= 3) {
     if (maxLines >= 3) lines.push(controls);
     const padded = lines.slice(0, maxLines);
     while (padded.length < maxLines) padded.push("");
     return padded.map((row) => paintPeekRow(surface, width, row));
   }
-  lines.push(separator);
+  lines.push(topRule);
   const rawTranscript = options.transcript ?? [];
   if (bodyBudget > 0) {
     if (!rawTranscript.length) {
-      lines.push(safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), width));
+      lines.push(pad + safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), innerWidth));
     } else {
-      const wrapped = layoutPeekTranscript(surface, width, rawTranscript);
+      const wrapped = layoutPeekTranscript(surface, innerWidth, rawTranscript);
       const windowed = peekTranscriptWindow(wrapped, bodyBudget, options.scrollOffset);
-      if (windowed.lines.length) lines.push(...windowed.lines);
-      else lines.push(safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), width));
+      if (windowed.lines.length) {
+        for (const row of windowed.lines) {
+          lines.push(pad + row);
+        }
+      } else {
+        lines.push(pad + safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), innerWidth));
+      }
     }
   }
-  while (lines.length < maxLines - 1) lines.push("");
+  if (rules >= 2) {
+    while (lines.length < maxLines - 2 - vPad) lines.push("");
+    lines.push(bottomRule);
+  } else {
+    while (lines.length < maxLines - 1 - vPad) lines.push("");
+  }
   lines.push(controls);
+  if (vPad > 0) lines.push("");
   const padded = lines.slice(0, maxLines);
   while (padded.length < maxLines) padded.push("");
   return padded.map((row) => paintPeekRow(surface, width, row));
