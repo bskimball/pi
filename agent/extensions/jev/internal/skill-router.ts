@@ -5,6 +5,8 @@ import type { JevAnswer, JevQuestion } from "./client.ts";
 export interface SkillCandidate {
   name: string;
   description: string;
+  /** Exact discovered SKILL.md path, retained only for in-memory follow-through matching. */
+  filePath: string;
 }
 
 export const NONE_OPTION = "none_needed";

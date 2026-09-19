@@ -117,28 +117,33 @@ at 8,000 characters before it is sent to Jev.
 All output is advisory. These features do not block or gate work, load a skill,
 revert an edit, dispatch a worker, or switch a model.
 
-Because these calls are made by hooks rather than by the `jev` tool, they produce
-no tool receipt. They report instead through a footer status line:
+Automatic matches are shown as truthful custom-message/custom-entry receipts labeled
+**Jev suggestion**; they are not fake tool calls. Turn-level skill/risk suggestions
+are one model-visible custom message, replacing the former duplicate system-prompt
+suffix while preserving the same advisory text exactly once. Code findings remain
+one annotation on the originating tool result; their receipt is a display-only
+custom entry and therefore adds no model context. No-match results stay quiet except
+for the footer:
 
 ```text
 jev skill=writing-for-agents · 3 guards · 4 calls, 3,190 tok
 jev judge 2 on route-strategy.ts · 5 calls, 4,102 tok
-jev quiet · 6 calls, 4,986 tok
+jev no findings · 6 calls, 4,986 tok
 ```
 
-The leading note describes the most recent evaluation; `quiet` means the call ran
-and nothing crossed threshold. The counts are per-session totals for automatic
-calls only, so the cost of these features stays visible without a receipt. The
-footer is cosmetic: a host without a status surface, such as a headless subagent,
-is tolerated and never affects the turn.
+The counts are per-session totals for automatic calls only. Session start clears
+counts, correlations, and the footer. The footer and receipt chrome are cosmetic;
+when custom chrome is disabled, turn suggestions use Pi's bounded plain custom-message
+fallback and code entries use the extension's bounded plain entry renderer. Neither
+path starts or steers an extra model turn.
 
 ### Skill router
 
 The skill router (`internal/skill-router.ts`) runs on `before_agent_start`. It sends
 the user prompt and discovered skill catalog as one Choice question: each skill's
 description is an option, with `none_needed` reserved for requests that have no
-clear match. If a real skill wins with probability at or above `threshold`, the
-extension appends one line naming the match to the system prompt. The lead still
+clear match. If a real skill wins with probability at or above `threshold`, the extension adds
+one model-visible `Jev suggestion` custom message naming the match. The lead still
 decides whether to read and use that skill; nothing is loaded automatically.
 
 Skills whose frontmatter sets `disable-model-invocation: true` are excluded and can
@@ -178,13 +183,79 @@ The clean-code judge (`internal/code-judge.ts`) runs after a successful `edit` o
 | `naming_reveals_intent` | good | `noul <= 1 - threshold` |
 | `single_responsibility` | good | `noul <= 1 - threshold` |
 
-Findings are combined into one reviewer-hint line on the tool result. No findings
-means no annotation.
+Findings are combined into one reviewer-hint line on the tool result and displayed
+as a `Jev suggestion` receipt. No findings means no annotation or receipt; the footer
+says `no findings`.
 
 The judge skips prose (`.md`, `.mdx`, `.txt`, `.rst`, `.adoc`), JSON, YAML, TOML,
 lockfiles, `.min.js`, `.d.ts`, paths under `node_modules`, and all tests: filenames
 matching `*.test.*` or `*.spec.*`, and paths containing `test/`, `tests/`, or
 `__tests__/`. Test scaffolding would otherwise create avoidable false positives.
+
+### Local evaluation telemetry
+
+Automatic evaluations append bounded, rotating JSONL metadata to
+`<agent-dir>/logs/pi-jev.jsonl` (`pi-jev.jsonl.1` is the previous segment). The
+active segment rotates near 1 MB. Logging fails soft and stores no prompts, code,
+patches, error bodies, credentials, or absolute target paths. Every record includes
+a stable `workspaceId`: the first 24 hexadecimal characters of SHA-256 over the
+normalized workspace cwd (case-folded on Windows). The cwd itself is never logged.
+Records otherwise contain only timestamps, ephemeral session/evaluation/suggestion
+IDs, sources, outcome (`success`, `no-match`, `timeout`, `error`, `cancelled`, or
+known `skipped`), elapsed
+milliseconds, available token counts, configured thresholds, skill decision reason
+(`selected`, `none_needed`, `below_threshold`, or `unusable`), bounded winner key and
+probability, candidate count, selected skill/finding IDs, known skip reason, and
+correlation tool-call IDs.
+
+`read-after-suggestion` means a later successful `read` targeted the exact discovered
+`SKILL.md`. `edit-after-finding` means a later successful edit/write targeted the
+same file as a finding. Only the latest pending suggestion per target is eligible,
+so one action never credits older superseded suggestions. These are follow-through
+proxies only: they do **not** prove causal adoption, correctness, or improvement.
+
+Summarize the active and rotated records without changing them. Pass the target
+workspace cwd as the first argument (for example, run this from a shell with
+`node - "$(pwd)"` to scope to the current workspace):
+
+```bash
+node - "$(pwd)" <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const targetCwd = path.resolve(process.argv[2] || process.cwd());
+const normalized = targetCwd.split(path.sep).join("/");
+const canonical = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+const workspaceId = crypto.createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 24);
+const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+const files = ["pi-jev.jsonl.1", "pi-jev.jsonl"]
+  .map((name) => path.join(agentDir, "logs", name))
+  .filter(fs.existsSync);
+const rows = files.flatMap((file) => fs.readFileSync(file, "utf8")
+  .split(/\r?\n/).filter(Boolean).map(JSON.parse))
+  .filter((row) => row.workspaceId === workspaceId);
+const evaluations = rows.filter((row) => row.event === "evaluation");
+const counts = (values) => Object.fromEntries([...new Set(values)].sort()
+  .map((value) => [value, values.filter((item) => item === value).length]));
+const timed = evaluations.filter((row) => Number.isFinite(row.elapsedMs));
+
+console.log({
+  workspaceId,
+  files: files.length,
+  events: rows.length,
+  outcomes: counts(evaluations.map((row) => row.status)),
+  skillDecisionReasons: counts(evaluations.map((row) => row.skillDecision?.reason).filter(Boolean)),
+  selected: rows.filter((row) => row.event === "suggestion" && row.skill).length,
+  selectedThenRead: rows.filter((row) => row.event === "read-after-suggestion").length,
+  found: rows.filter((row) => row.event === "suggestion" && row.source === "code-judge" && row.findings?.length).length,
+  foundThenEdited: rows.filter((row) => row.event === "edit-after-finding").length,
+  avgLatencyMs: timed.length ? Math.round(timed.reduce((sum, row) => sum + row.elapsedMs, 0) / timed.length) : 0,
+  tokens: evaluations.reduce((sum, row) => sum + (row.inputTokens || 0) + (row.outputTokens || 0), 0),
+});
+NODE
+```
 
 ### Design and measured checks
 
