@@ -1,6 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { evaluateJev } from "./internal/client.ts";
+import type { JevAnswer, JevQuestion } from "./internal/client.ts";
+import {
+  buildJudgeQuestions,
+  collectFindings,
+  formatJudgeAdvisory,
+  isJudgeableFile,
+  truncateForJudging,
+} from "./internal/code-judge.ts";
+import { loadFeatureConfig } from "./internal/feature-config.ts";
 import {
   noteWait,
   pollAdvisory,
@@ -8,10 +17,51 @@ import {
   readWaitResult,
   reportStatusAdvisory,
 } from "./internal/lifecycle.ts";
+import {
+  buildRoutingQuestions,
+  collectGuardFindings,
+  formatRoutingAdvisory,
+} from "./internal/routing-advisory.ts";
+import {
+  buildSkillQuestion,
+  formatSkillAdvisory,
+  resolveSkillChoice,
+  type SkillCandidate,
+} from "./internal/skill-router.ts";
 
 const MAX_CONTENT_CHARS = 30_000;
 /** Caps classifier latency added to the task_wait result path (evaluateJev's own cap is 30s). */
 const CLASSIFIER_DEADLINE_MS = 2_500;
+/** Choice needs at least one real skill beside none_needed, and client.ts caps options at 32. */
+const MAX_ROUTED_SKILLS = 31;
+/** Below this, a prompt carries too little signal to classify; skips the call entirely. */
+const MIN_PROMPT_CHARS = 24;
+/** Bounds the prompt text sent to Jev. Well under the client's 64,000-char request cap. */
+const MAX_PROMPT_CHARS = 8_000;
+
+/**
+ * Run one advisory evaluation under its own deadline, chained to the turn's signal.
+ * Returns null on any failure: advisory features never interrupt a turn.
+ */
+async function evaluateAdvisory(
+  state: string,
+  questions: Record<string, JevQuestion>,
+  deadlineMs: number,
+  parent: AbortSignal | undefined,
+  modelRegistry: Parameters<typeof evaluateJev>[2],
+): Promise<Record<string, JevAnswer> | null> {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), deadlineMs);
+  try {
+    const signal = parent ? AbortSignal.any([parent, deadline.signal]) : deadline.signal;
+    const response = await evaluateJev({ state, questions }, signal, modelRegistry);
+    return response.answers;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const CriterionSchema = Type.Union([
   Type.String(),
@@ -138,7 +188,92 @@ export default function (pi: ExtensionAPI): void {
     },
   });
 
+  // Skill routing and the routing advisory share one call: Jev evaluates every
+  // question in a request in parallel, so the second feature is near-free once
+  // the first has paid the round trip.
+  pi.on("before_agent_start", async (event, ctx) => {
+    const config = loadFeatureConfig();
+    if (!config.skillRouter.enabled && !config.routingAdvisory.enabled) return undefined;
+
+    const prompt = event.prompt?.trim() ?? "";
+    if (prompt.length < MIN_PROMPT_CHARS) return undefined;
+    const state = prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS) : prompt;
+
+    // Skills that opt out of model invocation are never auto-suggested.
+    const candidates: SkillCandidate[] = (event.systemPromptOptions?.skills ?? [])
+      .filter((skill) => !skill.disableModelInvocation && skill.name && skill.description)
+      .map((skill) => ({ name: skill.name, description: skill.description }))
+      .slice(0, MAX_ROUTED_SKILLS);
+
+    const questions: Record<string, JevQuestion> = Object.create(null);
+    const routeSkills = config.skillRouter.enabled && candidates.length > 0;
+    if (routeSkills) {
+      try {
+        questions.skill = buildSkillQuestion(candidates);
+      } catch {
+        // A malformed catalog disables routing for this turn, never the turn itself.
+      }
+    }
+    if (config.routingAdvisory.enabled) Object.assign(questions, buildRoutingQuestions());
+    if (Object.keys(questions).length === 0) return undefined;
+
+    const deadlineMs = Math.max(config.skillRouter.deadlineMs, config.routingAdvisory.deadlineMs);
+    const answers = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
+    if (!answers) return undefined;
+
+    const lines: string[] = [];
+    if (questions.skill) {
+      const decision = resolveSkillChoice(answers.skill, candidates, config.skillRouter.threshold);
+      if (decision.reason === "selected" && decision.skill) {
+        lines.push(formatSkillAdvisory(decision.skill, decision.probability));
+      }
+    }
+    if (config.routingAdvisory.enabled) {
+      const advisory = formatRoutingAdvisory(collectGuardFindings(answers, config.routingAdvisory.threshold));
+      if (advisory) lines.push(advisory);
+    }
+    if (lines.length === 0) return undefined;
+
+    return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n")}` };
+  });
+
   pi.on("tool_result", async (event, ctx) => {
+    const config = loadFeatureConfig();
+    if (
+      config.codeJudge.enabled
+      && !event.isError
+      && (event.toolName === "edit" || event.toolName === "write")
+    ) {
+      const path = typeof event.input?.path === "string" ? event.input.path : "";
+      if (path && isJudgeableFile(path)) {
+        // write carries full content; edit carries only a unified patch in details.
+        const patch = (event.details as { patch?: unknown } | undefined)?.patch;
+        const source = typeof event.input?.content === "string"
+          ? event.input.content
+          : typeof patch === "string" ? patch : "";
+        if (source.trim().length > 0) {
+          const answers = await evaluateAdvisory(
+            `file: ${path}\n\n${truncateForJudging(source, config.codeJudge.maxChars)}`,
+            buildJudgeQuestions(),
+            config.codeJudge.deadlineMs,
+            ctx.signal,
+            ctx.modelRegistry,
+          );
+          const hint = answers
+            ? formatJudgeAdvisory(path, collectFindings(answers, config.codeJudge.threshold))
+            : null;
+          if (hint) {
+            return {
+              content: [
+                ...(Array.isArray(event.content) ? event.content : []),
+                { type: "text" as const, text: hint },
+              ],
+            };
+          }
+        }
+      }
+    }
+
     const observation = readWaitObservation(event.toolName, event.content, event.details);
     if (!observation) return undefined;
 

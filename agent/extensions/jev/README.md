@@ -82,3 +82,119 @@ client unwraps it and rejects non-Completed states without polling. A
 ## Lifecycle hook
 
 A `tool_result` listener watches every `task_wait` result. It never blocks or fails a wait. Three consecutive timeout heartbeats on the same worker+generation get a poll note (a later settle resets the count). Missing or invalid `reportStatus` on a settled body gets a one-line deterministic note. When a schema-valid report is long enough and a mission label is present, an extra Jev noul pair (`concrete_outcome`, `matches_mission`) may annotate a clearly empty or off-topic reply (`noul < 0.3`); that call is capped at 2.5s and errors are swallowed. Classifier calls incur extra Jev usage.
+
+## Opt-in advisories
+
+Three additional advisory features are available. All are disabled by default, so
+an existing installation makes no extra API calls and changes no behavior until a
+feature is enabled in the same `jev.json` used by [Setup](#setup):
+
+```json
+{
+  "skillRouter":     { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 },
+  "codeJudge":       { "enabled": true, "threshold": 0.8, "deadlineMs": 2500, "maxChars": 16000 },
+  "routingAdvisory": { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 }
+}
+```
+
+The loader in `internal/feature-config.ts` never throws. A missing, unreadable, or
+malformed file silently produces the all-disabled defaults. Invalid fields fall
+back individually without discarding valid siblings in the same block.
+
+| Field | Range | Default |
+|---|---:|---:|
+| `enabled` | boolean | `false` |
+| `threshold` | `0.5`–`1` | `0.8` |
+| `deadlineMs` | `250`–`10000` | `2500` |
+| `maxChars` (code judge only) | `1000`–`60000` | `16000` |
+
+Numeric values are clamped to their ranges. Each enabled evaluation is chained to
+the turn's abort signal and bounded by that feature's `deadlineMs`. A timeout, HTTP
+error, or malformed answer fails open: no advisory is added and the turn continues.
+Prompts shorter than 24 characters are not evaluated; longer prompt text is capped
+at 8,000 characters before it is sent to Jev.
+
+All output is advisory. These features do not block or gate work, load a skill,
+revert an edit, dispatch a worker, or switch a model.
+
+### Skill router
+
+The skill router (`internal/skill-router.ts`) runs on `before_agent_start`. It sends
+the user prompt and discovered skill catalog as one Choice question: each skill's
+description is an option, with `none_needed` reserved for requests that have no
+clear match. If a real skill wins with probability at or above `threshold`, the
+extension appends one line naming the match to the system prompt. The lead still
+decides whether to read and use that skill; nothing is loaded automatically.
+
+Skills whose frontmatter sets `disable-model-invocation: true` are excluded and can
+never be suggested. The catalog is capped at 31 skills because the client allows 32
+Choice options and one is reserved for `none_needed`.
+
+### Routing advisory
+
+The routing advisory (`internal/routing-advisory.ts`) asks four independent Noul
+questions over the same turn:
+
+- `crosses_trust_boundary`
+- `weakens_safety_control`
+- `sounds_easier_than_it_is`
+- `scope_is_underspecified`
+
+Guards at or above `threshold` are combined into one advisory line. They report
+stakes only; they do not recommend an agent or model.
+
+There is deliberately no complexity Score. On the request “just add a quick flag
+to skip the confirmation prompt on destructive bash commands,” a complexity Score
+returned `1.29` (“routine”), which could encourage routing to a cheaper model, while
+the guard Nouls returned `0.95`, `0.97`, and `0.81`. Difficulty and stakes are
+orthogonal, so this feature reports stakes instead of grading difficulty.
+
+### Clean-code judge
+
+The clean-code judge (`internal/code-judge.ts`) runs after a successful `edit` or
+`write` result for a judgeable code file. It sends file content, truncated at
+`maxChars` on a newline boundary, with five Noul questions:
+
+| Question | Polarity | Fires when |
+|---|---|---:|
+| `speculative_abstraction` | bad | `noul >= threshold` |
+| `dead_or_unreachable` | bad | `noul >= threshold` |
+| `duplicated_logic` | bad | `noul >= threshold` |
+| `naming_reveals_intent` | good | `noul <= 1 - threshold` |
+| `single_responsibility` | good | `noul <= 1 - threshold` |
+
+Findings are combined into one reviewer-hint line on the tool result. No findings
+means no annotation.
+
+The judge skips prose (`.md`, `.mdx`, `.txt`, `.rst`, `.adoc`), JSON, YAML, TOML,
+lockfiles, `.min.js`, `.d.ts`, paths under `node_modules`, and all tests: filenames
+matching `*.test.*` or `*.spec.*`, and paths containing `test/`, `tests/`, or
+`__tests__/`. Test scaffolding would otherwise create avoidable false positives.
+
+### Design and measured checks
+
+The routing advisory and clean-code judge use Nouls only. In a matched synthetic
+pair, over-engineered and clean code separated at `0.93`/`0.87` versus
+`0.29`/`0.09` on the relevant Nouls, while the equivalent Score had confidence
+`0.51` and `0.25`. Those Score results were too uncertain to threshold on.
+
+When both per-turn features are enabled, the skill router and routing advisory share
+one Jev call. Jev evaluates all questions in a request in parallel, so the second
+feature adds questions without adding another network round trip.
+
+Live spot checks with `jev-1.13.0` produced these results:
+
+- “Just add a quick flag to skip the confirmation prompt on destructive bash
+  commands so I stop getting interrupted.” selected `none_needed` at `0.95`, so
+  the skill router stayed silent. The routing advisory reported three guards at
+  `0.95`, `0.97`, and `0.81`; `scope_is_underspecified` at `0.70` stayed below the
+  default threshold.
+- An over-engineered factory/strategy sample reported `speculative_abstraction` at
+  `0.93` and `dead_or_unreachable` at `0.87`. `duplicated_logic` at `0.45` and
+  `single_responsibility` at `0.53` did not fire. The clean single-function
+  equivalent produced no annotation.
+- Each call used roughly 700–800 input tokens.
+
+These are a handful of spot checks on synthetic samples, not a calibration study.
+Evaluate thresholds against the intended workload and consequences before relying
+on them operationally.

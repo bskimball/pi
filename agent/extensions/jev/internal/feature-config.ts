@@ -1,0 +1,82 @@
+// Fail-closed opt-in settings for Jev advisory features.
+//
+// The file is read on every call so edits take effect without module state. Missing,
+// unreadable, or malformed configuration enables nothing; valid fields are retained
+// independently when neighboring fields are invalid.
+
+import { readFileSync } from "node:fs";
+import { getJevConfigPath } from "./client.ts";
+
+export interface FeatureSettings {
+  enabled: boolean;
+  threshold: number;
+  deadlineMs: number;
+}
+
+export interface CodeJudgeSettings extends FeatureSettings {
+  maxChars: number;
+}
+
+export interface JevFeatureConfig {
+  skillRouter: FeatureSettings;
+  codeJudge: CodeJudgeSettings;
+  routingAdvisory: FeatureSettings;
+}
+
+export const FEATURE_DEFAULTS: JevFeatureConfig = {
+  skillRouter: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
+  codeJudge: { enabled: false, threshold: 0.8, deadlineMs: 2500, maxChars: 16000 },
+  routingAdvisory: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, value))
+    : fallback;
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)
+    ? Math.min(maximum, Math.max(minimum, value))
+    : fallback;
+}
+
+function featureSettings(value: unknown, defaults: FeatureSettings): FeatureSettings {
+  const block = isRecord(value) ? value : Object.create(null) as Record<string, unknown>;
+  return {
+    enabled: typeof block.enabled === "boolean" ? block.enabled : defaults.enabled,
+    threshold: boundedNumber(block.threshold, defaults.threshold, 0.5, 1),
+    deadlineMs: boundedInteger(block.deadlineMs, defaults.deadlineMs, 250, 10_000),
+  };
+}
+
+function defaults(): JevFeatureConfig {
+  return {
+    skillRouter: { ...FEATURE_DEFAULTS.skillRouter },
+    codeJudge: { ...FEATURE_DEFAULTS.codeJudge },
+    routingAdvisory: { ...FEATURE_DEFAULTS.routingAdvisory },
+  };
+}
+
+export function loadFeatureConfig(): JevFeatureConfig {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(getJevConfigPath(), "utf8"));
+    if (!isRecord(parsed)) return defaults();
+    const codeJudge = featureSettings(parsed.codeJudge, FEATURE_DEFAULTS.codeJudge);
+    const codeJudgeBlock = isRecord(parsed.codeJudge) ? parsed.codeJudge : Object.create(null) as Record<string, unknown>;
+    return {
+      skillRouter: featureSettings(parsed.skillRouter, FEATURE_DEFAULTS.skillRouter),
+      codeJudge: {
+        ...codeJudge,
+        maxChars: boundedInteger(codeJudgeBlock.maxChars, FEATURE_DEFAULTS.codeJudge.maxChars, 1000, 60_000),
+      },
+      routingAdvisory: featureSettings(parsed.routingAdvisory, FEATURE_DEFAULTS.routingAdvisory),
+    };
+  } catch {
+    return defaults();
+  }
+}
