@@ -167,7 +167,7 @@ export default function (pi: ExtensionAPI): void {
     promptGuidelines: [
       "Reach for jev when a decision repeats, needs a threshold, or should stay consistent across items: routing to a handler, ranking candidates, triaging input, extracting a labeled field, or verifying that output meets a stated requirement. Prefer it over an ad-hoc LLM prompt-and-parse step for the same judgment.",
       "Write criteria a stranger could apply without extra context, and batch independent questions over one state into a single call rather than issuing several.",
-      "Prefer Noul for yes/no judgments; it discriminates far better than Score, whose confidence is often too flat to threshold on. Use Choice when exactly one option must win.",
+      "Use Noul for yes/no judgments, Choice when exactly one option must win, and Score for ranking on an explicit labeled scale.",
       "Treat the result as evidence, not a verdict: act on clear signal, and on low confidence or a noul near 0.5 gather more evidence or ask, rather than proceeding automatically.",
     ],
     parameters: Type.Object({
