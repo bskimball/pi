@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { basename } from "node:path";
 import { Type } from "typebox";
 import { evaluateJev } from "./internal/client.ts";
 import type { JevAnswer, JevQuestion } from "./internal/client.ts";
@@ -39,6 +40,33 @@ const MIN_PROMPT_CHARS = 24;
 /** Bounds the prompt text sent to Jev. Well under the client's 64,000-char request cap. */
 const MAX_PROMPT_CHARS = 8_000;
 
+interface AdvisoryResult {
+  answers: Record<string, JevAnswer>;
+  usage: { input_tokens: number; output_tokens: number };
+}
+
+/** Footer key for the ambient advisory status line. */
+const STATUS_KEY = "jev";
+
+/**
+ * Tokens spent by automatic advisories this session. These calls are not tool
+ * calls, so they have no receipt of their own to report usage on.
+ */
+let advisoryCalls = 0;
+let advisoryTokens = 0;
+
+/** Record one automatic call and publish the running total to the footer. */
+function publishStatus(ctx: { ui?: { setStatus?: (key: string, text: string | undefined) => void } }, result: AdvisoryResult, note: string): void {
+  advisoryCalls += 1;
+  advisoryTokens += result.usage.input_tokens + result.usage.output_tokens;
+  try {
+    const label = advisoryCalls === 1 ? "call" : "calls";
+    ctx.ui?.setStatus?.(STATUS_KEY, `jev ${note} · ${advisoryCalls} ${label}, ${advisoryTokens.toLocaleString()} tok`);
+  } catch {
+    // The footer is cosmetic; never let it affect a turn.
+  }
+}
+
 /**
  * Run one advisory evaluation under its own deadline, chained to the turn's signal.
  * Returns null on any failure: advisory features never interrupt a turn.
@@ -49,13 +77,13 @@ async function evaluateAdvisory(
   deadlineMs: number,
   parent: AbortSignal | undefined,
   modelRegistry: Parameters<typeof evaluateJev>[2],
-): Promise<Record<string, JevAnswer> | null> {
+): Promise<AdvisoryResult | null> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(), deadlineMs);
   try {
     const signal = parent ? AbortSignal.any([parent, deadline.signal]) : deadline.signal;
     const response = await evaluateJev({ state, questions }, signal, modelRegistry);
-    return response.answers;
+    return { answers: response.answers, usage: response.usage };
   } catch {
     return null;
   } finally {
@@ -233,20 +261,27 @@ export default function (pi: ExtensionAPI): void {
     if (Object.keys(questions).length === 0) return undefined;
 
     const deadlineMs = Math.max(config.skillRouter.deadlineMs, config.routingAdvisory.deadlineMs);
-    const answers = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
-    if (!answers) return undefined;
+    const result = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
+    if (!result) return undefined;
 
     const lines: string[] = [];
+    const notes: string[] = [];
     if (questions.skill) {
-      const decision = resolveSkillChoice(answers.skill, candidates, config.skillRouter.threshold);
+      const decision = resolveSkillChoice(result.answers.skill, candidates, config.skillRouter.threshold);
       if (decision.reason === "selected" && decision.skill) {
         lines.push(formatSkillAdvisory(decision.skill, decision.probability));
+        notes.push(`skill=${decision.skill.name}`);
       }
     }
     if (config.routingAdvisory.enabled) {
-      const advisory = formatRoutingAdvisory(collectGuardFindings(answers, config.routingAdvisory.threshold));
-      if (advisory) lines.push(advisory);
+      const findings = collectGuardFindings(result.answers, config.routingAdvisory.threshold);
+      const advisory = formatRoutingAdvisory(findings);
+      if (advisory) {
+        lines.push(advisory);
+        notes.push(`${findings.length} guard${findings.length === 1 ? "" : "s"}`);
+      }
     }
+    publishStatus(ctx, result, notes.length > 0 ? notes.join(" · ") : "quiet");
     if (lines.length === 0) return undefined;
 
     return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n")}` };
@@ -267,16 +302,19 @@ export default function (pi: ExtensionAPI): void {
           ? event.input.content
           : typeof patch === "string" ? patch : "";
         if (source.trim().length > 0) {
-          const answers = await evaluateAdvisory(
+          const result = await evaluateAdvisory(
             `file: ${path}\n\n${truncateForJudging(source, config.codeJudge.maxChars)}`,
             buildJudgeQuestions(),
             config.codeJudge.deadlineMs,
             ctx.signal,
             ctx.modelRegistry,
           );
-          const hint = answers
-            ? formatJudgeAdvisory(path, collectFindings(answers, config.codeJudge.threshold))
-            : null;
+          let hint: string | null = null;
+          if (result) {
+            const findings = collectFindings(result.answers, config.codeJudge.threshold);
+            hint = formatJudgeAdvisory(path, findings);
+            publishStatus(ctx, result, findings.length > 0 ? `judge ${findings.length} on ${basename(path)}` : "judge clean");
+          }
           if (hint) {
             return {
               content: [

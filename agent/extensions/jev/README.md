@@ -117,6 +117,21 @@ at 8,000 characters before it is sent to Jev.
 All output is advisory. These features do not block or gate work, load a skill,
 revert an edit, dispatch a worker, or switch a model.
 
+Because these calls are made by hooks rather than by the `jev` tool, they produce
+no tool receipt. They report instead through a footer status line:
+
+```text
+jev skill=writing-for-agents · 3 guards · 4 calls, 3,190 tok
+jev judge 2 on route-strategy.ts · 5 calls, 4,102 tok
+jev quiet · 6 calls, 4,986 tok
+```
+
+The leading note describes the most recent evaluation; `quiet` means the call ran
+and nothing crossed threshold. The counts are per-session totals for automatic
+calls only, so the cost of these features stays visible without a receipt. The
+footer is cosmetic: a host without a status surface, such as a headless subagent,
+is tolerated and never affects the turn.
+
 ### Skill router
 
 The skill router (`internal/skill-router.ts`) runs on `before_agent_start`. It sends
