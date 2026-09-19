@@ -126,7 +126,22 @@ export default function (pi: ExtensionAPI): void {
   pi.registerTool({
     name: "jev",
     label: "Jev Decision",
-    description: "Evaluate bounded text decisions with Choice, Score, or Noul. Use one question for a one-off classifier or batch independent questions over the same state. Advisory only: no generation, tool execution, or worker dispatch. Low confidence or noul near 0.5 requires more evidence or escalation, not automatic action.",
+    description: [
+      "Classify text against explicit criteria and return calibrated probabilities, using Choice (pick one option), Score (rank on a labeled scale), or Noul (probability a statement holds).",
+      "Use when a judgment must be consistent, thresholded, or applied the same way across many items: routing, ranking, triage, extraction, relevance, and verifying whether output actually satisfies a stated requirement.",
+      "Use it instead of writing a throwaway LLM prompt-and-parse step, and instead of eyeballing a repeated judgment call.",
+      "Batch independent questions over the same state in one call; they are evaluated together and cost one round trip.",
+      "Not for generation, summarization, code edits, search, or anything needing fresh facts — it only judges the state you pass in.",
+      "Advisory only: it dispatches nothing. Low confidence, or a noul near 0.5, means gather evidence or escalate, not act automatically.",
+    ].join(" "),
+    promptSnippet:
+      "Judge text against explicit criteria with calibrated probabilities (Choice/Score/Noul) for routing, ranking, triage, extraction, and verification.",
+    promptGuidelines: [
+      "Reach for jev when a decision repeats, needs a threshold, or should stay consistent across items: routing to a handler, ranking candidates, triaging input, extracting a labeled field, or verifying that output meets a stated requirement. Prefer it over an ad-hoc LLM prompt-and-parse step for the same judgment.",
+      "Write criteria a stranger could apply without extra context, and batch independent questions over one state into a single call rather than issuing several.",
+      "Prefer Noul for yes/no judgments; it discriminates far better than Score, whose confidence is often too flat to threshold on. Use Choice when exactly one option must win.",
+      "Treat the result as evidence, not a verdict: act on clear signal, and on low confidence or a noul near 0.5 gather more evidence or ask, rather than proceeding automatically.",
+    ],
     parameters: Type.Object({
       state: Type.String({ minLength: 1 }),
       questions: QuestionsSchema,
