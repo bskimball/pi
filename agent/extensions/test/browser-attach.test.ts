@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const { default: promptCommands } = await import("../prompt-commands.ts");
+import { registerBrowserAttachTool } from "../prompt-commands/featured-commands.ts";
 
 type ToolExecute = (
   id: string,
@@ -16,7 +16,7 @@ describe("browser_attach", () => {
     let tool: ToolExecute | undefined;
     let execArgs: string[] | undefined;
 
-    promptCommands({
+    registerBrowserAttachTool({
       registerTool(spec: { name: string; execute: ToolExecute }) {
         if (spec.name === "browser_attach") tool = spec.execute;
       },

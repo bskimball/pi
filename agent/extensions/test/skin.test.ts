@@ -7,21 +7,27 @@ import {
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
-  OBSERVATORY_MAX_LINES,
   SKIN_ENV_VAR,
-  TREE,
   activeSkinName,
-  buildTodoList,
   composerPromptGlyph,
-  installBuiltinReceipts,
-  intercomMessageLines,
-  noticeLines,
-  parseIntercomMessage,
-  renderObservatory,
-  renderTodoList,
-  safeVisibleWidth,
   skinGlyphs,
-} from "@pi/ui-kit";
+} from "../../../packages/ui-kit/internal/presentation/skin.ts";
+import { TREE } from "../../../packages/ui-kit/internal/presentation/ui-common.ts";
+import { safeVisibleWidth } from "../../../packages/ui-kit/internal/presentation/safe-text-layout.ts";
+import { installBuiltinReceipts } from "../../../packages/ui-kit/internal/presentation/builtin-receipts.ts";
+import {
+  intercomMessageLines,
+  parseIntercomMessage,
+} from "../../../packages/ui-kit/internal/presentation/intercom-receipt.ts";
+import { noticeLines } from "../../../packages/ui-kit/internal/presentation/notice-view.ts";
+import {
+  buildTodoList,
+  renderTodoList,
+} from "../../../packages/ui-kit/internal/todo/todo-view.ts";
+import {
+  OBSERVATORY_MAX_LINES,
+  renderObservatory,
+} from "../../../packages/ui-kit/observatory/observatory.ts";
 import { registerApexLanding } from "../apex/landing.ts";
 import { registerClaudeLanding } from "../claude/landing.ts";
 import { registerHalLanding } from "../hal/landing.ts";

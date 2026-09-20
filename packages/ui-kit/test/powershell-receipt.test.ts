@@ -6,18 +6,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 
-const {
+import {
   POWERSHELL_RECEIPT_TOOL,
   installPowerShellReceipts,
   powershellExecutableName,
   powershellOwnsPresentation,
   powershellReceiptArg,
   powershellReceiptRenderers,
-} = await import("@pi/ui-kit/internal/presentation/powershell-receipt.ts");
+} from "../internal/presentation/powershell-receipt.ts";
 
-const { getHeadlessReceiptState, HEADLESS_WRAPPER_VERSION } = await import(
-  "@pi/ui-kit/internal/presentation/headless-receipts.ts"
-);
+import {
+  getHeadlessReceiptState,
+  HEADLESS_WRAPPER_VERSION,
+} from "../internal/presentation/headless-receipts.ts";
 
 const theme = {
   fg: (_key: string, text: string) => text,

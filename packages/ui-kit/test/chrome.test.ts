@@ -4,7 +4,7 @@ import {
   UI_CHROME_ENV_VAR,
   UI_CHROME_LEGACY_ENV_VAR,
   uiChromeEnabled,
-} from "@pi/ui-kit";
+} from "../internal/presentation/presentation.ts";
 
 function withEnv(vars: Record<string, string | undefined>, run: () => void): void {
   const previous: Record<string, string | undefined> = {};

@@ -21,8 +21,8 @@ import {
   HAL_WORKING_MESSAGES,
   buildWorkingIndicator as buildHalWorkingIndicator,
 } from "../hal/working.ts";
-import { SKIN_ENV_VAR } from "@pi/ui-kit";
-import { safeVisibleWidth } from "@pi/ui-kit";
+import { SKIN_ENV_VAR } from "../../../packages/ui-kit/internal/presentation/skin.ts";
+import { safeVisibleWidth } from "../../../packages/ui-kit/internal/presentation/safe-text-layout.ts";
 
 function withSkin<T>(value: string | undefined, run: () => T): T {
   const previous = process.env[SKIN_ENV_VAR];

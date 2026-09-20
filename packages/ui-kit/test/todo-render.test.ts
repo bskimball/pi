@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
+import { resetUiKitInstallForTests } from "../install.ts";
+import { installUiHost } from "../host.ts";
+import { registerObservatoryLanding } from "../observatory/landing.ts";
 import {
   KeybindingsManager,
   TUI_KEYBINDINGS,
@@ -2641,7 +2644,6 @@ describe("installUiHost once-owner across skins", () => {
   it("registers shared tools and shortcuts on only the first pi", async () => {
     const previousSkin = process.env.PI_UI_SKIN;
     delete process.env.PI_UI_SKIN;
-    const { resetUiKitInstallForTests, installUiHost, registerObservatoryLanding } = await import("@pi/ui-kit");
     resetUiKitInstallForTests();
     const apex = mockPi();
     const claude = mockPi();
@@ -2683,7 +2685,6 @@ describe("installUiHost once-owner across skins", () => {
   it("re-claims tools and shortcuts after the first pi is invalidated", async () => {
     const previousSkin = process.env.PI_UI_SKIN;
     delete process.env.PI_UI_SKIN;
-    const { resetUiKitInstallForTests, installUiHost, registerObservatoryLanding } = await import("@pi/ui-kit");
     resetUiKitInstallForTests();
     const first = mockPi();
     const next = mockPi();
