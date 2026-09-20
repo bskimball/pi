@@ -40,7 +40,7 @@ They're orthogonal — you can run Fusion behavior under the HAL skin, or Apex O
 | **Pi** | None built in — upstream Pi's own system prompt and behavior | Full roster, dispatched when you name a specialist or ask it to delegate | Upstream Pi's system-prompt builder |
 | **Apex** | Inline-first: the lead does most work directly, delegates selectively | Full roster | Coding-first base prompt (`agent/SYSTEM.md`) + Apex overlay |
 | **Apex Orchestrate** | Specialist-first: substantial slices go to specialists; lead plans, integrates, verifies, and handles control-plane work inline | Full roster | Same base prompt + strict-orchestrator overlay |
-| **Fusion** | Sidekick-first: one persistent sidekick is the default delegate; four others only on explicit request | Closed six-role team | Same base prompt + Fusion overlay |
+| **Fusion** | Sidekick-first: persistent sidekicks are the default delegate (one by default, parallel ones for disjoint units); four others only on explicit request | Closed six-role team | Same base prompt + Fusion overlay |
 | **Work** | Operations-first, own dedicated prompt; inline-first with a closed three-crew roster | Closed four-role team (lead + strategist, researcher, clerk) | Dedicated operations-first prompt, not the coding-first base |
 
 "Pi mode" means **stock behavior inside this configured install** — your extensions, tools, skills, and project instructions are all still present, and the model can still delegate when you ask it to. It does not uninstall anything or reset you to a fresh, unconfigured Pi. (A brand-new install defaults to `/mode apex` + `/ui apex`; this table describes what each mode *does*, not the out-of-the-box default.)
@@ -77,7 +77,7 @@ Independent slices can run in parallel under Apex Orchestrate, each in its own i
 
 ## Fusion
 
-Fusion is a **two-person team**, not a bigger roster: one lead, one persistent `sidekick`, and four specialists (`librarian`, `stevedore`, `oracle`, `picasso`) that only run when *you* explicitly ask for them — not automatically, no matter how hard the task looks or how strongly a review gate would normally fire elsewhere.
+Fusion is a **small team**, not a bigger roster: one lead, one persistent `sidekick` role (a second or third instance is spawned only when disjoint units can run in parallel, each on its own owned paths), and four specialists (`librarian`, `stevedore`, `oracle`, `picasso`) that only run when *you* explicitly ask for them — not automatically, no matter how hard the task looks or how strongly a review gate would normally fire elsewhere.
 
 ```text
 you: "investigate why checkout fails intermittently, then fix it"

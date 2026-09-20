@@ -251,9 +251,21 @@ test("FusionLifecycle reuses a settled transcript and parks dead transports", as
   assert.equal(settled.initialPrompt, "do it");
   assert.equal(settled.generation, 3);
   settled.lifecycle = "running";
-  const active: any = await h.lifecycle.reuse("again", {}, 1000);
-  assert.equal(active.kind, "active");
+  const busy: any = await h.lifecycle.reuse("again", {}, 1000);
+  assert.equal(busy.kind, "none", "a busy sidekick yields to a fresh parallel spawn");
   assert.deepEqual(h.started, ["task_1"], "active worker takes no new generation");
+  assert.deepEqual(h.lifecycle.live().map((w: any) => w.id), ["task_1"]);
+  // A second, idle sidekick is reused while the first stays busy.
+  const second = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
+  h.workers.push(second);
+  const reusedSecond: any = await h.lifecycle.reuse("disjoint unit", {}, 1000);
+  assert.equal(reusedSecond.kind, "reused");
+  assert.equal(reusedSecond.worker.id, "task_2");
+  assert.deepEqual(h.started, ["task_1", "task_2"]);
+  assert.equal(h.lifecycle.owns("task_2"), true);
+  assert.equal(h.lifecycle.owns("task_9"), false);
+  assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined, "every sidekick is a valid task_* target");
+  h.workers.splice(h.workers.indexOf(second), 1);
   settled.lifecycle = "failed";
   settled.client.isClosed = true;
   const parked: any = await h.lifecycle.reuse("again", {}, 1000);
@@ -275,8 +287,7 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.match(fork.reason, /new parent session/);
   assert.doesNotMatch(fork.reason, /task_close/);
   const cwd = await h.lifecycle.reuse("x", { cwd: "/other" }, 1000) as any;
-  assert.equal(cwd.kind, "conflict");
-  assert.match(cwd.reason, /task_close task_1/);
+  assert.equal(cwd.kind, "none", "a different cwd spawns a parallel sidekick instead of conflicting");
   const badSchema = await h.lifecycle.reuse("x", { reportSchema: "not json" }, 1000) as any;
   assert.equal(badSchema.kind, "invalid");
   assert.match(badSchema.reason, /Invalid reportSchema/);
@@ -324,8 +335,11 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   h.lifecycle.isolateSession("parent-1");
   assert.ok(h.parked.some(entry => entry.startsWith("task_3:")), "foreign session parked");
   assert.ok(!h.parked.some(entry => entry.startsWith("task_1:")), "same session kept");
+  const settledTwin = h.fusionWorker({ id: "task_4" });
+  h.workers.push(settledTwin);
   h.lifecycle.parkForModeLeave();
   assert.ok(h.parked.some(entry => entry.startsWith("task_1:")), "settled parks on mode leave");
+  assert.ok(h.parked.some(entry => entry.startsWith("task_4:")), "every settled sidekick parks on mode leave");
   assert.ok(!h.parked.some(entry => entry.startsWith("task_2:")), "live worker keeps running");
   const lookupBranch = [
     { type: "custom", customType: "fusion-sidekick-session", data: { parentSessionId: "parent-1", sessionFile: "/old.jsonl", cwd: "/w" } },
@@ -333,13 +347,14 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
     { type: "custom", customType: "fusion-sidekick-session", data: { parentSessionId: "parent-1", sessionFile: "/new.jsonl", sessionId: "s", cwd: "/w" } },
   ];
   assert.deepEqual(h.lifecycle.findTranscript(lookupBranch, "parent-1"), { parentSessionId: "parent-1", sessionFile: "/new.jsonl", sessionId: "s", cwd: "/w" });
+  assert.deepEqual(h.lifecycle.findTranscript(lookupBranch, "parent-1", new Set(["/new.jsonl"])), { parentSessionId: "parent-1", sessionFile: "/old.jsonl", sessionId: undefined, cwd: "/w" }, "attached transcripts are never shared");
   assert.equal(h.lifecycle.findTranscript(lookupBranch, "missing"), undefined);
   assert.equal(h.lifecycle.findTranscript(lookupBranch, undefined), undefined);
   assert.equal(h.lifecycle.gateSidekick("task_start"), "Fusion sidekick cannot dispatch agents, write the lead's plan, or coordinate peer sessions.");
   assert.equal(h.lifecycle.gateSidekick("read"), undefined);
   assert.equal(h.lifecycle.gateLead("task", "task_2"), undefined);
-  assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its designated sidekick.");
-  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its designated sidekick.");
+  assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its sidekicks.");
+  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its sidekicks.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined);
   assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed while worker is live");
   assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed while worker is live");
