@@ -28,12 +28,18 @@ export interface JevFeatureConfig {
   skillRouter: SkillRouterSettings;
   codeJudge: CodeJudgeSettings;
   routingAdvisory: FeatureSettings;
+  todoEvidence: FeatureSettings;
+  memoryTriage: FeatureSettings;
+  oracleTrigger: FeatureSettings;
 }
 
 export const FEATURE_DEFAULTS: JevFeatureConfig = {
   skillRouter: { enabled: false, threshold: 0.55, deadlineMs: 2500, minMargin: 0.15, minConfidence: 0.6 },
   codeJudge: { enabled: false, threshold: 0.8, deadlineMs: 2500, maxChars: 16000, evidenceBar: 0.5, goodTraitBar: 0.10 },
   routingAdvisory: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
+  todoEvidence: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
+  memoryTriage: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
+  oracleTrigger: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,6 +82,9 @@ function defaults(): JevFeatureConfig {
     skillRouter: { ...FEATURE_DEFAULTS.skillRouter },
     codeJudge: { ...FEATURE_DEFAULTS.codeJudge },
     routingAdvisory: { ...FEATURE_DEFAULTS.routingAdvisory },
+    todoEvidence: { ...FEATURE_DEFAULTS.todoEvidence },
+    memoryTriage: { ...FEATURE_DEFAULTS.memoryTriage },
+    oracleTrigger: { ...FEATURE_DEFAULTS.oracleTrigger },
   };
 }
 
@@ -94,6 +103,9 @@ export function loadFeatureConfig(): JevFeatureConfig {
         goodTraitBar: boundedNumber(codeJudgeBlock.goodTraitBar, FEATURE_DEFAULTS.codeJudge.goodTraitBar, 0, 1),
       },
       routingAdvisory: featureSettings(parsed.routingAdvisory, FEATURE_DEFAULTS.routingAdvisory),
+      todoEvidence: featureSettings(parsed.todoEvidence, FEATURE_DEFAULTS.todoEvidence),
+      memoryTriage: featureSettings(parsed.memoryTriage, FEATURE_DEFAULTS.memoryTriage),
+      oracleTrigger: featureSettings(parsed.oracleTrigger, FEATURE_DEFAULTS.oracleTrigger),
     };
   } catch {
     return defaults();

@@ -6,7 +6,10 @@ import type { JevAnswer, JevQuestion } from "./internal/client.ts";
 import { buildJudgeQuestions, collectFindings, evidenceSufficientNoul, formatJudgeAdvisory, isJudgeableFile, truncateForJudging, UNTRUSTED_EVIDENCE_FRAMING } from "./internal/code-judge.ts";
 import { loadFeatureConfig } from "./internal/feature-config.ts";
 import { noteWait, pollAdvisory, readWaitObservation, readWaitResult, reportStatusAdvisory, resetLifecycleState } from "./internal/lifecycle.ts";
+import { looksSecretish, buildMemoryTriageQuestions, collectMemoryTriageFindings, formatMemoryState, formatMemoryTriageAdvisory, parseMemoryEntry } from "./internal/memory-triage.ts";
+import { buildOracleTriggerQuestions, collectOracleTriggerFindings, formatOracleTriggerAdvisory } from "./internal/oracle-trigger.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
+import { buildTodoEvidenceQuestions, collectTodoEvidenceFindings, diffTodoTransitions, formatTodoEvidenceAdvisory, formatTodoState, nextTodoStatusMap, snapshotTodos } from "./internal/todo-evidence.ts";
 import { buildSkillQuestion, formatSkillAdvisory, resolveSkillChoice, type SkillCandidate } from "./internal/skill-router.ts";
 import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
 export { extractWorkflowIndex };
@@ -172,6 +175,7 @@ export default function (pi: ExtensionAPI): void {
   const advisoryMeter: AdvisoryMeter = { calls: 0, tokens: 0 };
   const pendingSkills = new Map<string, string>();
   const pendingCode = new Map<string, { suggestionId: string; originatingToolCallId: string }>();
+  let lastTodoStatus = new Map<string, string>();
 
   const resetSessionState = (ctx?: { cwd?: string; ui?: { setStatus?: (key: string, text: string | undefined) => void } }) => {
     sessionId = nextEphemeralId("session");
@@ -179,6 +183,7 @@ export default function (pi: ExtensionAPI): void {
     sessionEpoch += 1;
     pendingSkills.clear();
     pendingCode.clear();
+    lastTodoStatus = new Map();
     advisoryMeter.calls = 0;
     advisoryMeter.tokens = 0;
     resetLifecycleState();
@@ -622,6 +627,158 @@ export default function (pi: ExtensionAPI): void {
       }
     }
 
+    if (!event.isError && event.toolName === "todo_write") {
+      const snapshot = snapshotTodos(event.input, event.details);
+      const transitions = diffTodoTransitions(lastTodoStatus, snapshot);
+      lastTodoStatus = nextTodoStatusMap(snapshot);
+      const item = config.todoEvidence.enabled ? transitions.at(-1) : undefined;
+      if (item) {
+        const result = await evaluateAdvisory(
+          formatTodoState(item),
+          buildTodoEvidenceQuestions(),
+          config.todoEvidence.deadlineMs,
+          ctx.signal,
+          ctx.modelRegistry,
+        );
+        if (eventEpoch !== sessionEpoch) return undefined;
+        if (result.status !== "completed") {
+          logTelemetry({
+            event: "evaluation",
+            sessionId,
+            workspaceId,
+            evaluationId: result.evaluationId,
+            source: "todo-evidence",
+            template: "todo-evidence@1",
+            status: result.status,
+            elapsedMs: result.elapsedMs,
+            thresholds: { todo: config.todoEvidence.threshold },
+            toolCallId: event.toolCallId,
+          });
+        } else {
+          const findings = collectTodoEvidenceFindings(result.answers, config.todoEvidence.threshold);
+          const hint = formatTodoEvidenceAdvisory(item.title, findings);
+          logTelemetry({
+            event: "evaluation",
+            sessionId,
+            workspaceId,
+            evaluationId: result.evaluationId,
+            source: "todo-evidence",
+            template: "todo-evidence@1",
+            status: findings.length > 0 ? "success" : "no-match",
+            elapsedMs: result.elapsedMs,
+            inputTokens: result.usage.input_tokens,
+            outputTokens: result.usage.output_tokens,
+            findings: findings.map(({ id, probability }) => ({ id, probability })),
+            thresholds: { todo: config.todoEvidence.threshold },
+            toolCallId: event.toolCallId,
+          });
+          publishStatus(ctx, advisoryMeter, result, findings.length > 0 ? "todo evidence" : "no findings");
+          if (hint) {
+            const suggestionId = nextEphemeralId("suggestion");
+            logTelemetry({
+              event: "suggestion",
+              sessionId,
+              workspaceId,
+              evaluationId: result.evaluationId,
+              suggestionId,
+              source: "todo-evidence",
+              template: "todo-evidence@1",
+              status: "success",
+              findings: findings.map(({ id, probability }) => ({ id, probability })),
+              originatingToolCallId: event.toolCallId,
+            });
+            pi.appendEntry<JevSuggestionDetails>(JEV_SUGGESTION_TYPE, {
+              kind: "todo",
+              findings: findings.map(({ id, label, probability }) => ({ id, label, probability })),
+            });
+            return {
+              content: [...(Array.isArray(event.content) ? event.content : []), { type: "text" as const, text: hint }],
+            };
+          }
+        }
+      }
+    }
+
+    if (config.memoryTriage.enabled && !event.isError && event.toolName === "memory_write") {
+      const entry = parseMemoryEntry(event.input, event.content, event.details);
+      if (entry) {
+        const combined = `${entry.title}\n${entry.content}\n${entry.reason}`;
+        if (looksSecretish(combined)) {
+          const hint = "Jev memory hint: secret-shaped content was not classified; prefer local scope. Advisory only.";
+          pi.appendEntry<JevSuggestionDetails>(JEV_SUGGESTION_TYPE, {
+            kind: "memory",
+            findings: [{ id: "secretish", label: "secret-shaped content skipped", probability: 1 }],
+          });
+          return {
+            content: [...(Array.isArray(event.content) ? event.content : []), { type: "text" as const, text: hint }],
+          };
+        }
+        const result = await evaluateAdvisory(
+          formatMemoryState(entry),
+          buildMemoryTriageQuestions(),
+          config.memoryTriage.deadlineMs,
+          ctx.signal,
+          ctx.modelRegistry,
+        );
+        if (eventEpoch !== sessionEpoch) return undefined;
+        if (result.status !== "completed") {
+          logTelemetry({
+            event: "evaluation",
+            sessionId,
+            workspaceId,
+            evaluationId: result.evaluationId,
+            source: "memory-triage",
+            template: "memory-triage@1",
+            status: result.status,
+            elapsedMs: result.elapsedMs,
+            thresholds: { memory: config.memoryTriage.threshold },
+            toolCallId: event.toolCallId,
+          });
+        } else {
+          const findings = collectMemoryTriageFindings(result.answers, { threshold: config.memoryTriage.threshold });
+          const hint = formatMemoryTriageAdvisory(findings);
+          logTelemetry({
+            event: "evaluation",
+            sessionId,
+            workspaceId,
+            evaluationId: result.evaluationId,
+            source: "memory-triage",
+            template: "memory-triage@1",
+            status: findings.length > 0 ? "success" : "no-match",
+            elapsedMs: result.elapsedMs,
+            inputTokens: result.usage.input_tokens,
+            outputTokens: result.usage.output_tokens,
+            findings: findings.map(({ id, probability }) => ({ id, probability })),
+            thresholds: { memory: config.memoryTriage.threshold },
+            toolCallId: event.toolCallId,
+          });
+          publishStatus(ctx, advisoryMeter, result, findings.length > 0 ? "memory triage" : "no findings");
+          if (hint) {
+            const suggestionId = nextEphemeralId("suggestion");
+            logTelemetry({
+              event: "suggestion",
+              sessionId,
+              workspaceId,
+              evaluationId: result.evaluationId,
+              suggestionId,
+              source: "memory-triage",
+              template: "memory-triage@1",
+              status: "success",
+              findings: findings.map(({ id, probability }) => ({ id, probability })),
+              originatingToolCallId: event.toolCallId,
+            });
+            pi.appendEntry<JevSuggestionDetails>(JEV_SUGGESTION_TYPE, {
+              kind: "memory",
+              findings: findings.map(({ id, label, probability }) => ({ id, label, probability })),
+            });
+            return {
+              content: [...(Array.isArray(event.content) ? event.content : []), { type: "text" as const, text: hint }],
+            };
+          }
+        }
+      }
+    }
+
     const observation = readWaitObservation(event.toolName, event.content, event.details);
     if (!observation) return undefined;
 
@@ -638,19 +795,24 @@ export default function (pi: ExtensionAPI): void {
       const broken = audit.reportStatus === "missing" || audit.reportStatus === "invalid";
       if (!broken && audit.reportBody.trim().length >= 200 && audit.mission.trim().length > 0) {
         const report = audit.reportBody.length > 6000 ? audit.reportBody.slice(audit.reportBody.length - 6000) : audit.reportBody;
+        const auditQuestions: Record<string, JevQuestion> = {
+          concrete_outcome: {
+            type: "noul",
+            instructions: "Does this report state a concrete outcome or conclusion, rather than only describing what was attempted?",
+          },
+          matches_mission: {
+            type: "noul",
+            instructions: "Is this report about the stated mission topic?",
+          },
+        };
+        if (config.oracleTrigger.enabled) Object.assign(auditQuestions, buildOracleTriggerQuestions());
+        const auditDeadline = config.oracleTrigger.enabled
+          ? Math.min(config.oracleTrigger.deadlineMs, CLASSIFIER_DEADLINE_MS)
+          : CLASSIFIER_DEADLINE_MS;
         const outcome = await evaluateAdvisory(
           `mission:\n${audit.mission}\n\nreport:\n${report}`,
-          {
-            concrete_outcome: {
-              type: "noul",
-              instructions: "Does this report state a concrete outcome or conclusion, rather than only describing what was attempted?",
-            },
-            matches_mission: {
-              type: "noul",
-              instructions: "Is this report about the stated mission topic?",
-            },
-          },
-          CLASSIFIER_DEADLINE_MS,
+          auditQuestions,
+          auditDeadline,
           ctx.signal,
           ctx.modelRegistry,
         );
@@ -675,19 +837,33 @@ export default function (pi: ExtensionAPI): void {
           if (matches?.type === "noul" && matches.noul < 0.3) {
             advisories.push(`Jev: report does not appear to address the stated mission (noul=${matches.noul}).`);
           }
+          const oracleFindings = config.oracleTrigger.enabled
+            ? collectOracleTriggerFindings(outcome.answers, config.oracleTrigger.threshold)
+            : [];
+          const oracleHint = formatOracleTriggerAdvisory(oracleFindings);
+          if (oracleHint) {
+            advisories.push(oracleHint);
+            pi.appendEntry<JevSuggestionDetails>(JEV_SUGGESTION_TYPE, {
+              kind: "review",
+              findings: oracleFindings.map(({ id, label, probability }) => ({ id, label, probability })),
+            });
+          }
+          const auditHit = advisories.some((item) => item.startsWith("Jev:")) || !!oracleHint;
           logTelemetry({
             event: "evaluation",
             sessionId,
             workspaceId,
             evaluationId: outcome.evaluationId,
             source: "task-wait-audit",
-            status: advisories.some((item) => item.startsWith("Jev:")) ? "success" : "no-match",
+            status: auditHit ? "success" : "no-match",
             elapsedMs: outcome.elapsedMs,
             inputTokens: outcome.usage.input_tokens,
             outputTokens: outcome.usage.output_tokens,
+            findings: oracleFindings.map(({ id, probability }) => ({ id, probability })),
+            thresholds: config.oracleTrigger.enabled ? { oracle: config.oracleTrigger.threshold } : undefined,
             toolCallId: event.toolCallId,
           });
-          publishStatus(ctx, advisoryMeter, outcome, advisories.some((item) => item.startsWith("Jev:")) ? "report finding" : "no findings");
+          publishStatus(ctx, advisoryMeter, outcome, auditHit ? "report finding" : "no findings");
         }
       }
     }

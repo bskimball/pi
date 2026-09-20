@@ -85,7 +85,7 @@ A `tool_result` listener watches every `task_wait` result. It never blocks or fa
 
 ## Opt-in advisories
 
-Three additional advisory features are available. All are disabled by default, so
+Six additional advisory features are available. All are disabled by default, so
 an existing installation makes no extra API calls and changes no behavior until a
 feature is enabled in the same `jev.json` used by [Setup](#setup):
 
@@ -93,7 +93,10 @@ feature is enabled in the same `jev.json` used by [Setup](#setup):
 {
   "skillRouter":     { "enabled": true, "threshold": 0.55, "minConfidence": 0.6, "minMargin": 0.15, "deadlineMs": 2500 },
   "codeJudge":       { "enabled": true, "threshold": 0.8, "evidenceBar": 0.5, "goodTraitBar": 0.10, "deadlineMs": 2500, "maxChars": 16000 },
-  "routingAdvisory": { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 }
+  "routingAdvisory": { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 },
+  "todoEvidence":    { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 },
+  "memoryTriage":    { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 },
+  "oracleTrigger":   { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 }
 }
 ```
 
@@ -178,6 +181,43 @@ questions over the same turn:
 
 Guards at or above `threshold` are combined into one advisory line. They report
 stakes only; they do not recommend an agent or model.
+
+### Todo evidence
+
+The todo-evidence advisory (`internal/todo-evidence.ts`, template `todo-evidence@1`)
+runs on successful `todo_write` results. Statuses from the previous successful write
+in the session are kept (id, else title). A completion is judged only when that item
+was not already `completed` last seen (a missing prior key counts as new). Carried-over
+completions from a full-list replace are ignored. Items still need a note (title+note
+bounded to 600 characters; at most three newly flipped items, then only the last is
+classified). Two Nouls:
+`has_observable_evidence` (good; fires when the probability is below `threshold`)
+and `premature_completion` (bad; fires at or above `threshold`). Output is a
+display-only `todo` receipt plus a one-line tool-result annotation. Telemetry
+`source` is `todo-evidence`; `thresholds.todo` records the gate.
+
+### Memory triage
+
+The memory-triage advisory (`internal/memory-triage.ts`, template `memory-triage@1`)
+runs after a successful `memory_write` create or update. Delete and error results
+are skipped. Title, content, and reason are parsed from the result (capped at 4,000
+characters). A local `/api[_-]?key|secret|token|password|bearer/i` check runs first:
+secret-shaped text is never sent to Jev; the annotation suggests local scope.
+Otherwise one call asks `is_ephemeral_task_dump` (bad Noul), `is_durable_lesson`
+(good Noul), and `reusability` (Score, three levels; no threshold gate — session-only
+score 1 is reported). Display-only `memory` receipt plus a local-vs-global hint.
+Telemetry `source` is `memory-triage`; `thresholds.memory` records the Noul gate.
+
+### Oracle trigger
+
+The oracle-trigger questions (`internal/oracle-trigger.ts`) piggyback on the existing
+task_wait audit call when that audit already has a usable mission and a long enough
+report. Two extra Nouls, zero extra round trips: `touches_security_boundary` and
+`warrants_deep_review` (both bad; fire at `threshold`). The shared audit call stays
+capped at 2.5s; `oracleTrigger.deadlineMs` is honored up to that cap (`min(deadlineMs,
+2500)`). Findings append to the same advisories array; telemetry `source` stays
+`task-wait-audit` with `thresholds.oracle` and extended `findings`. Display-only
+`review` receipts use the same chrome as code findings.
 
 There is deliberately no complexity Score. On the request “just add a quick flag
 to skip the confirmation prompt on destructive bash commands,” a complexity Score

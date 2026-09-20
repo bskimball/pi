@@ -5,7 +5,7 @@ import { noticeComponent } from "@pi/ui-kit/internal/presentation/notice-view.ts
 export const JEV_SUGGESTION_TYPE = "jev-suggestion";
 
 export interface JevSuggestionDetails {
-  kind: "turn" | "code";
+  kind: "turn" | "code" | "todo" | "memory" | "review";
   file?: string;
   skill?: { name: string; probability: number };
   findings: Array<{ id: string; label: string; probability: number }>;
@@ -25,7 +25,7 @@ function rowsFrom(details: JevSuggestionDetails | undefined): NoticeRow[] {
   const rows: NoticeRow[] = [{
     kind: "unknown",
     id: "Jev suggestion",
-    subject: details.kind === "code" ? (file || "code finding") : "turn advisory",
+    subject: details.kind === "turn" ? "turn advisory" : (file || `${details.kind} finding`),
   }];
   const skillName = clean(details.skill?.name, 80);
   if (skillName && validProbability(details.skill?.probability)) {

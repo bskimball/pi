@@ -36,7 +36,7 @@ export interface TelemetryEvent {
     threshold: number;
     candidateCount: number;
   };
-  thresholds?: { skill?: SkillThresholds; risk?: number; code?: number };
+  thresholds?: { skill?: SkillThresholds; risk?: number; code?: number; todo?: number; memory?: number; oracle?: number };
   skipReason?: "short-prompt" | "no-questions";
   /** Code-judge: evidence_sufficient noul; missing answers are recorded as 0. */
   evidenceSufficient?: number;
