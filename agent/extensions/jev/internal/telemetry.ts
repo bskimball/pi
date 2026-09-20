@@ -7,6 +7,8 @@ const MAX_LOG_BYTES = 1_000_000;
 const LOG_FILE_NAME = "pi-jev.jsonl";
 export type EvaluationStatus = "success" | "no-match" | "timeout" | "error" | "cancelled" | "skipped";
 
+export type SkillThresholds = { minConfidence: number; minProbability: number; minMargin: number };
+
 export interface TelemetryEvent {
   event: "evaluation" | "suggestion" | "read-after-suggestion" | "edit-after-finding";
   sessionId: string;
@@ -22,15 +24,24 @@ export interface TelemetryEvent {
   skill?: string;
   findings?: Array<{ id: string; probability: number }>;
   probability?: number;
+  /** Criteria-wording identity, e.g. skill-router@1. */
+  template?: string;
   skillDecision?: {
-    reason: "selected" | "none_needed" | "below_threshold" | "unusable";
+    reason: "selected" | "none_needed" | "below_confidence" | "below_probability" | "below_margin" | "unusable";
     winner: string;
     probability: number;
+    runnerUp: string;
+    margin: number;
+    confidence: number;
     threshold: number;
     candidateCount: number;
   };
-  thresholds?: { skill?: number; risk?: number; code?: number };
+  thresholds?: { skill?: SkillThresholds; risk?: number; code?: number };
   skipReason?: "short-prompt" | "no-questions";
+  /** Code-judge: evidence_sufficient noul; missing answers are recorded as 0. */
+  evidenceSufficient?: number;
+  /** Code-judge: true when evidence_sufficient was below evidenceBar so findings were dropped. */
+  evidenceSuppressed?: boolean;
   /** Skill-router only: whether the AGENTS.md workflow index rode along in state. */
   contextIncluded?: boolean;
   toolCallId?: string;

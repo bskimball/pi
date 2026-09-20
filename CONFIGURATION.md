@@ -331,6 +331,11 @@ results, logs, or session entries.
 | `apiKey` | string | Jev API key (Typesafe path). Literal or single `$VAR`/`${VAR}` reference. |
 | `model` | string (optional) | Override. Defaults: `jev-1.13.0` direct, `typesafe/jev` on Cloudflare; remove it when switching providers. |
 | `provider` | `"typesafe"` \| `"cloudflare-workers-ai"` (optional) | Backend selector, default `"typesafe"`. Cloudflare auth resolves per call from Pi's configured Cloudflare credential (stored credential or `CLOUDFLARE_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`); no secrets stored in `jev.json`, no automatic fallback between providers. The gateway envelope `{result: {state, result, gatewayMetadata}}` is unwrapped (completed state required) before validation. |
+| `skillRouter.enabled` | boolean | Opt-in skill Choice. Default `false`. |
+| `skillRouter.threshold` | number `0.5`–`1` | Min winner probability. Default `0.55` (other features keep `0.8`). |
+| `skillRouter.minConfidence` | number `0`–`1` | Min Choice confidence. Default `0.6`. |
+| `skillRouter.minMargin` | number `0`–`1` | Min (top1 − top2), including `none_needed` as runner-up. Default `0.15`. |
+| `skillRouter.deadlineMs` | integer `250`–`10000` | Per-turn deadline. Default `2500`. |
 Unknown fields are ignored. Malformed JSON fails the call with an actionable
 config error and no request sent. A missing file selects the Typesafe backend
 and then requires the key. A missing file is not an error when the

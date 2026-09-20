@@ -57,40 +57,106 @@ export function buildSkillQuestion(candidates: SkillCandidate[]): JevQuestion {
   };
 }
 
+export type SkillChoiceReason =
+  | "selected"
+  | "none_needed"
+  | "below_confidence"
+  | "below_probability"
+  | "below_margin"
+  | "unusable";
+
+export interface SkillRouterPolicy {
+  minConfidence: number;
+  minProbability: number;
+  minMargin: number;
+}
+
+export interface SkillChoiceResult {
+  skill: SkillCandidate | null;
+  reason: SkillChoiceReason;
+  winner: string;
+  probability: number;
+  runnerUp: string;
+  margin: number;
+  confidence: number;
+}
+
+function emptyDecision(reason: SkillChoiceReason, winner = "", probability = 0, confidence = 0): SkillChoiceResult {
+  return { skill: null, reason, winner, probability, runnerUp: "", margin: 0, confidence };
+}
+
+/**
+ * Gate order when a skill wins (all three must pass): confidence, then probability, then margin.
+ * Margin is SATISFIED when `probabilities` is absent or has fewer than two entries.
+ */
 export function resolveSkillChoice(
   answer: JevAnswer | undefined,
   candidates: SkillCandidate[],
-  threshold: number,
-): {
-  skill: SkillCandidate | null;
-  reason: "selected" | "none_needed" | "below_threshold" | "unusable";
-  winner: string;
-  probability: number;
-} {
+  policy: SkillRouterPolicy,
+): SkillChoiceResult {
   if (!answer || answer.type !== "choice") {
-    return { skill: null, reason: "unusable", winner: "", probability: 0 };
+    return emptyDecision("unusable");
   }
   const winner = answer.choice;
+  const confidence = answer.confidence;
   const probabilities = answer.probabilities as Record<string, number> | undefined;
   const probability = probabilities === undefined ? answer.confidence : probabilities[winner];
   if (typeof probability !== "number" || !Number.isFinite(probability)) {
-    return { skill: null, reason: "unusable", winner, probability: 0 };
+    return emptyDecision("unusable", winner, 0, typeof confidence === "number" ? confidence : 0);
   }
 
   const matches = candidates.filter(candidate => toOptionKey(candidate.name) === winner);
   if (matches.length > 1 || (winner === NONE_OPTION && matches.length > 0)) {
-    return { skill: null, reason: "unusable", winner, probability };
+    return { skill: null, reason: "unusable", winner, probability, runnerUp: "", margin: 0, confidence };
   }
   if (winner === NONE_OPTION) {
-    return { skill: null, reason: "none_needed", winner, probability };
+    return { skill: null, reason: "none_needed", winner, probability, runnerUp: "", margin: 0, confidence };
   }
   if (matches.length !== 1) {
-    return { skill: null, reason: "unusable", winner, probability };
+    return { skill: null, reason: "unusable", winner, probability, runnerUp: "", margin: 0, confidence };
   }
-  if (probability < threshold) {
-    return { skill: null, reason: "below_threshold", winner, probability };
+
+  let runnerUp = "";
+  let margin = 0;
+  let marginSatisfied = true;
+  if (probabilities !== undefined) {
+    // Privacy boundary: the classifier must only echo keys it was offered. An
+    // unoffered key (a path, prompt fragment, or other leaked text) must never
+    // reach telemetry as runnerUp, so a malformed distribution is unusable.
+    const offered = new Set<string>([NONE_OPTION]);
+    for (const candidate of candidates) offered.add(toOptionKey(candidate.name));
+    for (const key of Object.keys(probabilities)) {
+      if (!offered.has(key)) {
+        return { skill: null, reason: "unusable", winner, probability, runnerUp: "", margin: 0, confidence };
+      }
+    }
+    const entries = Object.entries(probabilities).filter(([, value]) => typeof value === "number" && Number.isFinite(value));
+    if (entries.length >= 2) {
+      let runner = Number.NEGATIVE_INFINITY;
+      for (const [key, value] of entries) {
+        if (key === winner) continue;
+        if (value > runner) {
+          runner = value;
+          runnerUp = key;
+        }
+      }
+      if (Number.isFinite(runner)) {
+        margin = probability - runner;
+        marginSatisfied = margin >= policy.minMargin;
+      }
+    }
   }
-  return { skill: matches[0]!, reason: "selected", winner, probability };
+
+  if (confidence < policy.minConfidence) {
+    return { skill: null, reason: "below_confidence", winner, probability, runnerUp, margin, confidence };
+  }
+  if (probability < policy.minProbability) {
+    return { skill: null, reason: "below_probability", winner, probability, runnerUp, margin, confidence };
+  }
+  if (!marginSatisfied) {
+    return { skill: null, reason: "below_margin", winner, probability, runnerUp, margin, confidence };
+  }
+  return { skill: matches[0]!, reason: "selected", winner, probability, runnerUp, margin, confidence };
 }
 
 export function formatSkillAdvisory(skill: SkillCandidate, probability: number): string {

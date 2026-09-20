@@ -15,17 +15,24 @@ export interface FeatureSettings {
 
 export interface CodeJudgeSettings extends FeatureSettings {
   maxChars: number;
+  evidenceBar: number;
+  goodTraitBar: number;
+}
+
+export interface SkillRouterSettings extends FeatureSettings {
+  minMargin: number;
+  minConfidence: number;
 }
 
 export interface JevFeatureConfig {
-  skillRouter: FeatureSettings;
+  skillRouter: SkillRouterSettings;
   codeJudge: CodeJudgeSettings;
   routingAdvisory: FeatureSettings;
 }
 
 export const FEATURE_DEFAULTS: JevFeatureConfig = {
-  skillRouter: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
-  codeJudge: { enabled: false, threshold: 0.8, deadlineMs: 2500, maxChars: 16000 },
+  skillRouter: { enabled: false, threshold: 0.55, deadlineMs: 2500, minMargin: 0.15, minConfidence: 0.6 },
+  codeJudge: { enabled: false, threshold: 0.8, deadlineMs: 2500, maxChars: 16000, evidenceBar: 0.5, goodTraitBar: 0.10 },
   routingAdvisory: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
 };
 
@@ -54,6 +61,16 @@ function featureSettings(value: unknown, defaults: FeatureSettings): FeatureSett
   };
 }
 
+function skillRouterSettings(value: unknown, defaults: SkillRouterSettings): SkillRouterSettings {
+  const block = isRecord(value) ? value : Object.create(null) as Record<string, unknown>;
+  const base = featureSettings(value, defaults);
+  return {
+    ...base,
+    minMargin: boundedNumber(block.minMargin, defaults.minMargin, 0, 1),
+    minConfidence: boundedNumber(block.minConfidence, defaults.minConfidence, 0, 1),
+  };
+}
+
 function defaults(): JevFeatureConfig {
   return {
     skillRouter: { ...FEATURE_DEFAULTS.skillRouter },
@@ -69,10 +86,12 @@ export function loadFeatureConfig(): JevFeatureConfig {
     const codeJudge = featureSettings(parsed.codeJudge, FEATURE_DEFAULTS.codeJudge);
     const codeJudgeBlock = isRecord(parsed.codeJudge) ? parsed.codeJudge : Object.create(null) as Record<string, unknown>;
     return {
-      skillRouter: featureSettings(parsed.skillRouter, FEATURE_DEFAULTS.skillRouter),
+      skillRouter: skillRouterSettings(parsed.skillRouter, FEATURE_DEFAULTS.skillRouter),
       codeJudge: {
         ...codeJudge,
         maxChars: boundedInteger(codeJudgeBlock.maxChars, FEATURE_DEFAULTS.codeJudge.maxChars, 1000, 60_000),
+        evidenceBar: boundedNumber(codeJudgeBlock.evidenceBar, FEATURE_DEFAULTS.codeJudge.evidenceBar, 0, 1),
+        goodTraitBar: boundedNumber(codeJudgeBlock.goodTraitBar, FEATURE_DEFAULTS.codeJudge.goodTraitBar, 0, 1),
       },
       routingAdvisory: featureSettings(parsed.routingAdvisory, FEATURE_DEFAULTS.routingAdvisory),
     };

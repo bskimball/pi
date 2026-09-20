@@ -3,11 +3,13 @@ import { basename } from "node:path";
 import { Type } from "typebox";
 import { evaluateJev } from "./internal/client.ts";
 import type { JevAnswer, JevQuestion } from "./internal/client.ts";
-import { buildJudgeQuestions, collectFindings, formatJudgeAdvisory, isJudgeableFile, truncateForJudging } from "./internal/code-judge.ts";
+import { buildJudgeQuestions, collectFindings, evidenceSufficientNoul, formatJudgeAdvisory, isJudgeableFile, truncateForJudging, UNTRUSTED_EVIDENCE_FRAMING } from "./internal/code-judge.ts";
 import { loadFeatureConfig } from "./internal/feature-config.ts";
 import { noteWait, pollAdvisory, readWaitObservation, readWaitResult, reportStatusAdvisory, resetLifecycleState } from "./internal/lifecycle.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
 import { buildSkillQuestion, formatSkillAdvisory, resolveSkillChoice, type SkillCandidate } from "./internal/skill-router.ts";
+import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
+export { extractWorkflowIndex };
 import { JEV_SUGGESTION_TYPE, registerSuggestionReceipt, type JevSuggestionDetails } from "./internal/suggestion-receipt.ts";
 import { logTelemetry, nextEphemeralId, normalizeToolPath, workspaceIdForCwd, type EvaluationStatus } from "./internal/telemetry.ts";
 
@@ -21,7 +23,7 @@ const MIN_PROMPT_CHARS = 24;
 /** Bounds the prompt text sent to Jev. Well under the client's 64,000-char request cap. */
 const MAX_PROMPT_CHARS = 8_000;
 /** Bounds the project-context slice sent with the prompt. Keeps per-turn input near current cost. */
-const MAX_CONTEXT_CHARS = 1_500;
+export { MAX_CONTEXT_CHARS };
 
 interface AdvisoryResult {
   status: "completed";
@@ -42,45 +44,9 @@ type AdvisoryOutcome = AdvisoryResult | AdvisoryFailure;
 /** Footer key for the ambient advisory status line. */
 const STATUS_KEY = "jev";
 
-/** AGENTS.md section that lists host workflows and the skill that owns each. */
-const SKILLS_SECTION_MARKER = "### Skills";
-
 interface AdvisoryMeter {
   calls: number;
   tokens: number;
-}
-
-/**
- * Slice the host project's workflow index (AGENTS.md `### Skills` section) so
- * Jev sees project context alongside the bare user prompt. The per-skill
- * catalog remains the Choice options; this is state, not a second vote. It
- * fails open: any misshape returns undefined and routing falls back to the
- * bare prompt exactly as before.
- */
-export function extractWorkflowIndex(
-  contextFiles: Array<{ path: string; content: string }> | undefined,
-  cwd: string,
-  maxChars = MAX_CONTEXT_CHARS,
-): string | undefined {
-  if (!contextFiles || contextFiles.length === 0 || maxChars <= 0) return undefined;
-  // Deepest project file wins; the global agent-dir context carries no skills table.
-  // No marker anywhere means the host declares no workflow index: stay on the
-  // bare prompt rather than mislabeling unrelated context as one.
-  const deepest = [...contextFiles]
-    .filter((file) => typeof file.content === "string")
-    .sort((a, b) => b.path.length - a.path.length)
-    .find((file) => file.content.includes(SKILLS_SECTION_MARKER));
-  if (!deepest) return undefined;
-  const markerAt = deepest.content.indexOf(SKILLS_SECTION_MARKER);
-  const section = deepest.content.slice(markerAt).trim();
-  if (!section) return undefined;
-  const label = deepest.path.replace(/\\/g, "/").split("/").at(-1) ?? deepest.path;
-  const prefix = `Project workflow index (${label}, cwd ${cwd.replace(/\\/g, "/")}):\n`;
-  const budget = Math.max(0, maxChars - prefix.length);
-  if (budget <= 1) return undefined;
-  // maxChars bounds the whole block: reserve one char so the ellipsis never overflows it.
-  const body = section.length > budget ? `${section.slice(0, budget - 1).trimEnd()}\u2026` : section;
-  return `${prefix}${body}`;
 }
 
 /** Record one automatic call and publish the running per-session total to the footer. */
@@ -161,6 +127,14 @@ type OutAnswer = Record<string, unknown>;
 
 function turnSources(config: ReturnType<typeof loadFeatureConfig>): string[] {
   return [config.skillRouter.enabled ? "skill-router" : undefined, config.routingAdvisory.enabled ? "routing-advisory" : undefined].filter((source): source is string => !!source);
+}
+
+function skillRouterThresholds(config: ReturnType<typeof loadFeatureConfig>) {
+  return {
+    minConfidence: config.skillRouter.minConfidence,
+    minProbability: config.skillRouter.threshold,
+    minMargin: config.skillRouter.minMargin,
+  };
 }
 
 function stripProbabilities(answers: OutAnswer): OutAnswer {
@@ -322,7 +296,7 @@ export default function (pi: ExtensionAPI): void {
         status: "skipped",
         skipReason: "short-prompt",
         thresholds: {
-          skill: config.skillRouter.enabled ? config.skillRouter.threshold : undefined,
+          skill: config.skillRouter.enabled ? skillRouterThresholds(config) : undefined,
           risk: config.routingAdvisory.enabled ? config.routingAdvisory.threshold : undefined,
         },
       });
@@ -359,7 +333,7 @@ export default function (pi: ExtensionAPI): void {
         status: "skipped",
         skipReason: "no-questions",
         thresholds: {
-          skill: config.skillRouter.enabled ? config.skillRouter.threshold : undefined,
+          skill: config.skillRouter.enabled ? skillRouterThresholds(config) : undefined,
           risk: config.routingAdvisory.enabled ? config.routingAdvisory.threshold : undefined,
         },
       });
@@ -392,7 +366,7 @@ export default function (pi: ExtensionAPI): void {
         status: result.status,
         elapsedMs: result.elapsedMs,
         thresholds: {
-          skill: questions.skill ? config.skillRouter.threshold : undefined,
+          skill: questions.skill ? skillRouterThresholds(config) : undefined,
           risk: config.routingAdvisory.enabled ? config.routingAdvisory.threshold : undefined,
         },
       });
@@ -405,7 +379,11 @@ export default function (pi: ExtensionAPI): void {
     let skillDecision: ReturnType<typeof resolveSkillChoice> | undefined;
     const receiptFindings: JevSuggestionDetails["findings"] = [];
     if (questions.skill) {
-      const decision = resolveSkillChoice(result.answers.skill, candidates, config.skillRouter.threshold);
+      const decision = resolveSkillChoice(result.answers.skill, candidates, {
+        minConfidence: config.skillRouter.minConfidence,
+        minProbability: config.skillRouter.threshold,
+        minMargin: config.skillRouter.minMargin,
+      });
       skillDecision = decision;
       if (decision.reason === "selected" && decision.skill) {
         lines.push(formatSkillAdvisory(decision.skill, decision.probability));
@@ -448,17 +426,21 @@ export default function (pi: ExtensionAPI): void {
         id,
         probability,
       })),
+      template: questions.skill ? "skill-router@1" : undefined,
       skillDecision: skillDecision
         ? {
             reason: skillDecision.reason,
             winner: skillDecision.winner.slice(0, 80),
             probability: skillDecision.probability,
+            runnerUp: skillDecision.runnerUp.slice(0, 80),
+            margin: skillDecision.margin,
+            confidence: skillDecision.confidence,
             threshold: config.skillRouter.threshold,
             candidateCount: candidates.length,
           }
         : undefined,
       thresholds: {
-        skill: questions.skill ? config.skillRouter.threshold : undefined,
+        skill: questions.skill ? skillRouterThresholds(config) : undefined,
         risk: config.routingAdvisory.enabled ? config.routingAdvisory.threshold : undefined,
       },
       contextIncluded: questions.skill ? workflowIndex !== undefined : undefined,
@@ -552,7 +534,7 @@ export default function (pi: ExtensionAPI): void {
         const source = typeof event.input?.content === "string" ? event.input.content : typeof patch === "string" ? patch : "";
         if (source.trim().length > 0) {
           const result = await evaluateAdvisory(
-            `file: ${path}\n\n${truncateForJudging(source, config.codeJudge.maxChars)}`,
+            `${UNTRUSTED_EVIDENCE_FRAMING}\n\nfile: ${path}\n\n${truncateForJudging(source, config.codeJudge.maxChars)}`,
             buildJudgeQuestions(),
             config.codeJudge.deadlineMs,
             ctx.signal,
@@ -566,13 +548,19 @@ export default function (pi: ExtensionAPI): void {
               workspaceId,
               evaluationId: result.evaluationId,
               source: "code-judge",
+              template: "code-judge@1",
               status: result.status,
               elapsedMs: result.elapsedMs,
               thresholds: { code: config.codeJudge.threshold },
               toolCallId: event.toolCallId,
             });
           } else {
-            const findings = collectFindings(result.answers, config.codeJudge.threshold);
+            const evidenceNoul = evidenceSufficientNoul(result.answers);
+            const evidenceSuppressed = evidenceNoul < config.codeJudge.evidenceBar;
+            const findings = collectFindings(result.answers, config.codeJudge.threshold, {
+              evidenceBar: config.codeJudge.evidenceBar,
+              goodTraitBar: config.codeJudge.goodTraitBar,
+            });
             const hint = formatJudgeAdvisory(path, findings);
             logTelemetry({
               event: "evaluation",
@@ -580,6 +568,7 @@ export default function (pi: ExtensionAPI): void {
               workspaceId,
               evaluationId: result.evaluationId,
               source: "code-judge",
+              template: "code-judge@1",
               status: findings.length > 0 ? "success" : "no-match",
               elapsedMs: result.elapsedMs,
               inputTokens: result.usage.input_tokens,
@@ -588,6 +577,8 @@ export default function (pi: ExtensionAPI): void {
                 id,
                 probability,
               })),
+              evidenceSufficient: evidenceNoul,
+              evidenceSuppressed,
               thresholds: { code: config.codeJudge.threshold },
               toolCallId: event.toolCallId,
             });
@@ -607,6 +598,7 @@ export default function (pi: ExtensionAPI): void {
                 evaluationId: result.evaluationId,
                 suggestionId,
                 source: "code-judge",
+                template: "code-judge@1",
                 status: "success",
                 findings: findings.map(({ id, probability }) => ({
                   id,

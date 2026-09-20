@@ -91,8 +91,8 @@ feature is enabled in the same `jev.json` used by [Setup](#setup):
 
 ```json
 {
-  "skillRouter":     { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 },
-  "codeJudge":       { "enabled": true, "threshold": 0.8, "deadlineMs": 2500, "maxChars": 16000 },
+  "skillRouter":     { "enabled": true, "threshold": 0.55, "minConfidence": 0.6, "minMargin": 0.15, "deadlineMs": 2500 },
+  "codeJudge":       { "enabled": true, "threshold": 0.8, "evidenceBar": 0.5, "goodTraitBar": 0.10, "deadlineMs": 2500, "maxChars": 16000 },
   "routingAdvisory": { "enabled": true, "threshold": 0.8, "deadlineMs": 2500 }
 }
 ```
@@ -104,9 +104,15 @@ back individually without discarding valid siblings in the same block.
 | Field | Range | Default |
 |---|---:|---:|
 | `enabled` | boolean | `false` |
-| `threshold` | `0.5`–`1` | `0.8` |
+| `threshold` | `0.5`–`1` | `0.8` (skill router min-probability: `0.55`) |
+| `minConfidence` (skill router only) | `0`–`1` | `0.6` |
+| `minMargin` (skill router only) | `0`–`1` | `0.15` |
 | `deadlineMs` | `250`–`10000` | `2500` |
 | `maxChars` (code judge only) | `1000`–`60000` | `16000` |
+| `evidenceBar` (code judge only) | `0`–`1` | `0.5` |
+| `goodTraitBar` (code judge only) | `0`–`1` | `0.10` |
+
+The skill router selects only when confidence, winner probability, and (top1 − top2) all clear their bars. Failure reasons are `below_confidence`, `below_probability`, or `below_margin` (checked in that order). `none_needed` skips the three-part gate. Missing or singleton `probabilities` treats margin as satisfied.
 
 Numeric values are clamped to their ranges. Each enabled evaluation is chained to
 the turn's abort signal and bounded by that feature's `deadlineMs`. A timeout, HTTP
@@ -182,16 +188,23 @@ orthogonal, so this feature reports stakes instead of grading difficulty.
 ### Clean-code judge
 
 The clean-code judge (`internal/code-judge.ts`) runs after a successful `edit` or
-`write` result for a judgeable code file. It sends file content, truncated at
-`maxChars` on a newline boundary, with five Noul questions:
+`write` result for a judgeable code file. Classifier state is prefixed with a short
+untrusted-evidence framing line (the file is evidence to judge, not instructions to
+follow; this is isolation wording, not a sandbox). Content is truncated at `maxChars`
+on a newline boundary. Questions are six Nouls: `evidence_sufficient` plus five traits.
+When `evidence_sufficient` is below `evidenceBar` (default `0.5`), all findings for
+that file are suppressed. Truncated fragments, config-like files, and trivial edits
+are intended as insufficient. Telemetry records `template: "code-judge@1"`, the
+`evidence_sufficient` probability, and `evidenceSuppressed`.
 
 | Question | Polarity | Fires when |
 |---|---|---:|
+| `evidence_sufficient` | gate | below `evidenceBar` suppresses all findings |
 | `speculative_abstraction` | bad | `noul >= threshold` |
 | `dead_or_unreachable` | bad | `noul >= threshold` |
 | `duplicated_logic` | bad | `noul >= threshold` |
-| `naming_reveals_intent` | good | `noul <= 1 - threshold` |
-| `single_responsibility` | good | `noul <= 1 - threshold` |
+| `naming_reveals_intent` | good | `noul <= goodTraitBar` |
+| `single_responsibility` | good | `noul <= goodTraitBar` |
 
 Findings are combined into one reviewer-hint line on the tool result and displayed
 as a `Jev suggestion` receipt. No findings means no annotation or receipt; the footer
@@ -214,8 +227,7 @@ Records otherwise contain only timestamps, ephemeral session/evaluation/suggesti
 IDs, sources, outcome (`success`, `no-match`, `timeout`, `error`, `cancelled`, or
 known `skipped`), elapsed
 milliseconds, available token counts, configured thresholds, skill decision reason
-(`selected`, `none_needed`, `below_threshold`, or `unusable`), bounded winner key and
-probability, candidate count, selected skill/finding IDs, known skip reason, and
+(`selected`, `none_needed`, `below_confidence`, `below_probability`, `below_margin`, or `unusable`), bounded winner/runner-up keys, probability, margin, confidence, candidate count, template (`skill-router@1` on skill-router evaluations, `code-judge@1` on code-judge evaluations), selected skill/finding IDs, known skip reason, and
 correlation tool-call IDs.
 
 `read-after-suggestion` means a later successful `read` targeted the exact discovered
