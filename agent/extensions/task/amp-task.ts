@@ -27,6 +27,8 @@ import {
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
+  isApexRosterAgent,
+  isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
   resolveAgentThinking,
@@ -529,7 +531,7 @@ function renderTaskComponent(
 
 export default function (pi: ExtensionAPI) {
   const agents = discoverAgents();
-  const apexAgents = new Map([...agents].filter(([name]) => !isWorkCrewAgent(name)));
+  const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
 
   const TaskParams = Type.Object({
     agent: Type.String({
@@ -581,6 +583,10 @@ export default function (pi: ExtensionAPI) {
         isWorkCrewAgent(params.agent)
       ) {
         const text = `Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`;
+        return { content: [{ type: "text", text }], isError: true, details: {} };
+      }
+      if (isFusionOnlyAgent(params.agent)) {
+        const text = `sidekick is Fusion-only — ${params.agent} cannot run in this mode; switch to Fusion or dispatch an Apex specialist.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       if (

@@ -41,7 +41,7 @@ They're orthogonal — you can run Fusion behavior under the HAL skin, or Apex O
 | **Apex** | Inline-first: the lead does most work directly, delegates selectively | Full roster | Coding-first base prompt (`agent/SYSTEM.md`) + Apex overlay |
 | **Apex Orchestrate** | Specialist-first: substantial slices go to specialists; lead plans, integrates, verifies, and handles control-plane work inline | Full roster | Same base prompt + strict-orchestrator overlay |
 | **Fusion** | Sidekick-first: one persistent sidekick is the default delegate; four others only on explicit request | Closed six-role team | Same base prompt + Fusion overlay |
-| **Work** | Operations-first, own dedicated prompt; persistent sidekick shares Fusion's lifecycle, but the full synchronous roster stays available | Full synchronous roster + persistent sidekick | Dedicated operations-first prompt, not the coding-first base |
+| **Work** | Operations-first, own dedicated prompt; inline-first with a closed three-crew roster | Closed four-role team (lead + strategist, researcher, clerk) | Dedicated operations-first prompt, not the coding-first base |
 
 "Pi mode" means **stock behavior inside this configured install** — your extensions, tools, skills, and project instructions are all still present, and the model can still delegate when you ask it to. It does not uninstall anything or reset you to a fresh, unconfigured Pi. (A brand-new install defaults to `/mode apex` + `/ui apex`; this table describes what each mode *does*, not the out-of-the-box default.)
 
@@ -94,13 +94,11 @@ you: "have oracle review that fix before we ship"
 
 Lead and sidekick keep **separate, persistent contexts** across the session — the lead sends a compact brief in, the sidekick sends back results and evidence, not a full transcript either direction. That separation, plus the "cheap sidekick executes, expensive lead plans/reviews" split, is the part borrowed from [Cognition's Fusion architecture](https://cognition.com/blog/local-fusion); the brief/result exchange protocol, the closed-roster gate, and the shared-todo-list discipline are this repo's own implementation on top of that idea. The sidekick is the *only* subagent dispatched automatically; a general "please verify this" or a difficult bug does not, by itself, authorize calling Oracle or any of the other three — you have to name it. See [`agent/prompts/inactive/fusion.md`](agent/prompts/inactive/fusion.md) for the exact handoff and ownership criteria the lead follows.
 
-The first time you switch to Fusion (or Work) without a saved pair, `/mode fusion` itself prompts you to pick the lead and sidekick models and thinking levels — you don't have to run `/mode configure` first. `/mode configure` is the explicit way to (re)configure that pair at any time: while Work is active it configures and activates the shared Work/Fusion pair for Work; otherwise it configures and activates Fusion. Changing model or thinking level while Fusion is active updates the lead's choice directly. The pair is stored locally in the gitignored `agent/mode-settings.json`.
-
-Note: the persistent-sidekick lifecycle (`task_start`/`task_send`/`task_close` on one long-lived worker, transcript continuity across session resume) is **shared with Work**, not exclusive to Fusion — Work uses the same mechanism with a different, operations-first prompt and a wide-open synchronous roster instead of Fusion's closed one.
+The first time you switch to Fusion without a saved pair, `/mode fusion` itself prompts you to pick the lead and sidekick models and thinking levels — you don't have to run `/mode configure` first. `/mode configure` is the explicit way to (re)configure that pair at any time; it configures and activates Fusion. Changing model or thinking level while Fusion is active updates the lead's choice directly. The pair is stored locally in the gitignored `agent/mode-settings.json`.
 
 ## Work
 
-Work is operations-first: a lead and one persistent `sidekick`, using a dedicated prompt instead of the coding-first base. Unlike Fusion, Work keeps the *entire* existing synchronous specialist roster available through `task` — it's the closed roster that's Fusion-specific, not the sidekick mechanism. The sidekick retains context across assignments and session resume, and can do scoped reconnaissance, implementation, and slice-local validation, but it can't spawn its own subagents or maintain the lead's todo list. Business workflows and integrations remain owned by their own project; no custom "work" agents ship in this repo.
+Work is operations-first: the lead does the bulk of the work directly (inline-first, like Apex) using a dedicated prompt instead of the coding-first base, dispatching a closed three-crew team — `strategist` (business/productivity planning), `researcher` (external source-traced research), `clerk` (broad recon plus monotonous reversible execution) — via `task`, or `task_start` / `task_send` when multi-turn or steering is needed. No persistent sidekick, no other agents. Business workflows and integrations remain owned by their own project; no custom "work" agents ship in this repo.
 
 ## Trying a mode
 
@@ -110,8 +108,8 @@ Work is operations-first: a lead and one persistent `sidekick`, using a dedicate
 /mode apex-orchestrate     # specialist-first, same roster
 /orchestrate on            # equivalent toggle, from Apex
 /mode fusion               # closed lead+sidekick team (first switch without a saved pair prompts for one)
-/mode work                 # operations-first, persistent sidekick, full roster
-/mode configure            # pick lead/sidekick models + thinking for Fusion (or Work, if Work is active)
+/mode work                 # operations-first, inline-first, strategist/researcher/clerk
+/mode configure            # pick lead/sidekick models + thinking for Fusion
 /ui apex                   # switch presentation only — independent of /mode
 ```
 
@@ -141,7 +139,7 @@ Sub-agents are dispatched with `task` (synchronous, blocks for one final report)
 | `picasso` | Image-generation specialist for concept art, UI renderings, illustrations, icons, logos, textures, diagrams. |
 | `scout` | Fast, cheap local codebase reconnaissance for broad scans and context gathering. |
 | `scribe` | Editorial writing specialist for blog posts, articles, documentation, launch copy, and long-form prose. |
-| `sidekick` | Persistent execution partner for implementation, investigation, writing, and validation — Fusion and Work only. |
+| `sidekick` | Persistent execution partner for implementation, investigation, writing, and validation — Fusion only. |
 | `stevedore` | Fast execution specialist for integrated gates, exact diagnostic experiments, deploys, git, and platform CLIs. |
 
 Full agent-file format (frontmatter fields, fallback-model chains, shared prompt fragments) is documented in [CONFIGURATION.md](CONFIGURATION.md#agent-markdown-agentagentsmd-local-custom).

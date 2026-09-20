@@ -168,10 +168,30 @@ export function isWorkCrewAgent(name: string): boolean {
   return (WORK_CREW_AGENTS as readonly string[]).includes(name);
 }
 
-/** `- name: description` lines for non-Work agents in catalog order. */
+/**
+ * Fusion-only agents: advertised and runnable only in Fusion mode.
+ * Currently just the persistent sidekick; Work dispatches its own
+ * strategist/researcher/clerk crew instead.
+ */
+export const FUSION_ONLY_AGENTS = [
+  "sidekick",
+] as const;
+
+export type FusionOnlyAgent = (typeof FUSION_ONLY_AGENTS)[number];
+
+export function isFusionOnlyAgent(name: string): boolean {
+  return (FUSION_ONLY_AGENTS as readonly string[]).includes(name);
+}
+
+/** True for agents on the Apex/Pi roster: everything except the Work crew and Fusion-only agents. */
+export function isApexRosterAgent(name: string): boolean {
+  return !isWorkCrewAgent(name) && !isFusionOnlyAgent(name);
+}
+
+/** `- name: description` lines for Apex-roster agents in catalog order. */
 export function apexAgentList(agents: Map<string, AgentDef>): string {
   return [...agents.values()]
-    .filter((def) => !isWorkCrewAgent(def.name))
+    .filter((def) => isApexRosterAgent(def.name))
     .map((def) => `- ${def.name}: ${def.description}`)
     .join("\n");
 }

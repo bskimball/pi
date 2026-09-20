@@ -70,6 +70,8 @@ export {
   apexAgentList,
   composeSpecialistSharedPrompts,
   discoverAgents,
+  isApexRosterAgent,
+  isFusionOnlyAgent,
   isProjectAgentFile,
   isWorkCrewAgent,
   modelAttempts,

@@ -22,6 +22,8 @@ import {
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
+  isApexRosterAgent,
+  isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
   resolveAgentThinking,
@@ -702,7 +704,7 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 export default function (pi: ExtensionAPI) {
   if (taskPresentationEnabled()) installTaskRenderSafety();
   const agents = discoverAgents();
-  const apexAgents = new Map([...agents].filter(([name]) => !isWorkCrewAgent(name)));
+  const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
   const apexAgentCatalog = apexAgentList(agents);
   const sidekickDef = agents.get("sidekick");
   const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
@@ -1981,6 +1983,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (behaviorMode !== "work" && isWorkCrewAgent(params.agent)) {
         return textResult(`Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`, true);
       }
+      if (behaviorMode !== "fusion" && isFusionOnlyAgent(params.agent)) {
+        return textResult(`sidekick is Fusion-only — ${params.agent} cannot run in this mode; switch to Fusion or dispatch an Apex specialist.`, true);
+      }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
         return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`, true);
       }
@@ -2237,6 +2242,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (behaviorMode !== "work" && isWorkCrewAgent(step.agent)) {
           return textResult(
             `Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${step.agent} cannot run in this mode at step ${i + 1}; switch to Work or dispatch advisor, librarian, or scout.`,
+            true,
+          );
+        }
+        if (isFusionOnlyAgent(step.agent)) {
+          return textResult(
+            `sidekick is Fusion-only — ${step.agent} cannot run in this mode at step ${i + 1}; switch to Fusion or dispatch an Apex specialist.`,
             true,
           );
         }
