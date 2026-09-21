@@ -39,7 +39,6 @@ agent/extensions/
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
 ├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate
-├── graphify.ts                            local knowledge-graph query
 ├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
 ├── mcp-adapter.ts                         pi-mcp-adapter bridge
 ├── read-guard.ts                          duplicate-image + downscale guard
@@ -69,7 +68,7 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 - `/mode work` is operations-first and uses its own prompt rather than the coding-first `agent/SYSTEM.md`. The lead works inline-first and dispatches a closed three-crew team (strategist, researcher, clerk) — no persistent sidekick, no other agents. Business workflows and integrations remain owned by their project; custom work agents are not bundled into this mode.
 - Async workers in every mode, including Fusion's sidekicks, use the shared above-editor Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Click or Enter opens a bounded read-only peek. Settled/failed sessions switch directly only from `/agents peek <id>` or `/agents open <id>` command context; pointer/shortcut peeks prepare that explicit command without replacing a draft. Live JSONL writers are never switched into. Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
 - `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) disables them too. Task children are spawned with chrome off so workers never paint chrome.
-- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `graphify`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
+- Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
 - There is no custom footer. Pi owns the footer.
 
 ### Rendering Constraints
