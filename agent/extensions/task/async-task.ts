@@ -829,6 +829,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         turns: worker.turns,
         maxTurns: worker.maxTurns,
         generation: worker.generation,
+        model: worker.model,
         waitingUi: worker.pendingUi.size,
         mission: worker.mission,
         directive: worker.directive,

@@ -22,6 +22,7 @@ export function setAgentWorkspaceOpen(open: boolean): void {
 const TOOL_CHARS = 24;
 const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
+const MODEL_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
 function sanitizeDirective(
@@ -57,6 +58,8 @@ export interface DockAgentItem {
   turns?: number;
   maxTurns?: number;
   generation?: number;
+  /** Resolved model label, e.g. `provider/model-id` or `default model`. */
+  model?: string;
   /** Pending UI requests: the "blocked on a question" signal. */
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
@@ -122,6 +125,10 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
     maxTurns: item.maxTurns === undefined ? undefined : Number(item.maxTurns) || 0,
     generation:
       item.generation === undefined ? undefined : Number(item.generation) || 0,
+    model:
+      item.model === undefined
+        ? undefined
+        : String(item.model ?? "").slice(0, MODEL_CHARS),
     waitingUi:
       item.waitingUi === undefined ? undefined : Number(item.waitingUi) || 0,
     mission:

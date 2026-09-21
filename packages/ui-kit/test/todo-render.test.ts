@@ -2244,6 +2244,38 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.equal(turnCountText(undefined, 40), undefined);
   });
 
+  it("surfaces the resolved model in the peek header", () => {
+    const plain = renderPeekBody(theme, 80, worker({ model: undefined }), { maxLines: 8 });
+    assert.doesNotMatch(plain.join("\n"), /local-proxy/);
+    const labeled = renderPeekBody(theme, 100, worker({
+      model: "local-proxy/grok-4.5",
+      lifecycle: "running",
+    }), { maxLines: 8 });
+    assert.match(labeled.join("\n"), /local-proxy\/grok-4\.5/);
+  });
+
+  it("tones peek transcript rows like the main session", () => {
+    const transcript = [
+      "lead: please audit the proxy",
+      "worker: reading the config",
+      "worker: tool read src/index.ts",
+      "tool read src/index.ts",
+    ];
+    const ansiTheme = {
+      fg: (key: string, text: string) => `<${key}>${text}</>`,
+      bg: (_key: string, text: string) => text,
+    };
+    const lines = renderPeekBody(ansiTheme, 80, worker({ lifecycle: "running" }), {
+      transcript,
+      maxLines: 12,
+    });
+    const text = lines.join("\n");
+    assert.match(text, /<warning>lead:/, "lead steer reads as warning");
+    assert.match(text, /<text>worker: reading/, "assistant prose reads as primary text");
+    assert.match(text, /<muted>worker: tool read/, "worker tool lines stay muted");
+    assert.match(text, /<accent>tool read/, "bare tool lines read as accent");
+  });
+
   it("renders and identifies all eight retained workers", () => {
     const items = Array.from({ length: 8 }, (_, index) => worker({
       id: `task_${index + 1}`,

@@ -312,6 +312,8 @@ export interface DockAgentItem {
   turns?: number;
   maxTurns?: number;
   generation?: number;
+  /** Resolved model label, e.g. `provider/model-id` or `default model`. */
+  model?: string;
   /** Pending UI requests: the "blocked on a question" signal. */
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
@@ -615,10 +617,15 @@ function paintPeekRow(theme: StatusTheme, width: number, line: string): string {
 
 function peekHeaderText(item: DockAgentItem, now: number): string {
   const generation = finiteNum(item.generation);
+  const model = safeText(item.model, 80);
   return metaText([
     safeText(item.agent, 40) || "agent",
     safeText(item.id, 40),
     generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
+    // The sub-agent's own model never travels on the bus as a separate
+    // field today; surface the resolved label when the publisher reports
+    // it, so the overlay answers "which model is doing this work".
+    model || undefined,
     workerStateText(item),
     turnCountText(item.turns, item.maxTurns),
     agentAge(item, now),
@@ -671,10 +678,14 @@ function layoutPeekChrome(
   };
 }
 
-function peekTranscriptTone(line: string): "warning" | "text" | "muted" | "error" {
+function peekTranscriptTone(line: string): "warning" | "text" | "muted" | "error" | "accent" {
   if (line.includes(" \u00d7") || line.endsWith("\u00d7")) return "error";
   if (line.startsWith("lead:")) return "warning";
+  // Mirror the main session: assistant prose reads as primary text while
+  // bare tool lines stay muted, so the overlay scans like the transcript.
+  if (line.startsWith("worker: tool ")) return "muted";
   if (line.startsWith("worker:")) return "text";
+  if (line.startsWith("tool ")) return "accent";
   return "muted";
 }
 
