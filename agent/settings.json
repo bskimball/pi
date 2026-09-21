@@ -19,16 +19,5 @@
   "editorPaddingX": 2,
   "theme": "claude-dark",
   "tuiMode": "fullscreen",
-  "enabledModels": [
-    "local-proxy/*",
-    "openai-codex/*",
-    "github-copilot/*",
-    "xai/*",
-    "meta/*",
-    "google/*",
-    "ollama/*",
-    "opencode/*",
-    "cloudflare-workers-ai/**"
-  ],
   "hideThinkingBlock": false
 }

@@ -3,7 +3,7 @@ name: oracle
 description: Deep independent code reviewer and debugger for difficult bugs, conflicting evidence, high-stakes decisions, and substantial completed work.
 model: local-proxy/gpt-6-astra
 fallbackModels:
-  - local-proxy/grok-4.6
+  - xai/grok-4.7
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh

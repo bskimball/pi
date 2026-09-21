@@ -369,14 +369,14 @@ section above for why),
 `mcp-scripting` is discoverable without loading the adapter twice),
 `steeringMode`,
 `transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme` (`claude-dark`),
-`tuiMode`, and `enabledModels` (keeps `local-proxy/*` plus
-`openai-codex/*`, `xai/*`, `opencode/*`, and other providers for optional manual selection).
-Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
+and `tuiMode`.
+`enabledModels` is intentionally omitted so `/model` and Ctrl+P see every configured
+provider without a scope allowlist. Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
 Active default and subagent routes use `local-proxy` (for example
 `local-proxy/gpt-5.6-luna`, `local-proxy/gpt-5.6-sol`, `local-proxy/grok-4.5`,
 `local-proxy/claude-opus-5`, plus Cloudflare Workers AI fallbacks). Direct
-`openai-codex/*` and `xai/*` provider routes remain enabled for manual
+`openai-codex/*` and `xai/*` provider routes remain available for manual
 selection but are not the active default or agent frontmatter path.
 
 ---

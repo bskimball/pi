@@ -4,7 +4,7 @@ description: Strategic planner used on explicit user request, and in orchestrate
 model: opencode/claude-fable-5-1
 fallbackModels:
   - local-proxy/gpt-6-astra
-  - local-proxy/grok-4.6
+  - xai/grok-4.7
   - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high
