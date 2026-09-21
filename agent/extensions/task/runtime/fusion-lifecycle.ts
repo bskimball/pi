@@ -54,6 +54,14 @@ export interface FusionWorkerState {
   closed: boolean;
   lifecycle: WorkerLifecycle;
   generation?: number;
+  /**
+   * Prompts in the current chain: the initial assignment plus every
+   * corrective `task_send prompt` since. Reset to 1 by `reuse()` when a
+   * new assignment starts; incremented by `noteChainPrompt()` on each
+   * corrective prompt. Disjoint units must never share a chain — close
+   * and respawn instead of steering past the cap.
+   */
+  fusionChainPrompts?: number;
   cwd?: string;
   model?: string;
   thinking?: string;
@@ -71,6 +79,28 @@ export interface FusionWorkerState {
   client?: FusionTransport | undefined | null;
 }
 
+/**
+ * Maximum prompts per sidekick chain, counting the initial assignment.
+ * 1 assignment + 3 corrective prompts: the fourth corrective prompt means
+ * the contract is wrong, not the sidekick, and retained context has become
+ * a liability (stale files, growing per-turn cost). Close and respawn.
+ */
+export const FUSION_CHAIN_PROMPT_CAP = 4;
+
+/**
+ * Respawn nudge appended to the corrective prompt that reaches the cap
+ * (and every one after). Mirrors the lead-side discovery nudge in
+ * async-task.ts: advisory, single-line, names the truthful remedy.
+ */
+export function fusionChainNudge(id: string, count: number): string {
+  return (
+    `[fusion] ${id} has taken ${count} prompts in this chain ` +
+    `(1 assignment + ${count - 1} corrections). Retained context is now a liability: ` +
+    `close it with task_close and respawn a fresh sidekick with a reassessed contract, ` +
+    `or take the paths over yourself after settle/abort. Repeated prompts without progress ` +
+    `mean the contract is wrong, not the sidekick.`
+  );
+}
 /** Minimal request surface; satisfied by RpcClient and test doubles. */
 export interface FusionTransport {
   readonly isClosed: boolean;
@@ -459,6 +489,11 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     worker.initialPrompt = prompt;
     worker.mission = missionFromPrompt(prompt);
     worker.fallbackReplaySafe = false;
+    // A reuse is a new assignment, so it restarts the chain: this prompt
+    // is prompt 1, and corrective task_send prompts count up from here.
+    // Disjoint follow-up units must arrive as fresh reuses, never as
+    // steering on an old chain.
+    worker.fusionChainPrompts = 1;
     this.deps.startGeneration(worker);
     // A new contract must reach the child as well as the settlement parser:
     // fresh spawns embed it in the initial system prompt, so reuse carries
@@ -467,6 +502,21 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     const accepted = await this.acceptPrompt(worker, client, outgoing, promptTimeoutMs);
     if (accepted.kind === "accepted") return { kind: "reused", worker };
     return accepted;
+  }
+
+  /**
+   * Record one corrective `task_send prompt` against the worker's chain.
+   * Returns the respawn nudge once the chain reaches
+   * FUSION_CHAIN_PROMPT_CAP (and on every prompt after), undefined below
+   * it. Call only after the prompt is accepted — a rejected prompt never
+   * started a generation. Fresh spawns initialize the counter at 1, so a
+   * worker that predates the counter reads as prompt 1 via `?? 1`.
+   */
+  noteChainPrompt(worker: TWorker): string | undefined {
+    const count = (worker.fusionChainPrompts ?? 1) + 1;
+    worker.fusionChainPrompts = count;
+    if (count < FUSION_CHAIN_PROMPT_CAP) return undefined;
+    return fusionChainNudge(worker.id, count);
   }
 
   /**

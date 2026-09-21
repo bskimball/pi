@@ -336,6 +336,8 @@ interface Worker extends RuntimeEventWorker {
   /** Fusion's sole persistent counterpart; never participates in fallback. */
   fusion?: boolean;
   fusionParentSessionId?: string;
+  /** Prompts in the current Fusion chain (initial assignment + corrections). Owned by fusion-lifecycle. */
+  fusionChainPrompts?: number;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1381,6 +1383,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Lead discovery calls since the last user-turn start or task_start/task_send.
   // Counted in tool_result (fusion lead only); drives the dispatch nudge below.
   let fusionDiscoveryCalls = 0;
+  // Set by the lead-session session_compact event; delivered once as a
+  // [fusion] re-evaluation nudge on the lead's next tool result, then
+  // cleared. Compaction is the free model-switch point, and every
+  // pre-compaction chain is stale afterwards — never resume steering one
+  // across the boundary. Automatic model substitution is never performed;
+  // the lead re-evaluates via /mode configure.
+  let fusionCompactionPending = false;
+  function fusionCompactionNudge(): string {
+    return `[fusion] session compacted: retained sidekick chains are stale. Re-evaluate the pairing with /mode configure, then start the next unit on a fresh chain — never resume steering a pre-compaction chain.`;
+  }
   type FusionSessionEntry = { parentSessionId: string; sessionFile: string; sessionId?: string; cwd: string };
   // Single owner for designated-worker sequences (readiness/reuse, config
   // ack/rollback, parking, isolation, gates). Pair state lives here, not in
@@ -1498,6 +1510,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           : "none-requested",
       fusion: params.fusion,
       fusionParentSessionId: params.fusionParentSessionId,
+      // A fresh spawn starts a new chain: this initial prompt is prompt 1.
+      fusionChainPrompts: params.fusion ? 1 : undefined,
       // Persistent sidekicks track phase but never arm an idle kill timer;
       // the runtime honors this on every armIdle path (startGeneration,
       // handleEvent, steering), so no local wrapper can be bypassed.
@@ -1977,7 +1991,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         );
         const sidekickLabel = "Fusion";
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
-        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}).`);
+        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new chain, prompt 1).`);
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
         // "parked" falls through to transcript-resume spawn below; "none"
         // spawns a fresh (possibly parallel) sidekick and needs a configured pair.
@@ -2715,12 +2729,18 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             );
           }
           writeLastPhase(`task_send:prompt:accepted id=${id} gen=${worker.generation}`);
+          // Chain accounting lives in the Fusion lifecycle owner: a corrective
+          // prompt that reaches the cap appends the respawn nudge so the lead
+          // reassesses the contract instead of steering a stale context again.
+          const chainNudge = worker.fusion ? fusionLifecycle.noteChainPrompt(worker) : undefined;
+          const acceptedLines = [
+            `${id} accepted new prompt (generation ${worker.generation}${worker.fusion ? `, chain prompt ${worker.fusionChainPrompts ?? "?"}` : ""}).`,
+            `lifecycle: ${worker.lifecycle}`,
+            "A new generation is running.",
+          ];
+          if (chainNudge) acceptedLines.push(chainNudge);
           return textResult(
-            [
-              `${id} accepted new prompt (generation ${worker.generation}).`,
-              `lifecycle: ${worker.lifecycle}`,
-              "A new generation is running.",
-            ].join("\n"),
+            acceptedLines.join("\n"),
             false,
             sendDetails("accepted", `generation ${worker.generation} running`),
           );
@@ -3094,6 +3114,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             : undefined,
           snapshot.errorText ? `error: ${snapshot.errorText}` : undefined,
           worker.reportError ? `report_error: ${worker.reportError}` : undefined,
+          worker.fusion && worker.lifecycle === "failed"
+            ? `[fusion] generation failed: reassess the contract (outcome, owned paths, acceptance) before any new dispatch — do not re-run the same brief. Two unconverged corrections means close-and-respawn or pull-back, not another prompt.`
+            : undefined,
           "",
           `--- result ---`,
           bound.text || "(empty)",
@@ -3807,13 +3830,27 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
   pi.on("tool_result", event => {
     if (behaviorMode !== "fusion" || process.env.PI_FUSION_SIDEKICK === "1") return;
-    if (!FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) return;
-    fusionDiscoveryCalls += 1;
-    if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY !== 0) return;
+    const nudges: string[] = [];
+    if (fusionCompactionPending) {
+      fusionCompactionPending = false;
+      nudges.push(fusionCompactionNudge());
+    }
+    if (FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) {
+      fusionDiscoveryCalls += 1;
+      if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY === 0) nudges.push(fusionDiscoveryNudge(fusionDiscoveryCalls));
+    }
+    if (!nudges.length) return;
     const existing = Array.isArray(event.content) ? event.content : [];
     return {
-      content: [...existing, { type: "text" as const, text: fusionDiscoveryNudge(fusionDiscoveryCalls) }],
+      content: [...existing, ...nudges.map(text => ({ type: "text" as const, text }))],
     };
+  });
+  // Lead-session compaction is the free model-switch point: every retained
+  // sidekick chain is stale afterwards. Flag it here; the tool_result
+  // wrapper above delivers the one-shot re-evaluation nudge on the lead's
+  // next tool result (any tool, including the next task_start/task_send).
+  pi.on("session_compact", () => {
+    fusionCompactionPending = true;
   });
   pi.on("agent_end", async event => {
     if (behaviorMode !== "fusion") return;
