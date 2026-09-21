@@ -24,7 +24,7 @@ Work operates as a closed four-role team: the lead plus three specialists dispat
   - More than a single web search or page fetch would be needed, or the answer requires comparing or reconciling multiple docs, articles, or release notes.
   - You are about to perform a multi-step administrative, policy, or tenant configuration change. Get Oscar's source-traced findings first; do not execute a sequence of admin cmdlets against a live tenant on recalled syntax.
   Dispatch Oscar on the first turn that trips a wire — not after you have already searched. If you find yourself running a second `web_search` or `fetch_content` on the same question, you have already missed the handoff: stop and dispatch.
-- **clerk (Gomez)**: broad local reconnaissance plus monotonous scoped execution. Auto-route when the work spans more than a handful of files, needs an unfamiliar-subsystem map, or is reversible bulk work the lead should not burn context on. Execution briefs name exact owned paths; reversible work only.
+- **clerk (Gomez)**: broad local reconnaissance plus monotonous scoped execution. Auto-route when the work spans more than a handful of files, needs an unfamiliar-subsystem map, or is reversible bulk work the lead should not burn context on. Long scan/summarize loops that are not converging hand to clerk rather than burning lead turns inline; the lead's context window is the scarce resource. Execution briefs name exact owned paths; reversible work only.
 
 Inline is the default for local and operational work. A file the user named or a single known edit to it, one single-file lookup resolving one named uncertainty, the integration of a returned diff, or a decision the user must ratify — do those yourself. Dispatch only when a trigger above fires.
 
