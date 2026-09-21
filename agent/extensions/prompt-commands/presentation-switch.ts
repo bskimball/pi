@@ -17,6 +17,16 @@ const UI_EXTENSION_DIR: Record<Exclude<UiName, "pi">, string> = {
   hal: "hal",
 };
 
+const CANONICAL_CUSTOM_THEMES: Record<Exclude<UiName, "pi">, string> = {
+  apex: "apex-dark",
+  claude: "claude-dark",
+  hal: "hal-dark",
+};
+
+function themeForUi(preferences: ReturnType<typeof readPreferences>, ui: UiName): string {
+  return ui === "pi" ? preferences.themes.pi : CANONICAL_CUSTOM_THEMES[ui];
+}
+
 export function uiExtensionInstalled(ui: Exclude<UiName, "pi">): boolean {
   return fs.existsSync(join(dirname(fileURLToPath(import.meta.url)), "..", UI_EXTENSION_DIR[ui]));
 }
@@ -69,13 +79,16 @@ export function registerPresentationSwitch(pi: ExtensionAPI): void {
       }
       const preferences = readPreferences(preferencePath);
       const oldUi = preferences.ui;
-      const oldTheme = ctx.ui.theme.name ?? preferences.themes[oldUi];
-      preferences.themes[oldUi] = oldTheme;
-      const result = ctx.ui.setTheme(preferences.themes[value]);
+      preferences.themes[oldUi] = oldUi === "pi"
+        ? ctx.ui.theme.name ?? preferences.themes.pi
+        : CANONICAL_CUSTOM_THEMES[oldUi];
+      const targetTheme = themeForUi(preferences, value);
+      const result = ctx.ui.setTheme(targetTheme);
       if (!result.success) {
         ctx.ui.notify(result.error ?? "Theme unavailable", "error");
         return;
       }
+      preferences.themes[value] = targetTheme;
       preferences.ui = value;
       applyUiEnv(value);
       pi.events.emit("pi:ui:changed", { ui: value, ctx });
@@ -87,16 +100,23 @@ export function registerPresentationSwitch(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     const preferences = readPreferences(preferencePath);
     const activeUi = resolveInstalledUi(preferences.ui);
+    const activeTheme = themeForUi(preferences, activeUi);
+    if (preferences.themes[activeUi] !== activeTheme) {
+      preferences.themes[activeUi] = activeTheme;
+      savePreferences(preferencePath, preferences);
+    }
     applyUiEnv(activeUi);
     if (!ctx.hasUI) return;
-    ctx.ui.setTheme(preferences.themes[activeUi]);
+    ctx.ui.setTheme(activeTheme);
     pi.events.emit("pi:ui:changed", { ui: activeUi, ctx });
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     if (!ctx.hasUI) return;
     const latest = readPreferences(preferencePath);
-    latest.themes[latest.ui] = ctx.ui.theme.name ?? latest.themes[latest.ui];
+    latest.themes[latest.ui] = latest.ui === "pi"
+      ? ctx.ui.theme.name ?? latest.themes.pi
+      : CANONICAL_CUSTOM_THEMES[latest.ui];
     savePreferences(preferencePath, latest);
   });
 }

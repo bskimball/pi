@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
+import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
 import { restoreMode, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
@@ -25,6 +26,46 @@ test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind f
   assert.deepEqual(toolsForWork(tools), collaborationTools);
   assert.deepEqual(toolsForMode("fusion", tools), toolsForFusion(tools));
   assert.deepEqual(toolsForMode("work", tools), toolsForWork(tools));
+});
+test("custom UI switches replace stale themes with their canonical live theme", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-ui-themes-"));
+  const oldDir = process.env.PI_CODING_AGENT_DIR;
+  const oldChild = process.env.PI_SUBAGENT;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({
+      mode: "pi", models: {}, ui: "pi",
+      themes: { pi: "light", apex: "stale-apex", claude: "stale-claude", hal: "stale-hal" },
+    }));
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; },
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: { emit() {} },
+    };
+    const ctx: any = {
+      hasUI: true, isIdle: () => true,
+      ui: { theme: { name: "light" }, setTheme(name: string) { this.theme.name = name; return { success: true }; }, notify() {} },
+    };
+    registerPresentationSwitch(pi);
+    for (const [ui, theme] of [["apex", "apex-dark"], ["claude", "claude-dark"], ["hal", "hal-dark"]]) {
+      await commands.ui(ui, ctx);
+      assert.equal(ctx.ui.theme.name, theme);
+    }
+    let saved = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
+    assert.deepEqual(saved.themes, { pi: "light", apex: "apex-dark", claude: "claude-dark", hal: "hal-dark" });
+    writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({ ...saved, ui: "hal", themes: { ...saved.themes, hal: "stale-hal" } }));
+    for (const handler of handlers.session_start) handler({ reason: "resume" }, ctx);
+    saved = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
+    assert.equal(ctx.ui.theme.name, "hal-dark");
+    assert.equal(saved.themes.hal, "hal-dark");
+  } finally {
+    if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldDir;
+    if (oldChild === undefined) delete process.env.PI_SUBAGENT; else process.env.PI_SUBAGENT = oldChild;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));
@@ -135,6 +176,13 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.doesNotMatch(retainedDynamic.systemPrompt, /Coding-first base that Work must replace/);
     assert.equal(WORK_SYSTEM_PROMPT.includes("operations-first lead"), true);
     await commands.mode("pi", ctx);
+    writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({
+      mode: "pi",
+      models: {},
+      ui: "pi",
+      themes: { pi: "light", apex: "stale-apex", claude: "stale-claude", hal: "stale-hal" },
+    }));
+    ctx.ui.theme.name = "light";
     await commands.ui("pi", ctx);
     assert.equal(process.env.PI_APEX_UI, "0");
     assert.equal(process.env.PI_UI_CHROME, "0");
@@ -163,9 +211,9 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(ctx.ui.theme.name, "light");
     const savedUi = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
     assert.equal(savedUi.ui, "pi");
-    assert.equal(savedUi.themes.claude, "claude-dark");
-    assert.equal(savedUi.themes.hal, "hal-dark");
-    assert.equal(savedUi.themes.apex, "apex-dark");
+    assert.equal(savedUi.themes.claude, "claude-dark", "Claude ignores stale remembered themes");
+    assert.equal(savedUi.themes.hal, "hal-dark", "HAL ignores stale remembered themes");
+    assert.equal(savedUi.themes.apex, "apex-dark", "Apex ignores stale remembered themes");
     assert.equal(savedUi.themes.pi, "light");
     assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi");
     assert.ok(notices.some(text => text.includes("Stop active")));
