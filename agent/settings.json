@@ -2,7 +2,7 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "local-proxy",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "0.86.1",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom"
@@ -24,6 +24,7 @@
     "openai-codex/*",
     "github-copilot/*",
     "xai/*",
+    "meta/*",
     "google/*",
     "ollama/*",
     "opencode/*",
