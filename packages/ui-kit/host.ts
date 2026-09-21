@@ -16,6 +16,7 @@ import {
   installSharedPresentation,
   installSharedTools,
   inventoryAt,
+  uiChromeEnabled,
   inventorySelectorOptions,
   inventorySelectorTitle,
   isConversationBlank,
@@ -44,7 +45,7 @@ export interface UiHostOptions {
   ) => { frames: string[]; intervalMs: number; message: string };
 }
 
-const presentationEnabled = () => process.env.PI_APEX_UI !== "0";
+const presentationEnabled = () => uiChromeEnabled();
 
 function hostsMap(): Map<SkinName, UiHostOptions> {
   return uiKitShared().hosts as Map<SkinName, UiHostOptions>;

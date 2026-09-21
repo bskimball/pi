@@ -14,6 +14,7 @@ export function isolatedChildEnv(
   return {
     ...process.env,
     ...overrides,
+    PI_UI_CHROME: "0",
     PI_APEX_UI: "0",
     PI_TERMINAL_WATCHDOG: "0",
   };

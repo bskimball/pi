@@ -1,33 +1,14 @@
-import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import { MODES, isMode, readPreferences, restoreMode, savePreferences, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
+import { registerPresentationSwitch } from "./presentation-switch.ts";
 
 // Resolve the installed builder rather than maintaining a divergent copy of Pi's prompt.
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
-const uiLabels = { pi: "Default Pi", apex: "Apex", claude: "Claude", hal: "HAL" } as const;
-type UiName = keyof typeof uiLabels;
-const UI_EXTENSION_DIR: Record<Exclude<UiName, "pi">, string> = {
-  apex: "apex",
-  claude: "claude",
-  hal: "hal",
-};
-
-function uiExtensionInstalled(ui: Exclude<UiName, "pi">): boolean {
-  return fs.existsSync(join(dirname(fileURLToPath(import.meta.url)), "..", UI_EXTENSION_DIR[ui]));
-}
-
-function availableUis(): UiName[] {
-  const names: UiName[] = ["pi"];
-  for (const name of ["apex", "claude", "hal"] as const) {
-    if (uiExtensionInstalled(name)) names.push(name);
-  }
-  return names;
-}
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
 
 /**
@@ -93,11 +74,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     const thinking = await ctx.ui.select(`${role} thinking level${role.toLowerCase().includes("lead") ? " (high recommended)" : role.toLowerCase().includes("sidekick") ? " (medium/low usually enough)" : ""}`, levels);
     return thinking ? { provider: model.provider, modelId: model.id, thinking } : undefined;
   }
-  async function configure(ctx: ExtensionContext, mode: "fusion" | "work"): Promise<FusionPair | undefined> {
-    const label = mode === "work" ? "Work" : "Fusion";
-    const lead = await chooseModel(ctx, `${label} lead`, state.fusion?.lead ?? current(ctx));
+  async function configureFusion(ctx: ExtensionContext): Promise<FusionPair | undefined> {
+    const lead = await chooseModel(ctx, "Fusion lead", state.fusion?.lead ?? current(ctx));
     if (!lead) return undefined;
-    const sidekick = await chooseModel(ctx, `${label} sidekick`, state.fusion?.sidekick);
+    const sidekick = await chooseModel(ctx, "Fusion sidekick", state.fusion?.sidekick);
     return sidekick ? { lead, sidekick } : undefined;
   }
   async function applyModel(ctx: ExtensionContext, choice?: ModelChoice): Promise<void> {
@@ -110,7 +90,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   async function switchMode(mode: Mode, ctx: ExtensionContext, pair?: FusionPair): Promise<void> {
     if (!idle(ctx)) return;
     if (usesPersistentSidekick(mode) && !pair && !state.fusion) {
-      pair = await configure(ctx, mode);
+      pair = await configureFusion(ctx);
       if (!pair) return;
     }
     if (!idle(ctx)) return;
@@ -235,7 +215,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           ctx.ui.notify("Work mode has no lead/sidekick pair to configure \u2014 it dispatches strategist, researcher, and clerk. Switch to Fusion to configure a pair.", "info");
           return;
         }
-        const pair = await configure(ctx, "fusion");
+        const pair = await configureFusion(ctx);
         if (pair) await switchMode("fusion", ctx, pair);
         return;
       }
@@ -256,32 +236,6 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       await switchMode(value === "on" || ((value === "" || value === "toggle") && state.mode !== "apex-orchestrate") ? "apex-orchestrate" : "apex", ctx);
     },
   });
-  pi.registerCommand("ui", {
-    description: "Switch Pi, Apex, Claude, or HAL presentation, independently of behavior",
-    handler: async (args, ctx) => {
-      if (!idle(ctx)) return;
-      const installed = availableUis();
-      const value = args.trim().toLowerCase() || await ctx.ui.select("Presentation", installed);
-      if (!value) return;
-      if (value !== "pi" && value !== "apex" && value !== "claude" && value !== "hal") { ctx.ui.notify(`Usage: /ui [${installed.join("|")}]`, "warning"); return; }
-      if (value !== "pi" && !uiExtensionInstalled(value)) {
-        ctx.ui.notify(`${uiLabels[value]} UI is not installed.`, "error");
-        return;
-      }
-      const oldUi = preferences.ui;
-      const oldTheme = ctx.ui.theme.name ?? preferences.themes[oldUi];
-      preferences = readPreferences(preferencePath);
-      preferences.themes[oldUi] = oldTheme;
-      const result = ctx.ui.setTheme(preferences.themes[value]);
-      if (!result.success) { ctx.ui.notify(result.error ?? "Theme unavailable", "error"); return; }
-      preferences.ui = value;
-      process.env.PI_APEX_UI = value === "pi" ? "0" : "1";
-      process.env.PI_UI_SKIN = value === "pi" ? "apex" : value;
-      pi.events.emit("pi:ui:changed", { ui: value, ctx });
-      savePreferences(preferencePath, preferences);
-      ctx.ui.notify(`UI: ${uiLabels[value]}`, "info");
-    },
-  });
   pi.on("session_start", async (event, ctx) => {
     preferences = readPreferences(preferencePath);
     recoveryBlocked = false;
@@ -300,15 +254,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     applyModeTools(state.mode);
     announce();
     pi.appendEntry("behavior-mode", structuredClone(state));
-    const savedUi = preferences.ui;
-    const activeUi: UiName = savedUi !== "pi" && !uiExtensionInstalled(savedUi) ? "pi" : savedUi;
-    process.env.PI_APEX_UI = activeUi === "pi" ? "0" : "1";
-    process.env.PI_UI_SKIN = activeUi === "pi" ? "apex" : activeUi;
-    if (ctx.hasUI) {
-      ctx.ui.setTheme(preferences.themes[activeUi]);
-      pi.events.emit("pi:ui:changed", { ui: activeUi, ctx });
-      ctx.ui.setStatus("mode", labels[state.mode]);
-    }
+    if (ctx.hasUI) ctx.ui.setStatus("mode", labels[state.mode]);
   });
   pi.on("model_select", (event) => {
     if (changing || event.source === "restore") return;
@@ -322,13 +268,6 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (changing) return;
     const choice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
     if (choice) { choice.thinking = event.level; persist(); }
-  });
-  pi.on("session_shutdown", (_event, ctx) => {
-    if (ctx.hasUI) {
-      const latest = readPreferences(preferencePath);
-      latest.themes[preferences.ui] = ctx.ui.theme.name ?? preferences.themes[preferences.ui];
-      savePreferences(preferencePath, latest);
-    }
   });
   pi.on("input", (_event, ctx) => {
     if (recoveryBlocked) {
@@ -377,4 +316,5 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
     return { systemPrompt: buildSystemPrompt(options) + event.systemPrompt.slice(baseline.length) };
   });
+  registerPresentationSwitch(pi);
 }

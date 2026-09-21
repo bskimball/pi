@@ -1,5 +1,5 @@
-// Specialist agent discovery / model attempt helpers.
-// Canonical Agent Catalog used by amp-task (sync) and async-task (RPC workers).
+// Agent Catalog: parse agent markdown, discover specialists, model attempts.
+// Canonical module. Task spawn and Observatory listing are adapters over this.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -145,6 +145,63 @@ export function routingHint(agents: Map<string, AgentDef>): string {
 export function agentParamDescription(agents: Map<string, AgentDef>): string {
   const hint = routingHint(agents);
   return `Agent to run. One of: ${[...agents.keys()].join(", ")}.${hint ? ` ${hint}` : ""}`;
+}
+
+/** Pi mode keeps specialists available but never auto-routes from the schema. */
+export function piAgentParamDescription(agents: Map<string, AgentDef>): string {
+  return `Agent to run. One of: ${[...agents.keys()].join(", ")}. In Pi mode, dispatch only when the user names that specialist or asks you to delegate; this parameter does not decide whether to delegate.`;
+}
+
+/**
+ * Closed Work crew: these specialists are Work-only and excluded from
+ * Apex, Pi, and Fusion advertisements by policy.
+ */
+export const WORK_CREW_AGENTS = [
+  "strategist",
+  "researcher",
+  "clerk",
+] as const;
+
+export type WorkCrewAgent = (typeof WORK_CREW_AGENTS)[number];
+
+export function isWorkCrewAgent(name: string): boolean {
+  return (WORK_CREW_AGENTS as readonly string[]).includes(name);
+}
+
+/**
+ * Fusion-only agents: advertised and runnable only in Fusion mode.
+ * Currently just the persistent sidekick; Work dispatches its own
+ * strategist/researcher/clerk crew instead.
+ */
+export const FUSION_ONLY_AGENTS = [
+  "sidekick",
+] as const;
+
+export type FusionOnlyAgent = (typeof FUSION_ONLY_AGENTS)[number];
+
+export function isFusionOnlyAgent(name: string): boolean {
+  return (FUSION_ONLY_AGENTS as readonly string[]).includes(name);
+}
+
+/** True for agents on the Apex/Pi roster: everything except the Work crew and Fusion-only agents. */
+export function isApexRosterAgent(name: string): boolean {
+  return !isWorkCrewAgent(name) && !isFusionOnlyAgent(name);
+}
+
+/** `- name: description` lines for Apex-roster agents in catalog order. */
+export function apexAgentList(agents: Map<string, AgentDef>): string {
+  return [...agents.values()]
+    .filter((def) => isApexRosterAgent(def.name))
+    .map((def) => `- ${def.name}: ${def.description}`)
+    .join("\n");
+}
+
+/** `- name: description` lines for crew members present in the catalog. */
+export function workCrewList(agents: Map<string, AgentDef>): string {
+  return WORK_CREW_AGENTS.map((name) => agents.get(name))
+    .filter((def): def is AgentDef => !!def)
+    .map((def) => `- ${def.name}: ${def.description}`)
+    .join("\n");
 }
 
 /** True when an agent definition lives under the project-local `.pi/agents` tree. */

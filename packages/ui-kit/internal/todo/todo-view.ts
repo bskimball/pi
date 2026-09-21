@@ -312,6 +312,8 @@ export interface DockAgentItem {
   turns?: number;
   maxTurns?: number;
   generation?: number;
+  /** Resolved model label, e.g. `provider/model-id` or `default model`. */
+  model?: string;
   /** Pending UI requests: the "blocked on a question" signal. */
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
@@ -591,12 +593,39 @@ export function peekControlsText(
   return metaText([back, "session still writing"]);
 }
 
+/**
+ * Paint one workspace row as an even background band so overlay compositing
+ * cannot leave parent transcript cells visible beside or under the text.
+ * `customMessageBg` is the theme page surface used for custom UI blocks.
+ */
+function peekSurface(theme: StatusTheme | undefined): StatusTheme {
+  const fg =
+    theme && typeof theme.fg === "function"
+      ? theme.fg.bind(theme)
+      : (_token: string, text: string) => text;
+  const bg =
+    theme && typeof theme.bg === "function" ? theme.bg.bind(theme) : undefined;
+  return bg ? { fg, bg } : { fg };
+}
+
+function paintPeekRow(theme: StatusTheme, width: number, line: string): string {
+  if (width <= 0) return "";
+  const clipped = safeTruncateToWidth(line, width);
+  const fill = " ".repeat(Math.max(0, width - safeVisibleWidth(clipped)));
+  return `${clipped}${fill}`;
+}
+
 function peekHeaderText(item: DockAgentItem, now: number): string {
   const generation = finiteNum(item.generation);
+  const model = safeText(item.model, 80);
   return metaText([
     safeText(item.agent, 40) || "agent",
     safeText(item.id, 40),
     generation === undefined ? undefined : `gen ${Math.trunc(generation)}`,
+    // The sub-agent's own model never travels on the bus as a separate
+    // field today; surface the resolved label when the publisher reports
+    // it, so the overlay answers "which model is doing this work".
+    model || undefined,
     workerStateText(item),
     turnCountText(item.turns, item.maxTurns),
     agentAge(item, now),
@@ -649,9 +678,14 @@ function layoutPeekChrome(
   };
 }
 
-function peekTranscriptTone(line: string): "warning" | "text" | "muted" {
+function peekTranscriptTone(line: string): "warning" | "text" | "muted" | "error" | "accent" {
+  if (line.includes(" \u00d7") || line.endsWith("\u00d7")) return "error";
   if (line.startsWith("lead:")) return "warning";
+  // Mirror the main session: assistant prose reads as primary text while
+  // bare tool lines stay muted, so the overlay scans like the transcript.
+  if (line.startsWith("worker: tool ")) return "muted";
   if (line.startsWith("worker:")) return "text";
+  if (line.startsWith("tool ")) return "accent";
   return "muted";
 }
 
@@ -665,7 +699,7 @@ function wrapTranscriptEntry(
   return wrapped.map((row) => safeTruncateToWidth(theme.fg(tone, row), width));
 }
 
-/** Transcript rows that fit under header + mission + directive + separator + footer. */
+/** Transcript rows that fit under header + mission + directive + rules + footer. */
 export function peekTranscriptBudget(
   width: number,
   item: DockAgentItem,
@@ -673,10 +707,14 @@ export function peekTranscriptBudget(
 ): number {
   const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
   if (width <= 0 || capped <= 3) return 0;
-  const chrome = layoutPeekChrome(item, width, capped);
+  const gutter = width >= 20 ? 1 : 0;
+  const innerWidth = Math.max(1, width - gutter * 2);
+  const chrome = layoutPeekChrome(item, innerWidth, capped);
+  const rules = capped >= 6 ? 2 : 1;
+  const vPad = capped >= 14 ? 1 : 0;
   return Math.max(
     0,
-    capped - (1 + chrome.missionRows.length + chrome.directiveRows.length + 1 + 1),
+    capped - (vPad * 2 + 1 + chrome.missionRows.length + chrome.directiveRows.length + rules + 1),
   );
 }
 
@@ -727,13 +765,14 @@ export function clampPeekScroll(
 }
 
 /**
- * Full-pane session view for one worker: header, wrapped mission, optional
- * directive, transcript window, footer. Never opens a SessionManager; the
- * transcript tail is injected by the caller (bounded read + tolerant parse
- * live in todo-tools).
+ * Opaque full-pane workspace for one worker: header, wrapped mission,
+ * optional directive, transcript window, footer. Always returns exactly
+ * `maxLines` background-filled rows so overlay compositing cannot leak the
+ * parent transcript. Never opens a SessionManager; the transcript tail is
+ * injected by the caller (bounded read + tolerant parse live in todo-tools).
  */
 export function renderPeekBody(
-  theme: StatusTheme,
+  theme: StatusTheme | undefined,
   width: number,
   item: DockAgentItem,
   options: {
@@ -745,50 +784,82 @@ export function renderPeekBody(
   } = {},
 ): string[] {
   if (width <= 0) return [];
+  const surface = peekSurface(theme);
   const now = options.now ?? Date.now();
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
   const maxLines = Math.max(3, Math.min(PEEK_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
-  const header = safeTruncateToWidth(
-    theme.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
-    width,
+
+  // Inset horizontal padding for content within the overlay pane
+  const gutter = width >= 20 ? 1 : 0;
+  const pad = " ".repeat(gutter);
+  const innerWidth = Math.max(1, width - gutter * 2);
+
+  const header = pad + safeTruncateToWidth(
+    surface.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
+    innerWidth,
   );
-  const controls = safeTruncateToWidth(
-    theme.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
-    width,
+  const controls = pad + safeTruncateToWidth(
+    surface.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
+    innerWidth,
   );
-  const chrome = layoutPeekChrome(item, width, maxLines);
+  const chrome = layoutPeekChrome(item, innerWidth, maxLines);
   const missionRows = chrome.missionRows.map((row) =>
-    safeTruncateToWidth(theme.fg("text", row), width),
+    pad + safeTruncateToWidth(surface.fg("text", row), innerWidth),
   );
   const directiveTone = item.directive?.queued ? "warning" : "text";
   const directiveRows = chrome.directiveRows.map((row) =>
-    safeTruncateToWidth(theme.fg(directiveTone, row), width),
+    pad + safeTruncateToWidth(surface.fg(directiveTone, row), innerWidth),
   );
-  const used = 1 + missionRows.length + directiveRows.length + 1 + 1;
+  const rules = maxLines >= 6 ? 2 : 1;
+  const vPad = maxLines >= 14 ? 1 : 0;
+  const used = vPad * 2 + 1 + missionRows.length + directiveRows.length + rules + 1;
   const bodyBudget = Math.max(0, maxLines - used);
-  const separator = safeTruncateToWidth(
-    theme.fg("dim", "\u2500".repeat(Math.max(1, Math.min(width, 24)))),
-    width,
+  const topRule = pad + safeTruncateToWidth(
+    surface.fg("borderMuted", "\u2500".repeat(innerWidth)),
+    innerWidth,
   );
-  const lines = [header, ...missionRows, ...directiveRows];
+  const bottomRule = pad + safeTruncateToWidth(
+    surface.fg("borderMuted", "\u2500".repeat(innerWidth)),
+    innerWidth,
+  );
+
+  const lines: string[] = [];
+  if (vPad > 0) lines.push("");
+  lines.push(header, ...missionRows, ...directiveRows);
   if (maxLines <= 3) {
     if (maxLines >= 3) lines.push(controls);
-    return lines.slice(0, maxLines);
+    const padded = lines.slice(0, maxLines);
+    while (padded.length < maxLines) padded.push("");
+    return padded.map((row) => paintPeekRow(surface, width, row));
   }
-  lines.push(separator);
+  lines.push(topRule);
   const rawTranscript = options.transcript ?? [];
   if (bodyBudget > 0) {
     if (!rawTranscript.length) {
-      lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+      lines.push(pad + safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), innerWidth));
     } else {
-      const wrapped = layoutPeekTranscript(theme, width, rawTranscript);
+      const wrapped = layoutPeekTranscript(surface, innerWidth, rawTranscript);
       const windowed = peekTranscriptWindow(wrapped, bodyBudget, options.scrollOffset);
-      if (windowed.lines.length) lines.push(...windowed.lines);
-      else lines.push(safeTruncateToWidth(theme.fg("dim", "transcript unavailable"), width));
+      if (windowed.lines.length) {
+        for (const row of windowed.lines) {
+          lines.push(pad + row);
+        }
+      } else {
+        lines.push(pad + safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), innerWidth));
+      }
     }
   }
+  if (rules >= 2) {
+    while (lines.length < maxLines - 2 - vPad) lines.push("");
+    lines.push(bottomRule);
+  } else {
+    while (lines.length < maxLines - 1 - vPad) lines.push("");
+  }
   lines.push(controls);
-  return lines.slice(0, maxLines);
+  if (vPad > 0) lines.push("");
+  const padded = lines.slice(0, maxLines);
+  while (padded.length < maxLines) padded.push("");
+  return padded.map((row) => paintPeekRow(surface, width, row));
 }
 
 /**

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { configuredSyncTaskLimit } from "../../amp-task.ts";
+import { configuredSyncTaskLimit } from "../sync-concurrency.ts";
 
 describe("configuredSyncTaskLimit", () => {
   it("matches the bounded shared concurrency contract", () => {

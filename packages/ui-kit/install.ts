@@ -5,6 +5,7 @@ import { installBuiltinReceipts } from "./internal/presentation/builtin-receipts
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installIntercomReceipts } from "./internal/presentation/intercom-receipt.ts";
+import { installJevReceipts } from "./internal/presentation/jev-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
 import { installMcpReceipts } from "./internal/presentation/mcp-receipt.ts";
 import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
@@ -13,13 +14,13 @@ import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installSkillInvocationChrome } from "./internal/presentation/skill-invocation.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
-import { installApexOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
+import { installKitOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import { claimSharedTools, resetUiKitOnceForTests, uiKitShared } from "./once.ts";
 
 /** Todo tools + bash/write adapters. First UI extension's `pi` owns them process-wide. */
 export function installSharedTools(pi: ExtensionAPI): void {
   if (!claimSharedTools(pi)) return;
-  installApexOwnedTools(pi);
+  installKitOwnedTools(pi);
   installBuiltinTools(pi);
 }
 
@@ -34,6 +35,7 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
   installFffReceipts();
   installGraphifyReceipts();
   installIntercomReceipts(pi);
+  installJevReceipts();
   installLspReceipts();
   installMemoryReceipts();
   installPowerShellReceipts();

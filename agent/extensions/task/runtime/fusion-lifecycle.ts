@@ -12,7 +12,7 @@ import {
   type WorkerLifecycle,
 } from "./worker-runtime.ts";
 import { parseReportSchema, reportInstruction } from "./report-schema.ts";
-import { missionFromPrompt } from "../presentation/task-view.ts";
+import { missionFromPrompt } from "./mission-from-prompt.ts";
 import type { ReportStatus } from "./report-schema.ts";
 
 export const FUSION_EPHEMERAL_AGENTS = [
@@ -54,6 +54,14 @@ export interface FusionWorkerState {
   closed: boolean;
   lifecycle: WorkerLifecycle;
   generation?: number;
+  /**
+   * Prompts in the current chain: the initial assignment plus every
+   * corrective `task_send prompt` since. Reset to 1 by `reuse()` when a
+   * new assignment starts; incremented by `noteChainPrompt()` on each
+   * corrective prompt. Disjoint units must never share a chain — close
+   * and respawn instead of steering past the cap.
+   */
+  fusionChainPrompts?: number;
   cwd?: string;
   model?: string;
   thinking?: string;
@@ -71,6 +79,28 @@ export interface FusionWorkerState {
   client?: FusionTransport | undefined | null;
 }
 
+/**
+ * Maximum prompts per sidekick chain, counting the initial assignment.
+ * 1 assignment + 3 corrective prompts: the fourth corrective prompt means
+ * the contract is wrong, not the sidekick, and retained context has become
+ * a liability (stale files, growing per-turn cost). Close and respawn.
+ */
+export const FUSION_CHAIN_PROMPT_CAP = 4;
+
+/**
+ * Respawn nudge appended to the corrective prompt that reaches the cap
+ * (and every one after). Mirrors the lead-side discovery nudge in
+ * async-task.ts: advisory, single-line, names the truthful remedy.
+ */
+export function fusionChainNudge(id: string, count: number): string {
+  return (
+    `[fusion] ${id} has taken ${count} prompts in this chain ` +
+    `(1 assignment + ${count - 1} corrections). Retained context is now a liability: ` +
+    `close it with task_close and respawn a fresh sidekick with a reassessed contract, ` +
+    `or take the paths over yourself after settle/abort. Repeated prompts without progress ` +
+    `mean the contract is wrong, not the sidekick.`
+  );
+}
 /** Minimal request surface; satisfied by RpcClient and test doubles. */
 export interface FusionTransport {
   readonly isClosed: boolean;
@@ -97,7 +127,6 @@ export interface ReuseInputs {
 
 export type ReuseOutcome =
   | { kind: "none" }
-  | { kind: "active"; worker: FusionWorkerState }
   | { kind: "parked"; worker: FusionWorkerState }
   | { kind: "conflict"; reason: string }
   | { kind: "invalid"; reason: string }
@@ -245,12 +274,32 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     this.pair = pair;
   }
 
-  /** The single non-closed Fusion worker, if one is registered. */
+  /** The primary (earliest-registered) non-closed Fusion sidekick, if any. */
   find(): TWorker | undefined {
     for (const worker of this.deps.listWorkers()) {
       if (worker.fusion && !worker.closed) return worker;
     }
     return undefined;
+  }
+
+  /** Every non-closed Fusion sidekick. Parallel sidekicks own disjoint paths. */
+  findAll(): TWorker[] {
+    const found: TWorker[] = [];
+    for (const worker of this.deps.listWorkers()) {
+      if (worker.fusion && !worker.closed) found.push(worker);
+    }
+    return found;
+  }
+
+  /** Whether `id` names a non-closed Fusion sidekick. */
+  owns(id: string | undefined): boolean {
+    if (!id) return false;
+    return this.findAll().some((worker) => worker.id === id);
+  }
+
+  /** Sidekicks whose current generation is still live. */
+  live(): TWorker[] {
+    return this.findAll().filter((worker) => isLiveLifecycle(worker.lifecycle));
   }
 
   /**
@@ -264,92 +313,113 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       return;
     }
     const priorPair = this.pair ? structuredClone(this.pair) : undefined;
-    const target = this.find();
-    const priorModel = target?.model;
-    const priorThinking = target?.thinking;
-    const priorAttempts = target?.modelAttempts
-      ? [...target.modelAttempts]
-      : undefined;
-    const priorAttemptIndex = target?.modelAttemptIndex;
-    const priorParentSessionId = target?.fusionParentSessionId;
-    const priorHadLive = !!target && !target.closed && !!target.client && !target.client.isClosed;
+    // Snapshot every sidekick's identity: the apply fans out to all live
+    // transports and rollback restores each one from its own snapshot.
+    const targets = this.findAll().map((worker) => ({
+      worker,
+      priorModel: worker.model,
+      priorThinking: worker.thinking,
+      priorAttempts: worker.modelAttempts ? [...worker.modelAttempts] : undefined,
+      priorAttemptIndex: worker.modelAttemptIndex,
+      priorParentSessionId: worker.fusionParentSessionId,
+      priorHadLive: !worker.closed && !!worker.client && !worker.client.isClosed,
+    }));
     this.pair = event.fusion;
     event.acknowledged = true;
     event.rollback = async () => {
       this.pair = priorPair;
-      const current = this.find();
-      if (!current?.client || current.client.isClosed) {
-        if (current && !current.closed) {
+      const failures: string[] = [];
+      for (const target of targets) {
+        const current = target.worker;
+        if (current.closed) continue;
+        if (!current.client || current.client.isClosed) {
           this.deps.parkWorker(
             current,
             "Fusion reconfigure rolled back; transport lost, parking",
           );
-        }
-        if (priorHadLive) {
-          const kept = this.findTranscript(
-            this.deps.readBranch(),
-            priorParentSessionId,
-          );
-          if (!kept) {
-            throw new Error(
-              "Fusion rollback incomplete: sidekick transport lost with no persisted transcript",
+          if (target.priorHadLive) {
+            const kept = this.findTranscript(
+              this.deps.readBranch(),
+              target.priorParentSessionId,
             );
+            if (!kept) {
+              failures.push(
+                `${current.id}: sidekick transport lost with no persisted transcript`,
+              );
+            }
           }
+          continue;
         }
-        return;
+        if (!priorPair) continue;
+        // Cached identity updates only after full success. It cannot prove
+        // that a rejected or timed-out RPC left the remote model unchanged.
+        const restore = splitQualifiedModel(target.priorModel);
+        if (!restore) {
+          failures.push(
+            `${current.id}: cannot restore model ${target.priorModel ?? "unknown"}`,
+          );
+          continue;
+        }
+        try {
+          const applied = await applySidekickModel(
+            current.client,
+            {
+              provider: restore.provider,
+              modelId: restore.modelId,
+              thinking: target.priorThinking,
+            },
+            undefined,
+          );
+          current.model = applied.model;
+          current.thinking = applied.thinking;
+          if (target.priorAttempts) current.modelAttempts = target.priorAttempts;
+          if (target.priorAttemptIndex !== undefined) {
+            current.modelAttemptIndex = target.priorAttemptIndex;
+          }
+          this.deps.notify(current);
+        } catch (error) {
+          failures.push(
+            `${current.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-      if (!priorPair) return;
-      // Cached identity updates only after full success. It cannot prove
-      // that a rejected or timed-out RPC left the remote model unchanged.
-      const restore = splitQualifiedModel(priorModel);
-      if (!restore) {
-        throw new Error(
-          `Cannot restore Fusion sidekick model: ${priorModel ?? "unknown"}`,
-        );
+      if (failures.length) {
+        throw new Error(`Fusion rollback incomplete: ${failures.join("; ")}`);
       }
-      const applied = await applySidekickModel(
-        current.client,
-        {
-          provider: restore.provider,
-          modelId: restore.modelId,
-          thinking: priorThinking,
-        },
-        undefined,
-      );
-      current.model = applied.model;
-      current.thinking = applied.thinking;
-      if (priorAttempts) current.modelAttempts = priorAttempts;
-      if (priorAttemptIndex !== undefined) {
-        current.modelAttemptIndex = priorAttemptIndex;
-      }
-      this.deps.notify(current);
     };
-    const worker = target;
-    if (!worker?.client || worker.client.isClosed) return;
+    const liveTargets = targets.filter(
+      (target) => !!target.worker.client && !target.worker.client.isClosed,
+    );
+    if (!liveTargets.length) return;
     const sidekick = event.fusion.sidekick;
-    event.promise = applySidekickModel(
-      worker.client,
-      sidekick,
-      worker.model
-        ? { modelId: worker.model, thinking: worker.thinking }
-        : undefined,
-    )
-      .then(({ model, thinking }) => {
+    // Sequential per worker; a failure on any sidekick fails the whole
+    // configure so the caller's rollback restores every snapshot.
+    event.promise = (async () => {
+      for (const { worker } of liveTargets) {
+        const client = worker.client!;
+        const { model, thinking } = await applySidekickModel(
+          client,
+          sidekick,
+          worker.model
+            ? { modelId: worker.model, thinking: worker.thinking }
+            : undefined,
+        );
         worker.model = model;
         worker.thinking = thinking;
         worker.modelAttempts = [model];
         worker.modelAttemptIndex = 0;
         this.deps.notify(worker);
-      })
-      .catch((error) => {
-        event.error = error instanceof Error ? error.message : String(error);
-        throw error;
-      });
+      }
+    })().catch((error) => {
+      event.error = error instanceof Error ? error.message : String(error);
+      throw error;
+    });
   }
 
   /**
-   * task_start reuse: reuse a settled transcript, park a dead transport
-   * for resume, or explain why neither applies. Prompt-only apart from a
+   * task_start reuse: continue a settled sidekick's transcript when one is
+   * idle, park dead transports for resume, or report `none` so the caller
+   * spawns an additional parallel sidekick. Prompt-only apart from a
    * validated per-generation report contract.
    */
   async reuse(
@@ -357,19 +427,8 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     inputs: ReuseInputs,
     promptTimeoutMs: number,
   ): Promise<ReuseOutcome> {
-    const worker = this.find();
-    if (!worker) return { kind: "none" };
-    const client = worker.client;
-    if (isLiveLifecycle(worker.lifecycle) && client && !client.isClosed) {
-      return { kind: "active", worker };
-    }
-    if (!client || client.isClosed) {
-      this.deps.parkWorker(
-        worker,
-        "Fusion sidekick transport lost; parking for transcript resume",
-      );
-      return { kind: "parked", worker };
-    }
+    const all = this.findAll();
+    if (!all.length) return { kind: "none" };
     if (inputs.model?.trim()) {
       return {
         kind: "conflict",
@@ -387,18 +446,35 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           `or start a new parent session for a clean transcript.`,
       };
     }
-    if (
-      inputs.cwd !== undefined &&
-      worker.cwd !== undefined &&
-      inputs.cwd !== worker.cwd
-    ) {
-      return {
-        kind: "conflict",
-        reason:
-          `Fusion sidekick reuse stays in ${worker.cwd}; a different cwd needs a fresh worker. ` +
-          `task_close ${worker.id} first.`,
-      };
+    // Dead transports park for a later transcript resume; every remaining
+    // sidekick either runs (leave it alone) or is idle (reusable).
+    let parked: TWorker | undefined;
+    for (const candidate of all) {
+      if (!candidate.client || candidate.client.isClosed) {
+        this.deps.parkWorker(
+          candidate,
+          "Fusion sidekick transport lost; parking for transcript resume",
+        );
+        parked ??= candidate;
+      }
     }
+    const idle = all.filter(
+      (candidate) =>
+        !candidate.closed &&
+        !!candidate.client &&
+        !candidate.client.isClosed &&
+        !isLiveLifecycle(candidate.lifecycle) &&
+        (inputs.cwd === undefined ||
+          candidate.cwd === undefined ||
+          inputs.cwd === candidate.cwd),
+    );
+    if (!idle.length) {
+      // Every live sidekick is busy (or in another cwd): the caller spawns a
+      // parallel sidekick, resuming a parked transcript when one exists.
+      return parked ? { kind: "parked", worker: parked } : { kind: "none" };
+    }
+    const worker = idle[0];
+    const client = worker.client!;
     const schema = inputs.reportSchema?.trim() || undefined;
     if (schema) {
       const parsed = parseReportSchema(schema);
@@ -413,6 +489,11 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     worker.initialPrompt = prompt;
     worker.mission = missionFromPrompt(prompt);
     worker.fallbackReplaySafe = false;
+    // A reuse is a new assignment, so it restarts the chain: this prompt
+    // is prompt 1, and corrective task_send prompts count up from here.
+    // Disjoint follow-up units must arrive as fresh reuses, never as
+    // steering on an old chain.
+    worker.fusionChainPrompts = 1;
     this.deps.startGeneration(worker);
     // A new contract must reach the child as well as the settlement parser:
     // fresh spawns embed it in the initial system prompt, so reuse carries
@@ -421,6 +502,21 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     const accepted = await this.acceptPrompt(worker, client, outgoing, promptTimeoutMs);
     if (accepted.kind === "accepted") return { kind: "reused", worker };
     return accepted;
+  }
+
+  /**
+   * Record one corrective `task_send prompt` against the worker's chain.
+   * Returns the respawn nudge once the chain reaches
+   * FUSION_CHAIN_PROMPT_CAP (and on every prompt after), undefined below
+   * it. Call only after the prompt is accepted — a rejected prompt never
+   * started a generation. Fresh spawns initialize the counter at 1, so a
+   * worker that predates the counter reads as prompt 1 via `?? 1`.
+   */
+  noteChainPrompt(worker: TWorker): string | undefined {
+    const count = (worker.fusionChainPrompts ?? 1) + 1;
+    worker.fusionChainPrompts = count;
+    if (count < FUSION_CHAIN_PROMPT_CAP) return undefined;
+    return fusionChainNudge(worker.id, count);
   }
 
   /**
@@ -458,15 +554,13 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     return { kind: "accepted", worker };
   }
 
-  /** Park a settled/failed designated worker when leaving Fusion mode. */
+  /** Park every settled/failed sidekick when leaving Fusion mode. */
   parkForModeLeave(): void {
-    const worker = this.find();
-    if (
-      worker &&
-      (worker.lifecycle === "settled" || worker.lifecycle === "failed")
-    ) {
-      // Keep the transcript file; a later Fusion entry restores it explicitly.
-      this.deps.parkWorker(worker, "fusion parked");
+    for (const worker of this.findAll()) {
+      if (worker.lifecycle === "settled" || worker.lifecycle === "failed") {
+        // Keep the transcript file; a later Fusion entry restores it explicitly.
+        this.deps.parkWorker(worker, "fusion parked");
+      }
     }
   }
 
@@ -479,10 +573,15 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     }
   }
 
-  /** Latest persisted transcript for a parent session. Pure over entries. */
+  /**
+   * Latest persisted transcript for a parent session, skipping files still
+   * attached to a non-closed sidekick so two workers never share one
+   * transcript. Pure over entries.
+   */
   findTranscript(
     entries: readonly unknown[],
     parentSessionId: string | undefined,
+    excludeSessionFiles: ReadonlySet<string> = new Set(),
   ): PersistedTranscript | undefined {
     if (!parentSessionId) return undefined;
     let found: PersistedTranscript | undefined;
@@ -497,6 +596,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       const data = entry.data;
       if (data.parentSessionId !== parentSessionId) continue;
       if (typeof data.sessionFile !== "string") continue;
+      if (excludeSessionFiles.has(data.sessionFile)) continue;
       found = {
         parentSessionId,
         sessionFile: data.sessionFile,
@@ -531,16 +631,15 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       toolName === "task_chain" ||
       toolName === "task_rebind"
     ) {
-      return "Fusion permits only its designated sidekick.";
+      return "Fusion permits only its sidekicks.";
     }
     if (
       toolName.startsWith("task_") &&
       toolName !== "task_start" &&
       toolName !== "task_list"
     ) {
-      const designated = this.find();
-      if (!designated || inputId !== designated.id) {
-        return "Fusion task operations are scoped to its designated sidekick.";
+      if (!this.owns(inputId)) {
+        return "Fusion task operations are scoped to its sidekicks.";
       }
     }
     return undefined;

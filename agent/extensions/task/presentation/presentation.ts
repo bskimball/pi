@@ -4,12 +4,15 @@
 // boxed renderer shows the model-facing text content. Domain logic, details
 // payloads, and tool registration stay loaded either way.
 //
-// Set PI_TASK_UI=0 to disable Task cards independently. PI_APEX_UI=0 remains
-// the installation-wide emergency opt-out for all custom presentation.
+// Set PI_TASK_UI=0 to disable Task cards independently. PI_UI_CHROME=0
+// (alias PI_APEX_UI=0) remains the installation-wide emergency opt-out.
+
+import { uiChromeEnabled } from "@pi/ui-kit";
+
 
 /** True when Task's standalone activity cards should attach to task tools. */
 export function taskPresentationEnabled(): boolean {
-  return process.env.PI_APEX_UI !== "0" && process.env.PI_TASK_UI !== "0";
+  return uiChromeEnabled() && process.env.PI_TASK_UI !== "0";
 }
 
 /** Renderer slots that belong to the optional Task presentation adapter. */

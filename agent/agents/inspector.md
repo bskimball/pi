@@ -6,7 +6,7 @@ fallbackModels:
   - local-proxy/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low
-tools: read, bash
+tools: read, bash, jev
 inheritSkills: false
 maxTurns: 30
 timeoutSec: 600

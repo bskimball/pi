@@ -8,7 +8,7 @@ fallbackModels:
   - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high
-tools: read, ffgrep, fffind, ls, edit, write, task
+tools: read, ffgrep, fffind, ls, edit, write, task, jev
 inheritSkills: true
 maxTurns: 40
 timeoutSec: 900

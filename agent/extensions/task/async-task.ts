@@ -22,6 +22,8 @@ import {
   piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
+  isApexRosterAgent,
+  isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
   resolveAgentThinking,
@@ -81,6 +83,7 @@ import {
 } from "./runtime/text-bounds.ts";
 import {
   fleetSnapshotKey,
+  isAgentWorkspaceOpen,
   publishFleetSnapshot,
   type FleetSnapshotItem,
 } from "./runtime/fleet-bus.ts";
@@ -333,6 +336,8 @@ interface Worker extends RuntimeEventWorker {
   /** Fusion's sole persistent counterpart; never participates in fallback. */
   fusion?: boolean;
   fusionParentSessionId?: string;
+  /** Prompts in the current Fusion chain (initial assignment + corrections). Owned by fusion-lifecycle. */
+  fusionChainPrompts?: number;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -701,7 +706,7 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 export default function (pi: ExtensionAPI) {
   if (taskPresentationEnabled()) installTaskRenderSafety();
   const agents = discoverAgents();
-  const apexAgents = new Map([...agents].filter(([name]) => !isWorkCrewAgent(name)));
+  const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
   const apexAgentCatalog = apexAgentList(agents);
   const sidekickDef = agents.get("sidekick");
   const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
@@ -710,12 +715,12 @@ Available agents:
 ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartPersistentDescription = `Start the Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. Park the worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
+  const taskStartPersistentDescription = `Start a Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. An idle (settled) sidekick is reused with its context intact; when every sidekick is busy, task_start spawns an additional parallel sidekick, so disjoint units can run concurrently — give each its own owned paths. Park a worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}
 
-At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+At most ${MAX_LIVE_WORKERS} live workers (sidekicks included); each holds a slot until task_close.`;
   const taskStartWorkDescription = `Start a Work crew specialist in an isolated session. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays; prefer the synchronous \`task\` tool for a single bounded result in-line. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Park the worker with task_close when done.
 
 Available agents:
@@ -737,7 +742,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) {
-      return `Agent to run. One of: sidekick. Fusion permits only its designated sidekick on task_start.`;
+      return `Agent to run. One of: sidekick. Fusion permits only sidekicks on task_start; repeated calls while sidekicks are busy start parallel sidekicks for disjoint units.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
     return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
@@ -826,6 +831,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         turns: worker.turns,
         maxTurns: worker.maxTurns,
         generation: worker.generation,
+        model: worker.model,
         waitingUi: worker.pendingUi.size,
         mission: worker.mission,
         directive: worker.directive,
@@ -1377,6 +1383,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Lead discovery calls since the last user-turn start or task_start/task_send.
   // Counted in tool_result (fusion lead only); drives the dispatch nudge below.
   let fusionDiscoveryCalls = 0;
+  // Set by the lead-session session_compact event; delivered once as a
+  // [fusion] re-evaluation nudge on the lead's next tool result, then
+  // cleared. Compaction is the free model-switch point, and every
+  // pre-compaction chain is stale afterwards — never resume steering one
+  // across the boundary. Automatic model substitution is never performed;
+  // the lead re-evaluates via /mode configure.
+  let fusionCompactionPending = false;
+  function fusionCompactionNudge(): string {
+    return `[fusion] session compacted: retained sidekick chains are stale. Re-evaluate the pairing with /mode configure, then start the next unit on a fresh chain — never resume steering a pre-compaction chain.`;
+  }
   type FusionSessionEntry = { parentSessionId: string; sessionFile: string; sessionId?: string; cwd: string };
   // Single owner for designated-worker sequences (readiness/reuse, config
   // ack/rollback, parking, isolation, gates). Pair state lives here, not in
@@ -1403,7 +1419,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Last-known branch for transcript verification paths that run without a
   // calling context (configure rollback). Tool calls pass their own branch.
   let lastBranchSnapshot: readonly unknown[] = [];
-  const fusionWorker = () => fusionLifecycle.find();
   const fusionModel = () => fusionModelId(fusionLifecycle.configured);
 
   const spawnWorker = async (
@@ -1495,6 +1510,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           : "none-requested",
       fusion: params.fusion,
       fusionParentSessionId: params.fusionParentSessionId,
+      // A fresh spawn starts a new chain: this initial prompt is prompt 1.
+      fusionChainPrompts: params.fusion ? 1 : undefined,
       // Persistent sidekicks track phase but never arm an idle kill timer;
       // the runtime honors this on every armIdle path (startGeneration,
       // handleEvent, steering), so no local wrapper can be bypassed.
@@ -1955,6 +1972,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult("prompt is required.", true);
       }
       const sidekickMode = persistentSidekickMode();
+      // Only the first sidekick of a parent session (or a parked one) resumes
+      // a persisted transcript; parallel sidekicks start fresh so two workers
+      // never share one transcript file.
+      let fusionResume = false;
       if (sidekickMode) {
         if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`Fusion sidekick cannot spawn workers.`, true);
         if (params.agent !== "sidekick") return textResult(`Fusion permits task_start only for sidekick.`, true);
@@ -1969,16 +1990,26 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           PROMPT_ACCEPT_TIMEOUT_MS,
         );
         const sidekickLabel = "Fusion";
-        if (outcome.kind === "active") return textResult(`${outcome.worker.id} is already the active ${sidekickLabel} sidekick.`, true);
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
-        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}).`);
+        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new chain, prompt 1).`);
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
         // "parked" falls through to transcript-resume spawn below; "none"
-        // needs a configured pair before spawning.
+        // spawns a fresh (possibly parallel) sidekick and needs a configured pair.
         if (!fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
+        fusionResume = outcome.kind === "parked" || fusionLifecycle.findAll().length === 0;
+        if (!runtime.canStart()) {
+          const busy = fusionLifecycle.live().map((worker) => worker.id).join(", ");
+          return textResult(
+            `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers); every sidekick is busy${busy ? ` (${busy})` : ""}. task_wait one of them, then reuse it with task_start or free a slot with task_close.`,
+            true,
+          );
+        }
       }
       if (behaviorMode !== "work" && isWorkCrewAgent(params.agent)) {
         return textResult(`Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`, true);
+      }
+      if (behaviorMode !== "fusion" && isFusionOnlyAgent(params.agent)) {
+        return textResult(`sidekick is Fusion-only — ${params.agent} cannot run in this mode; switch to Fusion or dispatch an Apex specialist.`, true);
       }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
         return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`, true);
@@ -2019,8 +2050,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
 
       const parentSessionId = ctx.sessionManager?.getSessionId?.();
-      const savedFusion = sidekickMode !== undefined
-        ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.())
+      const attachedTranscripts = new Set(
+        fusionLifecycle.findAll().map((worker) => worker.sessionFile).filter((file): file is string => !!file),
+      );
+      const savedFusion = sidekickMode !== undefined && fusionResume
+        ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.(), attachedTranscripts)
         : undefined;
       const { worker, error } = await spawnWorker(def, {
         prompt: params.prompt,
@@ -2236,6 +2270,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (behaviorMode !== "work" && isWorkCrewAgent(step.agent)) {
           return textResult(
             `Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${step.agent} cannot run in this mode at step ${i + 1}; switch to Work or dispatch advisor, librarian, or scout.`,
+            true,
+          );
+        }
+        if (isFusionOnlyAgent(step.agent)) {
+          return textResult(
+            `sidekick is Fusion-only — ${step.agent} cannot run in this mode at step ${i + 1}; switch to Fusion or dispatch an Apex specialist.`,
             true,
           );
         }
@@ -2648,7 +2688,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         return textResult(`Unknown worker "${id}".`, true, sendDetails("rejected", "unknown worker"));
       }
       if (persistentSidekickMode() && !worker.fusion) {
-        return textResult(`Fusion task_send targets only the designated sidekick.`, true, sendDetails("rejected", "not persistent sidekick"));
+        return textResult(`Fusion task_send targets only sidekicks.`, true, sendDetails("rejected", "not persistent sidekick"));
       }
       if (worker.closed || worker.lifecycle === "closed") {
         return textResult(`${id} is closed.`, true, sendDetails("rejected", "worker closed"));
@@ -2689,12 +2729,18 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             );
           }
           writeLastPhase(`task_send:prompt:accepted id=${id} gen=${worker.generation}`);
+          // Chain accounting lives in the Fusion lifecycle owner: a corrective
+          // prompt that reaches the cap appends the respawn nudge so the lead
+          // reassesses the contract instead of steering a stale context again.
+          const chainNudge = worker.fusion ? fusionLifecycle.noteChainPrompt(worker) : undefined;
+          const acceptedLines = [
+            `${id} accepted new prompt (generation ${worker.generation}${worker.fusion ? `, chain prompt ${worker.fusionChainPrompts ?? "?"}` : ""}).`,
+            `lifecycle: ${worker.lifecycle}`,
+            "A new generation is running.",
+          ];
+          if (chainNudge) acceptedLines.push(chainNudge);
           return textResult(
-            [
-              `${id} accepted new prompt (generation ${worker.generation}).`,
-              `lifecycle: ${worker.lifecycle}`,
-              "A new generation is running.",
-            ].join("\n"),
+            acceptedLines.join("\n"),
             false,
             sendDetails("accepted", `generation ${worker.generation} running`),
           );
@@ -3068,6 +3114,9 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             : undefined,
           snapshot.errorText ? `error: ${snapshot.errorText}` : undefined,
           worker.reportError ? `report_error: ${worker.reportError}` : undefined,
+          worker.fusion && worker.lifecycle === "failed"
+            ? `[fusion] generation failed: reassess the contract (outcome, owned paths, acceptance) before any new dispatch — do not re-run the same brief. Two unconverged corrections means close-and-respawn or pull-back, not another prompt.`
+            : undefined,
           "",
           `--- result ---`,
           bound.text || "(empty)",
@@ -3781,20 +3830,33 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
   pi.on("tool_result", event => {
     if (behaviorMode !== "fusion" || process.env.PI_FUSION_SIDEKICK === "1") return;
-    if (!FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) return;
-    fusionDiscoveryCalls += 1;
-    if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY !== 0) return;
+    const nudges: string[] = [];
+    if (fusionCompactionPending) {
+      fusionCompactionPending = false;
+      nudges.push(fusionCompactionNudge());
+    }
+    if (FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) {
+      fusionDiscoveryCalls += 1;
+      if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY === 0) nudges.push(fusionDiscoveryNudge(fusionDiscoveryCalls));
+    }
+    if (!nudges.length) return;
     const existing = Array.isArray(event.content) ? event.content : [];
     return {
-      content: [...existing, { type: "text" as const, text: fusionDiscoveryNudge(fusionDiscoveryCalls) }],
+      content: [...existing, ...nudges.map(text => ({ type: "text" as const, text }))],
     };
+  });
+  // Lead-session compaction is the free model-switch point: every retained
+  // sidekick chain is stale afterwards. Flag it here; the tool_result
+  // wrapper above delivers the one-shot re-evaluation nudge on the lead's
+  // next tool result (any tool, including the next task_start/task_send).
+  pi.on("session_compact", () => {
+    fusionCompactionPending = true;
   });
   pi.on("agent_end", async event => {
     if (behaviorMode !== "fusion") return;
     const last = event.messages.at(-1) as { role?: string; stopReason?: string } | undefined;
     if (last?.role === "assistant" && (last.stopReason === "aborted" || last.stopReason === "error")) {
-      const worker = fusionWorker();
-      if (worker && !["settled", "failed", "closed"].includes(worker.lifecycle)) await abortWorkerAndEscalate(worker);
+      await Promise.all(fusionLifecycle.live().map((worker) => abortWorkerAndEscalate(worker)));
     }
   });
 
@@ -3828,8 +3890,10 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     fusionLifecycle.isolateSession(ctx?.sessionManager?.getSessionId?.());
     if (ctx?.hasUI) removeFusionInputListener = ctx.ui.onTerminalInput(data => {
       if (data === "\u001b" && persistentSidekickMode() && uiPromptDepth === 0) {
-        const worker = fusionWorker();
-        if (worker && worker.lifecycle !== "settled" && worker.lifecycle !== "failed") void abortWorkerAndEscalate(worker);
+        // Overlay handleInput does not consume TUI listeners. Skip abort while
+        // the opaque Agents workspace owns Esc as "back to lead".
+        if (isAgentWorkspaceOpen()) return undefined;
+        for (const worker of fusionLifecycle.live()) void abortWorkerAndEscalate(worker);
       }
       return undefined;
     });

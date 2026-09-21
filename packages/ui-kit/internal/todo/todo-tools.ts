@@ -22,6 +22,10 @@ import type {
   TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import {
+  TRANSCRIPT_TAIL_BYTES,
+  formatTranscriptTail,
+} from "./peek-tool-format.ts";
+import {
   CANONICAL_STATUSES,
   agentRowAtY,
   buildTodoList,
@@ -40,6 +44,7 @@ import {
 } from "./todo-view.ts";
 import {
   currentDockAgents,
+  setAgentWorkspaceOpen,
   subscribeDockAgents,
   type DockAgentItem,
 } from "./fleet-listen.ts";
@@ -433,7 +438,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
     if (!presentationEnabled || !currentCtx?.hasUI || currentCtx.mode !== "tui") return undefined;
     // ui.custom owns keyboard input while its overlay is focused. The editor
     // owns navigation and submit as soon as the user has composed any text,
-    // including a prepared `/agents open` command.
+    // including a prepared `/agents open` command. Fusion's Escape abort is
+    // gated on the shared workspace-open flag, not consume, so overlay Esc
+    // still reaches handleInput and closes the view.
     if (peekOpen || uiPromptDepth > 0) return undefined;
     if (!dockMounted || dockPane !== "agents" || panelCollapsed || !liveAgents.length) return undefined;
     try {
@@ -475,141 +482,6 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
   }
 
-  /** Number of entries in a hostile array value, capped. */
-  function boundedLength(value: unknown, cap: number): number {
-    if (!Array.isArray(value)) return 0;
-    try {
-      const length = value.length;
-      if (typeof length !== "number" || !Number.isFinite(length)) return 0;
-      return Math.max(0, Math.min(cap, Math.trunc(length)));
-    } catch {
-      return 0;
-    }
-  }
-
-  /** Bounded tail read of a worker session file for the session view. */
-  const TRANSCRIPT_TAIL_BYTES = 32 * 1024;
-  const TRANSCRIPT_TAIL_LINES = 160;
-
-  /**
-   * Minimal transcript line formatter: role + text, tool calls as names.
-   * The kit cannot import task-side extractAssistantText (no
-   * cross-extension imports), so this hand-rolls the same shape from the
-   * parsed JSONL entries with kit text helpers only.
-   */
-  function formatTranscriptTail(text: string): string[] {
-    const rawLines = text.split("\n");
-    // Skip the trailing partial line a live worker may still be writing.
-    const complete = text.endsWith("\n") ? rawLines : rawLines.slice(0, -1);
-    const out: string[] = [];
-    for (const raw of complete) {
-      const line = raw.trim();
-      if (!line) continue;
-      let entry: Record<string, unknown> | undefined;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          entry = parsed as Record<string, unknown>;
-        }
-      } catch {
-        continue;
-      }
-      if (!entry) continue;
-      const formatted = formatTranscriptEntry(entry);
-      if (formatted) out.push(formatted);
-    }
-    return out.slice(-TRANSCRIPT_TAIL_LINES);
-  }
-
-  function formatTranscriptEntry(entry: Record<string, unknown>): string | undefined {
-    let message: Record<string, unknown> | undefined;
-    try {
-      const raw = entry.message;
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        message = raw as Record<string, unknown>;
-      }
-    } catch {
-      return undefined;
-    }
-    if (!message) return undefined;
-    const role = (() => {
-      try {
-        return String(message.role ?? "");
-      } catch {
-        return "";
-      }
-    })();
-    if (role === "toolResult") {
-      const name = cleanInline((() => {
-        try {
-          return message.toolName ?? "";
-        } catch {
-          return "";
-        }
-      })(), 40);
-      return name ? `tool ${name}` : undefined;
-    }
-    const content = (() => {
-      try {
-        return message.content;
-      } catch {
-        return undefined;
-      }
-    })();
-    if (typeof content === "string") {
-      return transcriptLine(role, cleanInline(content, 120));
-    }
-    if (!Array.isArray(content)) return undefined;
-    const parts: string[] = [];
-    const count = boundedLength(content, 8);
-    for (let index = 0; index < count; index++) {
-      let part: Record<string, unknown> | undefined;
-      try {
-        const raw = (content as unknown[])[index];
-        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-          part = raw as Record<string, unknown>;
-        }
-      } catch {
-        continue;
-      }
-      if (!part) continue;
-      let kind = "";
-      try {
-        kind = String(part.type ?? "");
-      } catch {
-        continue;
-      }
-      if (kind === "text") {
-        const text = cleanInline((() => {
-          try {
-            return part.text ?? "";
-          } catch {
-            return "";
-          }
-        })(), 120);
-        if (text) parts.push(text);
-      } else if (kind === "toolCall") {
-        const name = cleanInline((() => {
-          try {
-            return part.name ?? "";
-          } catch {
-            return "";
-          }
-        })(), 40);
-        if (name) parts.push(`tool ${name}`);
-      }
-      if (parts.length >= 2) break;
-    }
-    if (!parts.length) return undefined;
-    return transcriptLine(role, parts.join(" · "));
-  }
-
-  function transcriptLine(role: string, text: string): string | undefined {
-    if (!text) return undefined;
-    const speaker = role === "assistant" ? "worker" : role === "user" ? "lead" : role || "msg";
-    return `${cleanInline(speaker, 12)}: ${cleanInline(text, 120)}`;
-  }
-
   function readTranscriptTail(path: string): string[] {
     let handle: number | undefined;
     try {
@@ -646,11 +518,13 @@ export function installTodoTools(pi: ExtensionAPI): void {
   }
 
   /**
-   * Full-pane session view for one worker. Overlay input is raw handleInput:
-   * Esc/q returns to the lead, `o`/Enter resolves "open" for settled/failed
-   * workers only. Live workers stay read-only with the reason shown inline.
-   * Guarded so repeated clicks/Enters cannot stack views: extra requests
-   * while one is open resolve immediately without opening another.
+   * Opaque full-pane workspace for one worker. Overlay input is raw handleInput:
+   * Esc/q returns to the lead without aborting the worker, `o`/Enter resolves
+   * "open" for settled/failed workers only. Live workers stay read-only with
+   * the reason shown inline. Guarded so repeated clicks/Enters cannot stack
+   * views: extra requests while one is open resolve immediately without opening
+   * another. Fusion's Escape abort is gated on this flag because overlay
+   * handleInput does not consume TUI input listeners.
    */
   let peekOpen = false;
   let peekItemId: string | undefined;
@@ -679,6 +553,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   ): Promise<{ open: boolean }> {
     if (peekOpen) return { open: false };
     peekOpen = true;
+    setAgentWorkspaceOpen(true);
     peekItemId = item.id;
     peekSnapshot = item;
     peekTranscriptLines = peekTranscript(item);
@@ -689,7 +564,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       let currentWidth = 80;
       result = await ctx.ui.custom<{ open: boolean }>(
         (tui, theme, keys, done) => {
-          currentRows = () => Math.max(3, Math.min(80, tui.terminal?.rows ?? 24));
+          currentRows = () => Math.max(3, Math.min(80, tui?.terminal?.rows ?? 24));
           peekInvalidate = () => {
             requestHostRender();
             try {
@@ -701,7 +576,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
           const scrollBy = (delta: number): void => {
             const current = peekSnapshot ?? item;
             const body = peekTranscriptBudget(currentWidth, current, currentRows());
-            const rows = layoutPeekTranscript(theme, currentWidth, peekTranscriptLines);
+            const gutter = currentWidth >= 20 ? 1 : 0;
+            const innerWidth = Math.max(1, currentWidth - gutter * 2);
+            const rows = layoutPeekTranscript(theme, innerWidth, peekTranscriptLines);
             peekScrollOffset = clampPeekScroll(rows.length, body, peekScrollOffset, delta);
             peekInvalidate?.();
           };
@@ -779,6 +656,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       );
     } finally {
       peekOpen = false;
+      setAgentWorkspaceOpen(false);
       peekItemId = undefined;
       peekSnapshot = undefined;
       peekTranscriptLines = [];

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const { agentParamDescription, piAgentParamDescription, discoverAgents, routingHint } = await import(
-  "../task/runtime/agent-discovery.ts"
-);
+import {
+  agentParamDescription,
+  piAgentParamDescription,
+  discoverAgents,
+  routingHint,
+} from "../../../packages/ui-kit/internal/runtime/agent-discovery.ts";
 
 type Catalog = Parameters<typeof routingHint>[0];
 

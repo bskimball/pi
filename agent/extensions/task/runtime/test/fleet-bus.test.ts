@@ -3,9 +3,11 @@ import { beforeEach, describe, it } from "node:test";
 import {
   currentFleetSnapshot,
   fleetSnapshotKey,
+  isAgentWorkspaceOpen,
   publishFleetSnapshot,
   resetFleetBus,
   subscribeFleetSnapshot,
+  WORKSPACE_OPEN_KEY,
 } from "../fleet-bus.ts";
 
 beforeEach(() => {
@@ -171,6 +173,40 @@ describe("fleet bus", () => {
     );
   });
 
+  it("repaints on a model-only change", () => {
+    const base = {
+      id: "task_1",
+      agent: "scout",
+      lifecycle: "running",
+      createdAt: 1,
+      mission: "Steer the dock",
+    };
+    const before = fleetSnapshotKey([base]);
+    assert.equal(
+      fleetSnapshotKey([{ ...base, lastEventAt: 99_999 }]),
+      before,
+      "pure heartbeat does not change the key",
+    );
+    assert.notEqual(
+      fleetSnapshotKey([{ ...base, model: "local-proxy/grok-4.5" }]),
+      before,
+      "resolved model is structural",
+    );
+  });
+
+  it("bounds the resolved model on publish", () => {
+    publishFleetSnapshot([
+      {
+        id: "task_1",
+        agent: "scout",
+        lifecycle: "running",
+        createdAt: 1,
+        model: "m".repeat(200),
+      } as any,
+    ]);
+    assert.equal(currentFleetSnapshot()[0]?.model?.length, 80, "model bounded to 80 chars");
+  });
+
   it("repaints on activity changes but not on heartbeats", () => {
     const base = {
       id: "task_1",
@@ -234,5 +270,13 @@ describe("fleet bus", () => {
     stop();
     publishFleetSnapshot([]);
     assert.deepEqual(seen, [0, 1]);
+  });
+
+  it("exposes the Agents workspace-open flag Fusion Escape abort reads", () => {
+    assert.equal(isAgentWorkspaceOpen(), false);
+    (globalThis as typeof globalThis & { [WORKSPACE_OPEN_KEY]?: boolean })[WORKSPACE_OPEN_KEY] = true;
+    assert.equal(isAgentWorkspaceOpen(), true);
+    resetFleetBus();
+    assert.equal(isAgentWorkspaceOpen(), false);
   });
 });

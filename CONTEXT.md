@@ -43,18 +43,18 @@ Directory packages (`apex`, `task`, `lsp`) declare their entry points in their o
 
 - Apex, Claude, and HAL are three installable UI extensions. Shared TREE receipts, layout, todo tools, and the single `ToolExecutionComponent` wrap live in `packages/ui-kit` (import `@pi/ui-kit`). That package is not a Pi extension and must not live under `agent/extensions/shared`.
 - Kit receipts cover the Pi-owned `read`, `edit`, `grep`, and `ls` built-ins through `registerHeadlessReceipt(..., { overrideOwned: true })`; Pi keeps execution. `bash` and `write` are re-registered in the kit because execute is wrapped (write captures a diff).
-- Each UI owns landing art, glyphs, working indicator, and theme. `/ui` selects among installed UIs (`pi` is always available) and fails closed if the target directory is missing. `PI_UI_SKIN` still names the active look so a live switch applies without restart. Unset or unrecognized values fall back to Apex glyphs. Only the kit wraps `ToolExecutionComponent` (once). Kit tools, shortcuts, Observatory commands, and landing art register through a process-interned bag because Pi imports each UI with jiti `moduleCache: false`. Tools/shortcuts/commands attach to the first loaded UI extension's `pi`; later skins only join the shared hosts and landings maps.
+- Each UI owns landing art, glyphs, working indicator, and theme. `/ui` (owned by the presentation-switch module) selects among installed UIs (`pi` is always available) and fails closed if the target directory is missing. `PI_UI_SKIN` still names the active look so a live switch applies without restart. Unset or unrecognized values fall back to Apex glyphs. Only the kit wraps `ToolExecutionComponent` (once). Kit tools, shortcuts, Observatory commands, and landing art register through a process-interned bag because Pi imports each UI with jiti `moduleCache: false`. Tools/shortcuts/commands attach to the first loaded UI extension's `pi`; later skins only join the shared hosts and landings maps.
 - Other tools use Pi's stock tool renderer and return bounded plain text plus structured details where useful.
-- Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_APEX_UI=0` emergency presentation opt-out.
-- Todo tools and the docked above-editor panel live in the kit. Styled chrome follows the active UI; under `PI_APEX_UI=0` the dock stays as a plain list.
-- `PI_APEX_UI=0` remains the emergency opt-out for every custom presentation surface. It disables Apex UI and Task cards without disabling either extension's tool behavior.
+- Task owns one narrow exception: essential standalone delegated-worker activity cards and notices. They work with Apex absent, have their own `PI_TASK_UI=0` switch, and also honor the installation-wide `PI_UI_CHROME=0` emergency presentation opt-out (`PI_APEX_UI=0` alias).
+- Todo tools and the docked above-editor panel live in the kit. Styled chrome follows the active UI; under `PI_UI_CHROME=0` the dock stays as a plain list.
+- `PI_UI_CHROME=0` is the emergency opt-out for every custom presentation surface. `PI_APEX_UI=0` remains a deprecated alias; when both are set, `PI_UI_CHROME` wins. It disables custom UI chrome and Task cards without disabling either extension's tool behavior.
 - Rendering remains passive and event-driven. No extension presentation timer calls `requestRender()`.
 
 ## Todo dock
 
 One `aboveEditor` widget (`todo-list`) owned by the kit. Live async workers share that slot as an Agents tab; Task publishes snapshots on `globalThis.__piTaskFleetBus` and the kit listens — no cross-extension import, no extra footer rows.
 
-Snapshots carry structural liveness (`phase`, running `tool`, bounded activity target, `turns`/`maxTurns`, `generation`, `waitingUi`, `mission`, `directive`, `fusion`) bounded at publish time. `directive` is the last `task_send` steer or follow_up for this generation: `queued: true` until the child queue drains (steer at the next model-call boundary; follow_up only after settle, when the next generation starts). Rows show `queued: <text>` vs plain `<text>` so a pending steer is never the current task. `waitingUi` still owns the state column (`waiting for reply`); then directive, then mission. `fleetSnapshotKey()` covers those fields so a tool change, turn, or directive-only update repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer. Live workers are listed first; bounded settled/failed history fills remaining slots so its transcript remains reachable. The full-pane view keeps labeled mission and directive lines; the directive yields before the transcript window disappears, and `peekTranscriptBudget` counts the same chrome as the renderer.
+Snapshots carry structural liveness (`phase`, running `tool`, bounded activity target, `turns`/`maxTurns`, `generation`, resolved `model`, `waitingUi`, `mission`, `directive`, `fusion`) bounded at publish time. `directive` is the last `task_send` steer or follow_up for this generation: `queued: true` until the child queue drains (steer at the next model-call boundary; follow_up only after settle, when the next generation starts). Rows show `queued: <text>` vs plain `<text>` so a pending steer is never the current task. `waitingUi` still owns the state column (`waiting for reply`); then directive, then mission. `fleetSnapshotKey()` covers those fields so a tool change, turn, or directive-only update repaints, while raw `lastEventAt` heartbeats still do not — the dock updates through `requestHostRender()`, never a remount or a timer. Live workers are listed first; bounded settled/failed history fills remaining slots so its transcript remains reachable. The full-pane view keeps labeled mission and directive lines plus the resolved model in its header; the directive yields before the transcript window disappears, and `peekTranscriptBudget` counts the same chrome as the renderer. Peek transcript tones mirror the main session: lead steers read as warning, worker prose as primary text, worker tool lines as muted, and bare tool lines as accent.
 
 | Trigger | Effect |
 | --- | --- |
@@ -63,10 +63,10 @@ Snapshots carry structural liveness (`phase`, running `tool`, bounded activity t
 | Lone Fusion sidekick (`fusion`, 1 worker) | Mount the same Agents tab used by every mode. |
 | `alt+t` or `/todos` | Collapse or expand the dock. |
 | `alt+a` | Toggle Todos / Agents when chrome is on. |
-| `/agents` | Switch to Agents. Click a row or press Enter for a full-pane live session view (JSONL tail, not a session switch). Esc/q returns to the lead. |
-| Settled/failed worker | Keep bounded history visible. From the session view, `o` prepares `/agents open <id>` without replacing any non-empty draft; `/agents peek <id>` can switch directly from its command context. Running workers remain read-only (`session still writing`). Switching sessions runs task shutdown and closes every retained worker, so the UI requires confirmation when any other worker is still live. |
+| `/agents` | Switch to Agents. Click a row or press Enter for an opaque full-pane agent workspace (read-only JSONL tail that fully occludes the parent transcript). Esc/q returns to the lead without aborting the worker. |
+| Settled/failed worker | Keep bounded history visible. From the workspace, `o` prepares `/agents open <id>` without replacing any non-empty draft; `/agents peek <id>` can switch directly from its command context. Running workers remain read-only (`session still writing`). Switching sessions runs task shutdown and closes every retained worker, so the UI requires confirmation when any other worker is still live. |
 | Last retained worker is closed/pruned | Drop the Agents tab; clear the dock if no todo list remains. |
-| `PI_APEX_UI=0` | Plain todo list only. No tabs; `alt+t` / `alt+a` / `/todos` / `/agents` stay registered but inactive, so a later live switch can enable them. |
+| `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) | Plain todo list only. No tabs; `alt+t` / `alt+a` / `/todos` / `/agents` stay registered but inactive, so a later live switch can enable them. |
 
 ## Behavior-mode transitions
 
@@ -91,7 +91,7 @@ The **Fusion sidekick lifecycle module** (`task/runtime/fusion-lifecycle.ts`) ow
 
 Command for steering the active parent orchestrator with concurrent requests or priority shifts while workers run:
 
-- **Target & Scope**: Directs additional work to the **same orchestrator** session. The command itself assigns no worker; the orchestrator routes the request under the active delegation policy (Apex inline-by-default, Apex Orchestrate specialist-first, Fusion through its designated sidekick) — delegating via `task_start` with the correct specialist (artisan for visual/UI, machinist for code, scribe for prose) when it outgrows trivial glue. It preserves active work, steers existing workers, or delegates in isolated worktrees. Substantial inline work ahead of running workers is out of scope. Ordinary chat messages remain unchanged.
+- **Target & Scope**: Directs additional work to the **same orchestrator** session. The command itself assigns no worker; the orchestrator routes the request under the active delegation policy (Apex inline-by-default, Apex Orchestrate specialist-first, Fusion through its sidekick(s)) — delegating via `task_start` with the correct specialist (artisan for visual/UI, machinist for code, scribe for prose) when it outgrows trivial glue. It preserves active work, steers existing workers, or delegates in isolated worktrees. Substantial inline work ahead of running workers is out of scope. Ordinary chat messages remain unchanged.
 - **Recording & Delivery**: Records an `async-task-dispatch` entry in the session log and requests steering via hidden custom message (`deliverAs: "steer"`, `triggerTurn: true`).
 - **Interruption Semantics**:
   - Active `task_wait` yields immediately on dispatch without aborting the worker and without applying a timeout or cooldown. The orchestrator absorbs the dispatch and can reconnect later via `task_wait`.
@@ -101,7 +101,7 @@ Command for steering the active parent orchestrator with concurrent requests or 
 ## Long-session and subagent stability
 
 1. `crash-logger/internal/segmenter-safety.ts` installs process-wide lazy JS grapheme segmentation before the first fullscreen paint.
-2. `apex/internal/presentation/render-safety.ts` contains malformed Apex Text/Markdown values, preserves cache identity, and caps Text/Markdown payloads plus compositor line arrays so Ctrl+O expand-all cannot dump unbounded tool output into the TUI.
+2. `packages/ui-kit/internal/presentation/render-safety.ts` contains malformed Text/Markdown values, preserves cache identity, and caps Text/Markdown payloads plus compositor line arrays so Ctrl+O expand-all cannot dump unbounded tool output into the TUI.
 3. `crash-logger/internal/terminal-restore-watchdog.mjs` restores the terminal after an unclean parent death and records the observed Windows exit code, last phase, a metadata-only runtime event ring, heartbeat age/event-loop lag, memory/resource counters, parent liveness, and bounded metadata from nearby Windows crash/resource events.
 4. Task JSONL records, stderr, activities, errors, status text, result previews, and settled metadata are hard-bounded within `task/`.
 5. Stream deltas do not repaint pinned worker cards; Pi owns scheduling.
@@ -112,10 +112,10 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 
 ## Observatory
 
-- Apex-only landing surface: `apex/observatory/observatory.ts`.
+- Observatory engine lives in `packages/ui-kit/observatory/`. Each UI registers landing art; Apex shark/classic landing is `registerClassicObservatoryLanding`.
 - Preview: `node --experimental-transform-types agent/extensions/apex/observatory/preview.mjs`.
 - Pure passive string rendering; no timers or Pi TUI Text/Markdown/Container.
-- Cell measurement uses Apex-owned `apex/internal/presentation/safe-text-layout.ts`.
+- Cell measurement uses kit `packages/ui-kit/internal/presentation/safe-text-layout.ts`.
 - The passive splash is mark + invitation + horizon on every UI: no CUSTOM PROMPTS / CUSTOM AGENTS inventory, no workspace signal, no inventory counts, no `/observatory` hint, no UI caption. Gated on the absence of a selection, not on the skin. The interactive orb and `/observatory` still render the full constellation; a focused orb also shows the key legend.
 - Claude uses a wide block-art critter (29 × 7 cells full, 19 × 5 compact); terminal cells are ~2:1 tall, so equal-count art renders skinny.
 - HAL uses a lens orb above a striped `HAL` wordmark, all upper-half blocks, separated by one dark row. Full tier: orb 9 × 18, wordmark 8 × 31, block width 31. Compact: orb 7 × 14, wordmark 8 × 18, block width 18. Below 20 columns, a single `▀`.
@@ -125,15 +125,16 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 
 ## Feature ownership
 
-- Background jobs: `bg-process.ts` plus `bg-process/internal/`; Apex attaches receipt chrome on `bg_start`/`bg_status`/`bg_list`/`bg_kill`, plus notice chrome on `bg-process-settled`.
-- Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; Apex receipt chrome on `memory_list` / `memory_write`.
-- Web search: standalone `web-search.ts`; Apex receipt chrome on `web_search` / `fetch_content` / `get_search_content`.
-- Todo list: Apex-owned (`apex/internal/todo/`), registered by `apex/builtin-tools.ts`; Apex receipts plus the docked todos/agents panel, or stock rendering under `PI_APEX_UI=0`. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; Apex wraps their interactive chrome and restores stock rendering under `PI_APEX_UI=0`. Apex's legacy unified edit under `apex/internal/edit/` is not registered.
-- Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; Apex receipt chrome on `browser_attach`; Apex contains its own pathway launcher copy for Observatory.
+- Background jobs: `bg-process.ts` plus `bg-process/internal/`; the kit attaches receipt chrome on `bg_start`/`bg_status`/`bg_list`/`bg_kill`, plus notice chrome on `bg-process-settled`.
+- Continual memory: `continual-memory.ts` plus `continual-memory/store.ts`; kit receipt chrome on `memory_list` / `memory_write`.
+- Web search: standalone `web-search.ts`; kit receipt chrome on `web_search` / `fetch_content` / `get_search_content`.
+- Todo list: kit-owned (`packages/ui-kit/internal/todo/`), registered by `packages/ui-kit/builtin-tools.ts`; kit receipts plus the docked todos/agents panel, or a plain list under `PI_UI_CHROME=0`. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit wraps their interactive chrome and restores stock rendering when chrome is off.
+- Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; kit receipt chrome on `browser_attach`; the kit Observatory engine launches featured pathways.
 - User profile: loader owned directly by `user-profile.ts`.
 - `@` path overlay: standalone `at-path-complete.ts`; lists on-disk children for scoped `@dir/` mentions so gitignored folders (for example `files/`) appear in autocomplete. Bare `@foo` stays with FFF/stock.
-- MCP adapter: standalone `mcp-adapter.ts`; Apex receipt chrome on `mcp` / `mcpScript` (overrides adapter renderers). Direct and namespace MCP tools keep adapter chrome.
-- Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; Apex receipt chrome on `worktree`.
+- MCP adapter: standalone `mcp-adapter.ts`; kit receipt chrome on `mcp` / `mcpScript` (overrides adapter renderers). Direct and namespace MCP tools keep adapter chrome.
+- Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; kit receipt chrome on `worktree`.
+- Agent Catalog: `packages/ui-kit/internal/runtime/agent-discovery.ts`. Task spawn and Observatory listing are adapters over it.
 
 ## Secrets
 

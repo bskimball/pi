@@ -2,12 +2,27 @@
 // Same global key as task/runtime/fleet-bus.ts; no cross-extension import.
 
 const FLEET_BUS_KEY = "__piTaskFleetBus";
+const WORKSPACE_OPEN_KEY = "__piAgentWorkspaceOpen";
 const ITEM_CAP = 8;
+
+type WorkspaceRoot = typeof globalThis & {
+  [WORKSPACE_OPEN_KEY]?: boolean;
+};
+
+/** True while the opaque Agents workspace overlay is open. Fusion Escape abort reads this. */
+export function isAgentWorkspaceOpen(): boolean {
+  return Boolean((globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY]);
+}
+
+export function setAgentWorkspaceOpen(open: boolean): void {
+  (globalThis as WorkspaceRoot)[WORKSPACE_OPEN_KEY] = open;
+}
 
 /** Publish-time bounds so the dock never receives unbounded text. */
 const TOOL_CHARS = 24;
 const SUMMARY_CHARS = 120;
 const MISSION_CHARS = 80;
+const MODEL_CHARS = 80;
 const ACTIVITY_CAP = 4;
 
 function sanitizeDirective(
@@ -43,6 +58,8 @@ export interface DockAgentItem {
   turns?: number;
   maxTurns?: number;
   generation?: number;
+  /** Resolved model label, e.g. `provider/model-id` or `default model`. */
+  model?: string;
   /** Pending UI requests: the "blocked on a question" signal. */
   waitingUi?: number;
   /** Bounded short mission label tracking the current generation. */
@@ -108,6 +125,10 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
     maxTurns: item.maxTurns === undefined ? undefined : Number(item.maxTurns) || 0,
     generation:
       item.generation === undefined ? undefined : Number(item.generation) || 0,
+    model:
+      item.model === undefined
+        ? undefined
+        : String(item.model ?? "").slice(0, MODEL_CHARS),
     waitingUi:
       item.waitingUi === undefined ? undefined : Number(item.waitingUi) || 0,
     mission:
@@ -148,4 +169,5 @@ export function resetDockAgents(): void {
   const existing = root[FLEET_BUS_KEY];
   if (existing) existing.listeners.clear();
   root[FLEET_BUS_KEY] = { items: [], listeners: new Set() };
+  setAgentWorkspaceOpen(false);
 }

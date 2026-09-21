@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { MAX_LOG_BYTES, rotateIfNeeded } from "../crash-logger.ts";
+import { MAX_LOG_BYTES, rotateIfNeeded } from "../crash-logger/internal/log-rotate.ts";
 
 describe("crash log rotation", () => {
   it("renames the complete active log instead of rewriting it in place", () => {

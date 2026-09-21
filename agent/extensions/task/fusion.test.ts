@@ -4,8 +4,10 @@ import asyncTask from "./async-task.ts";
 import ampTask from "./amp-task.ts";
 import { discoverAgents } from "./runtime/agent-discovery.ts";
 import {
+  FUSION_CHAIN_PROMPT_CAP,
   FusionLifecycle,
   applySidekickModel,
+  fusionChainNudge,
   fusionModelId,
 } from "./runtime/fusion-lifecycle.ts";
 
@@ -135,16 +137,30 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     process.env.PI_BEHAVIOR_MODE = "apex";
     assert.match(advertised().description, /machinist|advisor|librarian|scout/);
     assert.doesNotMatch(advertised().description, /- (strategist|researcher|clerk):/);
+    assert.doesNotMatch(advertised().description, /- sidekick:/);
     assert.match(agentParam(), /advisor|librarian|scout/);
     assert.doesNotMatch(agentParam(), /strategist|researcher|clerk/);
+    assert.doesNotMatch(agentParam(), /sidekick/);
     assert.match(wrapped?.description ?? "", /machinist/);
     assert.match(wrappedAgent(), /machinist/);
     assert.match(tools.get("task").description, /Issue multiple task calls/);
     assert.match(tools.get("task").description, /advisor|librarian|scout/);
     assert.doesNotMatch(tools.get("task").description, /- (strategist|researcher|clerk):/);
+    assert.doesNotMatch(tools.get("task").description, /- sidekick:/);
     assert.match(tools.get("task").parameters.properties.agent.description, /advisor|librarian|scout/);
     assert.doesNotMatch(tools.get("task").parameters.properties.agent.description, /strategist|researcher|clerk/);
+    assert.doesNotMatch(tools.get("task").parameters.properties.agent.description, /sidekick/);
     assert.doesNotMatch(tools.get("task_chain").parameters.properties.steps.items.properties.agent.description, /strategist|researcher|clerk/);
+    assert.doesNotMatch(tools.get("task_chain").parameters.properties.steps.items.properties.agent.description, /sidekick/);
+    const apexSyncSidekick = await tools.get("task").execute("call", { agent: "sidekick", prompt: "do work" }, undefined, undefined, ctx);
+    assert.equal(apexSyncSidekick.isError, true);
+    assert.match(apexSyncSidekick.content[0].text, /Fusion-only.*switch to Fusion/);
+    const apexAsyncSidekick = await tools.get("task_start").execute("call", { agent: "sidekick", prompt: "do work" }, undefined, undefined, ctx);
+    assert.equal(apexAsyncSidekick.isError, true);
+    assert.match(apexAsyncSidekick.content[0].text, /Fusion-only.*switch to Fusion/);
+    const apexChainSidekick = await tools.get("task_chain").execute("call", { steps: [{ agent: "sidekick", prompt: "do work" }] }, undefined, undefined, ctx);
+    assert.equal(apexChainSidekick.isError, true);
+    assert.match(apexChainSidekick.content[0].text, /Fusion-only.*step 1.*switch to Fusion|Fusion-only.*switch to Fusion.*step 1/);
     const apexSyncCrew = await tools.get("task").execute("call", { agent: "clerk", prompt: "do work" }, undefined, undefined, ctx);
     assert.equal(apexSyncCrew.isError, true);
     assert.match(apexSyncCrew.content[0].text, /Work-only.*switch to Work/);
@@ -160,13 +176,16 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.doesNotMatch(advertised().description, /Use it when work benefits from separate specialist context/);
     assert.match(advertised().description, /advisor|librarian|scout/);
     assert.doesNotMatch(advertised().description, /- (strategist|researcher|clerk):/);
+    assert.doesNotMatch(advertised().description, /- sidekick:/);
     assert.match(agentParam(), /In Pi mode, dispatch only when the user names that specialist/);
     assert.doesNotMatch(agentParam(), /after delegation is justified|strategist|researcher|clerk/);
     assert.match(tools.get("task").description, /only when the user names that specialist/);
     assert.match(tools.get("task").description, /advisor|librarian|scout/);
     assert.doesNotMatch(tools.get("task").description, /- (strategist|researcher|clerk):/);
+    assert.doesNotMatch(tools.get("task").description, /- sidekick:/);
     assert.match(tools.get("task").parameters.properties.agent.description, /In Pi mode, dispatch only when the user names that specialist/);
     assert.doesNotMatch(tools.get("task").parameters.properties.agent.description, /strategist|researcher|clerk/);
+    assert.doesNotMatch(tools.get("task").parameters.properties.agent.description, /sidekick/);
     const piSyncCrew = await tools.get("task").execute("call", { agent: "researcher", prompt: "do work" }, undefined, undefined, ctx);
     assert.equal(piSyncCrew.isError, true);
     assert.match(piSyncCrew.content[0].text, /Work-only.*switch to Work/);
@@ -234,9 +253,21 @@ test("FusionLifecycle reuses a settled transcript and parks dead transports", as
   assert.equal(settled.initialPrompt, "do it");
   assert.equal(settled.generation, 3);
   settled.lifecycle = "running";
-  const active: any = await h.lifecycle.reuse("again", {}, 1000);
-  assert.equal(active.kind, "active");
+  const busy: any = await h.lifecycle.reuse("again", {}, 1000);
+  assert.equal(busy.kind, "none", "a busy sidekick yields to a fresh parallel spawn");
   assert.deepEqual(h.started, ["task_1"], "active worker takes no new generation");
+  assert.deepEqual(h.lifecycle.live().map((w: any) => w.id), ["task_1"]);
+  // A second, idle sidekick is reused while the first stays busy.
+  const second = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
+  h.workers.push(second);
+  const reusedSecond: any = await h.lifecycle.reuse("disjoint unit", {}, 1000);
+  assert.equal(reusedSecond.kind, "reused");
+  assert.equal(reusedSecond.worker.id, "task_2");
+  assert.deepEqual(h.started, ["task_1", "task_2"]);
+  assert.equal(h.lifecycle.owns("task_2"), true);
+  assert.equal(h.lifecycle.owns("task_9"), false);
+  assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined, "every sidekick is a valid task_* target");
+  h.workers.splice(h.workers.indexOf(second), 1);
   settled.lifecycle = "failed";
   settled.client.isClosed = true;
   const parked: any = await h.lifecycle.reuse("again", {}, 1000);
@@ -244,6 +275,43 @@ test("FusionLifecycle reuses a settled transcript and parks dead transports", as
   assert.ok(h.parked.some(entry => entry.startsWith("task_1:")), "dead transport parked for resume");
   assert.equal(h.lifecycle.find(), undefined, "parked worker leaves the designated slot");
   assert.equal(fusionModelId(h.lifecycle.configured), "p/s");
+});
+
+test("FusionLifecycle restarts the chain on reuse and nudges past the cap", async () => {
+  const h = fusionHarness();
+  const worker = h.fusionWorker();
+  h.workers.push(worker);
+  const first: any = await h.lifecycle.reuse("do it", {}, 1000);
+  assert.equal(first.kind, "reused");
+  assert.equal(worker.fusionChainPrompts, 1, "reuse starts a new chain at prompt 1");
+  // Corrective prompts below the cap stay silent.
+  for (let expected = 2; expected < FUSION_CHAIN_PROMPT_CAP; expected++) {
+    assert.equal(h.lifecycle.noteChainPrompt(worker), undefined, `chain prompt ${expected}: no nudge`);
+    assert.equal(worker.fusionChainPrompts, expected);
+  }
+  // The prompt that reaches the cap nudges toward close-and-respawn.
+  const nudge = h.lifecycle.noteChainPrompt(worker);
+  assert.equal(worker.fusionChainPrompts, FUSION_CHAIN_PROMPT_CAP);
+  assert.match(nudge!, /\[fusion\] task_1 has taken 4 prompts/);
+  assert.match(nudge!, /task_close/);
+  assert.match(nudge!, /contract is wrong/);
+  assert.doesNotMatch(nudge!, /\n/, "nudge is a single line");
+  // Past the cap every corrective prompt keeps nudging.
+  assert.match(h.lifecycle.noteChainPrompt(worker)!, /has taken 5 prompts/);
+  // A fresh assignment restarts the chain instead of inheriting it.
+  worker.lifecycle = "settled";
+  const second: any = await h.lifecycle.reuse("disjoint unit", {}, 1000);
+  assert.equal(second.kind, "reused");
+  assert.equal(worker.fusionChainPrompts, 1, "disjoint unit restarts the chain");
+});
+
+test("FusionLifecycle chain counting tolerates workers that predate the counter", () => {
+  const h = fusionHarness();
+  const worker = h.fusionWorker();
+  delete worker.fusionChainPrompts;
+  assert.equal(h.lifecycle.noteChainPrompt(worker), undefined, "unknown chain reads as prompt 1, now at 2");
+  assert.equal(worker.fusionChainPrompts, 2);
+  assert.equal(fusionChainNudge("task_9", 4), "[fusion] task_9 has taken 4 prompts in this chain (1 assignment + 3 corrections). Retained context is now a liability: close it with task_close and respawn a fresh sidekick with a reassessed contract, or take the paths over yourself after settle/abort. Repeated prompts without progress mean the contract is wrong, not the sidekick.");
 });
 
 test("FusionLifecycle reuse conflicts name truthful remedies and validates report contracts", async () => {
@@ -258,8 +326,7 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.match(fork.reason, /new parent session/);
   assert.doesNotMatch(fork.reason, /task_close/);
   const cwd = await h.lifecycle.reuse("x", { cwd: "/other" }, 1000) as any;
-  assert.equal(cwd.kind, "conflict");
-  assert.match(cwd.reason, /task_close task_1/);
+  assert.equal(cwd.kind, "none", "a different cwd spawns a parallel sidekick instead of conflicting");
   const badSchema = await h.lifecycle.reuse("x", { reportSchema: "not json" }, 1000) as any;
   assert.equal(badSchema.kind, "invalid");
   assert.match(badSchema.reason, /Invalid reportSchema/);
@@ -307,8 +374,11 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   h.lifecycle.isolateSession("parent-1");
   assert.ok(h.parked.some(entry => entry.startsWith("task_3:")), "foreign session parked");
   assert.ok(!h.parked.some(entry => entry.startsWith("task_1:")), "same session kept");
+  const settledTwin = h.fusionWorker({ id: "task_4" });
+  h.workers.push(settledTwin);
   h.lifecycle.parkForModeLeave();
   assert.ok(h.parked.some(entry => entry.startsWith("task_1:")), "settled parks on mode leave");
+  assert.ok(h.parked.some(entry => entry.startsWith("task_4:")), "every settled sidekick parks on mode leave");
   assert.ok(!h.parked.some(entry => entry.startsWith("task_2:")), "live worker keeps running");
   const lookupBranch = [
     { type: "custom", customType: "fusion-sidekick-session", data: { parentSessionId: "parent-1", sessionFile: "/old.jsonl", cwd: "/w" } },
@@ -316,13 +386,14 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
     { type: "custom", customType: "fusion-sidekick-session", data: { parentSessionId: "parent-1", sessionFile: "/new.jsonl", sessionId: "s", cwd: "/w" } },
   ];
   assert.deepEqual(h.lifecycle.findTranscript(lookupBranch, "parent-1"), { parentSessionId: "parent-1", sessionFile: "/new.jsonl", sessionId: "s", cwd: "/w" });
+  assert.deepEqual(h.lifecycle.findTranscript(lookupBranch, "parent-1", new Set(["/new.jsonl"])), { parentSessionId: "parent-1", sessionFile: "/old.jsonl", sessionId: undefined, cwd: "/w" }, "attached transcripts are never shared");
   assert.equal(h.lifecycle.findTranscript(lookupBranch, "missing"), undefined);
   assert.equal(h.lifecycle.findTranscript(lookupBranch, undefined), undefined);
   assert.equal(h.lifecycle.gateSidekick("task_start"), "Fusion sidekick cannot dispatch agents, write the lead's plan, or coordinate peer sessions.");
   assert.equal(h.lifecycle.gateSidekick("read"), undefined);
   assert.equal(h.lifecycle.gateLead("task", "task_2"), undefined);
-  assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its designated sidekick.");
-  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its designated sidekick.");
+  assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its sidekicks.");
+  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its sidekicks.");
   assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined);
   assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed while worker is live");
   assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed while worker is live");
@@ -503,6 +574,53 @@ test("Fusion discovery backstop nudges every 6 undispatched discovery calls", ()
     fireAgentStart();
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("grep"), undefined);
     assert.match(nudgeText(fireToolResult("find"))!, /6 discovery calls/, "lead nudges again after sidekick check");
+  } finally {
+    if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
+    if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+  }
+});
+
+test("Fusion delivers a one-shot compaction nudge on the next lead tool result", () => {
+  const prior = process.env.PI_BEHAVIOR_MODE;
+  const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+  process.env.PI_BEHAVIOR_MODE = "fusion";
+  delete process.env.PI_FUSION_SIDEKICK;
+  const handlers = new Map<string, Function[]>();
+  const pi: any = {
+    registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
+    events: { on() {} },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi);
+    const fireToolResult = (toolName: string) => {
+      const event = { toolName, content: [{ type: "text", text: "ok" }], isError: false };
+      for (const fn of handlers.get("tool_result") ?? []) {
+        const out = fn(event) as any;
+        if (out) return out;
+      }
+      return undefined;
+    };
+    const compact = () => { for (const fn of handlers.get("session_compact") ?? []) fn({}); };
+    assert.equal(fireToolResult("read"), undefined, "no nudge before any compaction");
+    compact();
+    const first = fireToolResult("edit");
+    assert.ok(first, "non-discovery tools also deliver the compaction nudge");
+    assert.equal(first.content.length, 2, "nudge appended, original blocks kept");
+    assert.match(first.content[1].text, /^\[fusion\] session compacted/);
+    assert.match(first.content[1].text, /\/mode configure/);
+    assert.equal(first.content[1].text.includes("\n"), false, "nudge is a single line");
+    assert.equal(fireToolResult("read"), undefined, "one-shot: cleared on delivery");
+    // A compaction landing on a due discovery nudge delivers both together.
+    // (Two reads already counted above, so three more reach the 6th.)
+    for (let i = 0; i < 3; i++) assert.equal(fireToolResult("read"), undefined);
+    compact();
+    const both = fireToolResult("read");
+    assert.equal(both.content.length, 3, "compaction + 6th-discovery nudges together");
+    assert.match(both.content[1].text, /session compacted/);
+    assert.match(both.content[2].text, /6 discovery calls/);
+    assert.equal(fireToolResult("read"), undefined, "both cleared after delivery");
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;

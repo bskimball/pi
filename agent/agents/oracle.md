@@ -7,7 +7,7 @@ fallbackModels:
   - local-proxy/gemini-pro-agent
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh
-tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp, web_search, fetch_content, get_search_content
+tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp, web_search, fetch_content, get_search_content, jev
 inheritSkills: true
 maxTurns: 60
 ---

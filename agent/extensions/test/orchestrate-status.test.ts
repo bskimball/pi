@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
-import { restoreMode, initialPreferences, toolsForMode } from "../prompt-commands/mode-state.ts";
+import { restoreMode, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
@@ -21,8 +21,10 @@ test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind f
   const collaborationTools = ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
   assert.deepEqual(toolsForMode("pi", tools), tools);
   assert.deepEqual(toolsForMode("apex", tools), tools);
-  assert.deepEqual(toolsForMode("fusion", tools), collaborationTools);
-  assert.deepEqual(toolsForMode("work", tools), collaborationTools);
+  assert.deepEqual(toolsForFusion(tools), collaborationTools);
+  assert.deepEqual(toolsForWork(tools), collaborationTools);
+  assert.deepEqual(toolsForMode("fusion", tools), toolsForFusion(tools));
+  assert.deepEqual(toolsForMode("work", tools), toolsForWork(tools));
 });
 test("mode commands switch prompts, enforce idle, persist and restore, and change UI independently", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-modes-"));
@@ -30,6 +32,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
   const oldChild = process.env.PI_SUBAGENT;
   const oldMode = process.env.PI_BEHAVIOR_MODE;
   const oldUi = process.env.PI_APEX_UI;
+  const oldChrome = process.env.PI_UI_CHROME;
   const oldSkin = process.env.PI_UI_SKIN;
   process.env.PI_CODING_AGENT_DIR = dir;
   delete process.env.PI_SUBAGENT;
@@ -134,6 +137,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     await commands.mode("pi", ctx);
     await commands.ui("pi", ctx);
     assert.equal(process.env.PI_APEX_UI, "0");
+    assert.equal(process.env.PI_UI_CHROME, "0");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi");
     ctx.ui.theme.name = "light";
     await commands.ui("apex", ctx);
@@ -142,6 +146,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(ctx.ui.theme.name, "light");
     await commands.ui("claude", ctx);
     assert.equal(process.env.PI_APEX_UI, "1");
+    assert.equal(process.env.PI_UI_CHROME, "1");
     assert.equal(process.env.PI_UI_SKIN, "claude");
     assert.equal(ctx.ui.theme.name, "claude-dark");
     await commands.ui("hal", ctx);
@@ -204,7 +209,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     await emit("session_start", { reason: "resume" });
     assert.deepEqual(await emit("input", { text: "continue" }), { action: "handled" });
   } finally {
-    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: oldDir, PI_SUBAGENT: oldChild, PI_BEHAVIOR_MODE: oldMode, PI_APEX_UI: oldUi, PI_UI_SKIN: oldSkin })) {
+    for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: oldDir, PI_SUBAGENT: oldChild, PI_BEHAVIOR_MODE: oldMode, PI_APEX_UI: oldUi, PI_UI_CHROME: oldChrome, PI_UI_SKIN: oldSkin })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
     rmSync(dir, { recursive: true, force: true });

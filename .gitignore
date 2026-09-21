@@ -4,6 +4,7 @@ agent/models.json
 agent/mcp.json
 agent/USER_PROFILE.local.md
 web-search.json
+jev.json
 .env
 .env.*
 !.env.example
