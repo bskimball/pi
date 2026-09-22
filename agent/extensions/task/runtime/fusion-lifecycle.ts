@@ -80,25 +80,20 @@ export interface FusionWorkerState {
 }
 
 /**
- * Maximum prompts per sidekick chain, counting the initial assignment.
- * 1 assignment + 3 corrective prompts: the fourth corrective prompt means
- * the contract is wrong, not the sidekick, and retained context has become
- * a liability (stale files, growing per-turn cost). Close and respawn.
+ * Maximum accepted prompts per unit, counting the initial assignment.
+ * One corrective pass is enough; a second correction means the unit should
+ * be reassessed and reissued through task_start with a cleaner contract.
  */
-export const FUSION_CHAIN_PROMPT_CAP = 4;
+export const FUSION_CHAIN_PROMPT_CAP = 2;
 
-/**
- * Respawn nudge appended to the corrective prompt that reaches the cap
- * (and every one after). Mirrors the lead-side discovery nudge in
- * async-task.ts: advisory, single-line, names the truthful remedy.
- */
+/** Single-line receipt emitted when a unit consumes its final correction. */
 export function fusionChainNudge(id: string, count: number): string {
+  const corrections = count - 1;
   return (
-    `[fusion] ${id} has taken ${count} prompts in this chain ` +
-    `(1 assignment + ${count - 1} corrections). Retained context is now a liability: ` +
-    `close it with task_close and respawn a fresh sidekick with a reassessed contract, ` +
-    `or take the paths over yourself after settle/abort. Repeated prompts without progress ` +
-    `mean the contract is wrong, not the sidekick.`
+    `[fusion] ${id} has taken ${count} prompts in this unit ` +
+    `(1 assignment + ${corrections} ${corrections === 1 ? "correction" : "corrections"}). This unit is now closed to further prompts: ` +
+    `reassess the contract, then use task_start for a new unit on the persistent sidekick, ` +
+    `or take the work back after settle/abort.`
   );
 }
 /** Minimal request surface; satisfied by RpcClient and test doubles. */
@@ -282,7 +277,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     return undefined;
   }
 
-  /** Every non-closed Fusion sidekick. Parallel sidekicks own disjoint paths. */
+  /** Every non-closed Fusion sidekick. Parallel workers must own disjoint units. */
   findAll(): TWorker[] {
     const found: TWorker[] = [];
     for (const worker of this.deps.listWorkers()) {
@@ -417,10 +412,8 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
   }
 
   /**
-   * task_start reuse: continue a settled sidekick's transcript when one is
-   * idle, park dead transports for resume, or report `none` so the caller
-   * spawns an additional parallel sidekick. Prompt-only apart from a
-   * validated per-generation report contract.
+   * task_start reuse: continue an idle sidekick's cached transcript, park dead
+   * transports for resume, or report none so a disjoint clean unit can spawn.
    */
   async reuse(
     prompt: string,
@@ -469,8 +462,8 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           inputs.cwd === candidate.cwd),
     );
     if (!idle.length) {
-      // Every live sidekick is busy (or in another cwd): the caller spawns a
-      // parallel sidekick, resuming a parked transcript when one exists.
+      // Busy workers keep their clean units. A new task_start may spawn a
+      // parallel sidekick only when the lead has declared a disjoint unit.
       return parked ? { kind: "parked", worker: parked } : { kind: "none" };
     }
     const worker = idle[0];
@@ -504,19 +497,23 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     return accepted;
   }
 
+  /** Block another corrective prompt after a unit has consumed its budget. */
+  chainPromptBlock(worker: TWorker): string | undefined {
+    const count = worker.fusionChainPrompts ?? 1;
+    if (count < FUSION_CHAIN_PROMPT_CAP) return undefined;
+    return fusionChainNudge(worker.id, count);
+  }
+
   /**
-   * Record one corrective `task_send prompt` against the worker's chain.
-   * Returns the respawn nudge once the chain reaches
-   * FUSION_CHAIN_PROMPT_CAP (and on every prompt after), undefined below
-   * it. Call only after the prompt is accepted — a rejected prompt never
-   * started a generation. Fresh spawns initialize the counter at 1, so a
-   * worker that predates the counter reads as prompt 1 via `?? 1`.
+   * Record an accepted corrective prompt. The prompt that fills the budget
+   * carries a receipt; later prompts are rejected by chainPromptBlock().
    */
   noteChainPrompt(worker: TWorker): string | undefined {
     const count = (worker.fusionChainPrompts ?? 1) + 1;
     worker.fusionChainPrompts = count;
-    if (count < FUSION_CHAIN_PROMPT_CAP) return undefined;
-    return fusionChainNudge(worker.id, count);
+    return count >= FUSION_CHAIN_PROMPT_CAP
+      ? fusionChainNudge(worker.id, count)
+      : undefined;
   }
 
   /**

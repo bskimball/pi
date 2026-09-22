@@ -253,14 +253,13 @@ test("FusionLifecycle reuses a settled transcript and parks dead transports", as
   assert.equal(settled.initialPrompt, "do it");
   assert.equal(settled.generation, 3);
   settled.lifecycle = "running";
-  const busy: any = await h.lifecycle.reuse("again", {}, 1000);
-  assert.equal(busy.kind, "none", "a busy sidekick yields to a fresh parallel spawn");
+  const busy: any = await h.lifecycle.reuse("disjoint clean unit", {}, 1000);
+  assert.equal(busy.kind, "none", "a busy sidekick leaves room for a disjoint spawn");
   assert.deepEqual(h.started, ["task_1"], "active worker takes no new generation");
   assert.deepEqual(h.lifecycle.live().map((w: any) => w.id), ["task_1"]);
-  // A second, idle sidekick is reused while the first stays busy.
   const second = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
   h.workers.push(second);
-  const reusedSecond: any = await h.lifecycle.reuse("disjoint unit", {}, 1000);
+  const reusedSecond: any = await h.lifecycle.reuse("next clean unit", {}, 1000);
   assert.equal(reusedSecond.kind, "reused");
   assert.equal(reusedSecond.worker.id, "task_2");
   assert.deepEqual(h.started, ["task_1", "task_2"]);
@@ -277,41 +276,35 @@ test("FusionLifecycle reuses a settled transcript and parks dead transports", as
   assert.equal(fusionModelId(h.lifecycle.configured), "p/s");
 });
 
-test("FusionLifecycle restarts the chain on reuse and nudges past the cap", async () => {
+test("FusionLifecycle restarts units and hard-stops corrections at the cap", async () => {
   const h = fusionHarness();
   const worker = h.fusionWorker();
   h.workers.push(worker);
   const first: any = await h.lifecycle.reuse("do it", {}, 1000);
   assert.equal(first.kind, "reused");
-  assert.equal(worker.fusionChainPrompts, 1, "reuse starts a new chain at prompt 1");
-  // Corrective prompts below the cap stay silent.
-  for (let expected = 2; expected < FUSION_CHAIN_PROMPT_CAP; expected++) {
-    assert.equal(h.lifecycle.noteChainPrompt(worker), undefined, `chain prompt ${expected}: no nudge`);
-    assert.equal(worker.fusionChainPrompts, expected);
-  }
-  // The prompt that reaches the cap nudges toward close-and-respawn.
+  assert.equal(worker.fusionChainPrompts, 1, "reuse starts a new unit at prompt 1");
+  assert.equal(h.lifecycle.chainPromptBlock(worker), undefined);
   const nudge = h.lifecycle.noteChainPrompt(worker);
   assert.equal(worker.fusionChainPrompts, FUSION_CHAIN_PROMPT_CAP);
-  assert.match(nudge!, /\[fusion\] task_1 has taken 4 prompts/);
-  assert.match(nudge!, /task_close/);
-  assert.match(nudge!, /contract is wrong/);
+  assert.match(nudge!, /\[fusion\] task_1 has taken 2 prompts/);
+  assert.match(nudge!, /unit is now closed/);
+  assert.match(nudge!, /task_start/);
   assert.doesNotMatch(nudge!, /\n/, "nudge is a single line");
-  // Past the cap every corrective prompt keeps nudging.
-  assert.match(h.lifecycle.noteChainPrompt(worker)!, /has taken 5 prompts/);
-  // A fresh assignment restarts the chain instead of inheriting it.
+  assert.equal(h.lifecycle.chainPromptBlock(worker), nudge, "further prompts are blocked");
+  // A fresh assignment restarts the unit instead of inheriting the budget.
   worker.lifecycle = "settled";
-  const second: any = await h.lifecycle.reuse("disjoint unit", {}, 1000);
+  const second: any = await h.lifecycle.reuse("next unit", {}, 1000);
   assert.equal(second.kind, "reused");
-  assert.equal(worker.fusionChainPrompts, 1, "disjoint unit restarts the chain");
+  assert.equal(worker.fusionChainPrompts, 1, "new unit restarts the prompt budget");
 });
 
 test("FusionLifecycle chain counting tolerates workers that predate the counter", () => {
   const h = fusionHarness();
   const worker = h.fusionWorker();
   delete worker.fusionChainPrompts;
-  assert.equal(h.lifecycle.noteChainPrompt(worker), undefined, "unknown chain reads as prompt 1, now at 2");
+  assert.match(h.lifecycle.noteChainPrompt(worker)!, /has taken 2 prompts/, "unknown chain reads as prompt 1, then fills the budget");
   assert.equal(worker.fusionChainPrompts, 2);
-  assert.equal(fusionChainNudge("task_9", 4), "[fusion] task_9 has taken 4 prompts in this chain (1 assignment + 3 corrections). Retained context is now a liability: close it with task_close and respawn a fresh sidekick with a reassessed contract, or take the paths over yourself after settle/abort. Repeated prompts without progress mean the contract is wrong, not the sidekick.");
+  assert.equal(fusionChainNudge("task_9", 2), "[fusion] task_9 has taken 2 prompts in this unit (1 assignment + 1 correction). This unit is now closed to further prompts: reassess the contract, then use task_start for a new unit on the persistent sidekick, or take the work back after settle/abort.");
 });
 
 test("FusionLifecycle reuse conflicts name truthful remedies and validates report contracts", async () => {
@@ -326,7 +319,7 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.match(fork.reason, /new parent session/);
   assert.doesNotMatch(fork.reason, /task_close/);
   const cwd = await h.lifecycle.reuse("x", { cwd: "/other" }, 1000) as any;
-  assert.equal(cwd.kind, "none", "a different cwd spawns a parallel sidekick instead of conflicting");
+  assert.equal(cwd.kind, "none", "a different cwd may spawn a disjoint sidekick");
   const badSchema = await h.lifecycle.reuse("x", { reportSchema: "not json" }, 1000) as any;
   assert.equal(badSchema.kind, "invalid");
   assert.match(badSchema.reason, /Invalid reportSchema/);
@@ -547,22 +540,22 @@ test("Fusion discovery backstop nudges every 6 undispatched discovery calls", ()
     assert.equal(sixth.content.length, 2, "nudge appended, original blocks kept");
     assert.equal(sixth.content[0].type, "image", "non-text result block preserved");
     const first = nudgeText(sixth);
-    assert.match(first!, /^\[fusion\] 6 discovery calls this turn/);
+    assert.match(first!, /^\[fusion\] 6 lead discovery calls this turn/);
     assert.equal(first!.includes("\n"), false, "nudge is a single line");
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("bash"), undefined);
-    assert.match(nudgeText(fireToolResult("fffind"))!, /^\[fusion\] 12 discovery calls this turn/, "second nudge at 12");
+    assert.match(nudgeText(fireToolResult("fffind"))!, /^\[fusion\] 12 lead discovery calls this turn/, "second nudge at 12");
     for (let i = 0; i < 6; i++) assert.equal(fireToolResult("edit"), undefined, "non-discovery tools never nudge");
 
     fireToolCall("task_start");
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined, "no nudge within 5 calls of dispatch");
-    assert.match(nudgeText(fireToolResult("ls"))!, /6 discovery calls/, "nudge resumes 6 calls after dispatch");
+    assert.match(nudgeText(fireToolResult("ls"))!, /6 lead discovery calls/, "nudge resumes 6 calls after dispatch");
 
     fireToolCall("task_send");
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("lsp"), undefined, "task_send resets too");
 
     fireAgentStart();
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("powershell"), undefined, "new user turn resets");
-    assert.match(nudgeText(fireToolResult("ffgrep"))!, /6 discovery calls/, "nudge resumes 6 calls into the new turn");
+    assert.match(nudgeText(fireToolResult("ffgrep"))!, /6 lead discovery calls/, "nudge resumes 6 calls into the new turn");
 
     bus.get("pi:modes:changed")!({ mode: "apex" });
     fireAgentStart();
@@ -573,7 +566,7 @@ test("Fusion discovery backstop nudges every 6 undispatched discovery calls", ()
     delete process.env.PI_FUSION_SIDEKICK;
     fireAgentStart();
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("grep"), undefined);
-    assert.match(nudgeText(fireToolResult("find"))!, /6 discovery calls/, "lead nudges again after sidekick check");
+    assert.match(nudgeText(fireToolResult("find"))!, /6 lead discovery calls/, "lead nudges again after sidekick check");
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
@@ -619,7 +612,7 @@ test("Fusion delivers a one-shot compaction nudge on the next lead tool result",
     const both = fireToolResult("read");
     assert.equal(both.content.length, 3, "compaction + 6th-discovery nudges together");
     assert.match(both.content[1].text, /session compacted/);
-    assert.match(both.content[2].text, /6 discovery calls/);
+    assert.match(both.content[2].text, /6 lead discovery calls/);
     assert.equal(fireToolResult("read"), undefined, "both cleared after delivery");
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;

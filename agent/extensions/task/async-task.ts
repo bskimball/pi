@@ -210,7 +210,7 @@ const FUSION_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
 
 /** Single-line plain-text nudge appended to every Nth undispatched discovery result. */
 function fusionDiscoveryNudge(count: number): string {
-  return `[fusion] ${count} discovery calls this turn with no sidekick dispatch. Discovery beyond user-named files is sidekick-owned: write the owned todo list and call task_start now, or state the one-line inline reason.`;
+  return `[fusion] ${count} lead discovery calls this turn with no sidekick unit. Stop broad exploration: delegate the remaining mechanical discovery with task_start, or continue only when the next read resolves a lead-owned judgment.`;
 }
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
@@ -715,12 +715,10 @@ Available agents:
 ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartPersistentDescription = `Start a Fusion sidekick in an isolated session to execute a scoped assignment or gather bounded read-only evidence. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the sidekick later, or collect results with task_wait. An idle (settled) sidekick is reused with its context intact; when every sidekick is busy, task_start spawns an additional parallel sidekick, so disjoint units can run concurrently — give each its own owned paths. Park a worker with task_close when done. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool.
+  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
 
 Available agent:
-- sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}
-
-At most ${MAX_LIVE_WORKERS} live workers (sidekicks included); each holds a slot until task_close.`;
+- sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
   const taskStartWorkDescription = `Start a Work crew specialist in an isolated session. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays; prefer the synchronous \`task\` tool for a single bounded result in-line. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Park the worker with task_close when done.
 
 Available agents:
@@ -742,7 +740,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) {
-      return `Agent to run. One of: sidekick. Fusion permits only sidekicks on task_start; repeated calls while sidekicks are busy start parallel sidekicks for disjoint units.`;
+      return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, while disjoint units may use parallel sidekicks.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
     return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
@@ -1391,7 +1389,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // the lead re-evaluates via /mode configure.
   let fusionCompactionPending = false;
   function fusionCompactionNudge(): string {
-    return `[fusion] session compacted: retained sidekick chains are stale. Re-evaluate the pairing with /mode configure, then start the next unit on a fresh chain — never resume steering a pre-compaction chain.`;
+    return `[fusion] session compacted: re-evaluate the model pair with /mode configure, then start the next sidekick unit with task_start. Do not steer a pre-compaction unit.`;
   }
   type FusionSessionEntry = { parentSessionId: string; sessionFile: string; sessionId?: string; cwd: string };
   // Single owner for designated-worker sequences (readiness/reuse, config
@@ -1972,9 +1970,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult("prompt is required.", true);
       }
       const sidekickMode = persistentSidekickMode();
-      // Only the first sidekick of a parent session (or a parked one) resumes
-      // a persisted transcript; parallel sidekicks start fresh so two workers
-      // never share one transcript file.
+      // Only the first sidekick resumes the persisted transcript; parallel
+      // clean units start fresh so workers never share one transcript file.
       let fusionResume = false;
       if (sidekickMode) {
         if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`Fusion sidekick cannot spawn workers.`, true);
@@ -1991,16 +1988,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         );
         const sidekickLabel = "Fusion";
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
-        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new chain, prompt 1).`);
+        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new unit, prompt 1).`);
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
-        // "parked" falls through to transcript-resume spawn below; "none"
-        // spawns a fresh (possibly parallel) sidekick and needs a configured pair.
+        // "parked" resumes a saved transcript; "none" creates the first
+        // sidekick or a fresh parallel worker for a disjoint clean unit.
         if (!fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
         fusionResume = outcome.kind === "parked" || fusionLifecycle.findAll().length === 0;
         if (!runtime.canStart()) {
           const busy = fusionLifecycle.live().map((worker) => worker.id).join(", ");
           return textResult(
-            `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers); every sidekick is busy${busy ? ` (${busy})` : ""}. task_wait one of them, then reuse it with task_start or free a slot with task_close.`,
+            `Async RPC capacity full (max ${MAX_LIVE_WORKERS} live workers); sidekicks are busy${busy ? ` (${busy})` : ""}. task_wait a unit, then reuse its worker with task_start or free a slot with task_close.`,
             true,
           );
         }
@@ -2702,6 +2699,16 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       if (mode === "prompt") {
+        if (worker.fusion) {
+          const chainBlock = fusionLifecycle.chainPromptBlock(worker);
+          if (chainBlock) {
+            return textResult(
+              chainBlock,
+              true,
+              sendDetails("rejected", "Fusion unit prompt budget exhausted"),
+            );
+          }
+        }
         if (worker.lifecycle !== "settled" && worker.lifecycle !== "failed") {
           return textResult(
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
@@ -2729,12 +2736,11 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             );
           }
           writeLastPhase(`task_send:prompt:accepted id=${id} gen=${worker.generation}`);
-          // Chain accounting lives in the Fusion lifecycle owner: a corrective
-          // prompt that reaches the cap appends the respawn nudge so the lead
-          // reassesses the contract instead of steering a stale context again.
+          // Chain accounting lives in the Fusion lifecycle owner. The final
+          // accepted correction carries a receipt; later prompts are blocked.
           const chainNudge = worker.fusion ? fusionLifecycle.noteChainPrompt(worker) : undefined;
           const acceptedLines = [
-            `${id} accepted new prompt (generation ${worker.generation}${worker.fusion ? `, chain prompt ${worker.fusionChainPrompts ?? "?"}` : ""}).`,
+            `${id} accepted new prompt (generation ${worker.generation}${worker.fusion ? `, unit prompt ${worker.fusionChainPrompts ?? "?"}` : ""}).`,
             `lifecycle: ${worker.lifecycle}`,
             "A new generation is running.",
           ];
