@@ -208,6 +208,10 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(advertised().description, /strategist/);
     assert.doesNotMatch(advertised().description, /sidekick/);
     assert.match(agentParam(), /One of: strategist, researcher, author, clerk/);
+    assert.match(advertised().description, /all email drafting and substantive email rewriting/);
+    assert.match(advertised().description, /Email reading, factual extraction, and summarization remain inline unless another trigger fires/);
+    assert.match(agentParam(), /Always route email drafting and substantive email rewriting to author/);
+    assert.match(agentParam(), /other human-readable or kindly worded prose to author when separate context pays/);
     assert.match(advertised().description, /- author: Work prose specialist \(Flo, kindly intergalactic flamingo\)/);
     const workAsync = await tools.get("task_start").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
     assert.equal(workAsync.isError, true);
@@ -219,6 +223,10 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     const workCrewSync = await tools.get("task").execute("call", { agent: "author", prompt: "write kind prose" }, AbortSignal.abort(), undefined, ctx);
     assert.doesNotMatch(workCrewSync.content?.[0]?.text ?? "", /Work permits synchronous task only for|Synchronous task spawning is disabled/);
     assert.match(tools.get("task").description, /Work crew specialist/);
+    assert.match(tools.get("task").description, /all email drafting and substantive email rewriting/);
+    assert.match(tools.get("task").description, /Email reading, factual extraction, and summarization remain inline unless another trigger fires/);
+    assert.match(tools.get("task").parameters.properties.agent.description, /Always route email drafting and substantive email rewriting to author/);
+    assert.match(tools.get("task").parameters.properties.agent.description, /other human-readable or kindly worded prose to author when separate context pays/);
 
     assert.equal(handlers.get("tool_call")!.map(fn => fn({ toolName: "intercom", input: {} })).find(Boolean), undefined);
   } finally {

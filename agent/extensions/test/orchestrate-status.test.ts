@@ -153,6 +153,9 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     const workPrompt = (await prompt(workBaseline)).systemPrompt;
     assert.match(workPrompt, /operations-first lead/);
     assert.match(workPrompt, /Work mode \(active\)/);
+    assert.match(workPrompt, /Always route email drafting and substantive email rewriting through Flo, regardless of length or expected editorial benefit/);
+    assert.match(workPrompt, /Email reading, factual extraction, and summarization remain inline unless another routing trigger fires/);
+    assert.match(workPrompt, /For other prose, auto-route when prose is the deliverable and separate editorial context will improve it/);
     assert.doesNotMatch(workPrompt, /Apex base|Fusion mode \(active\)/);
     assert.match(workPrompt, /Active tool guidance[\s\S]*Read files/, "Work retains active tool snippets");
     assert.match(workPrompt, /Active tool rules[\s\S]*Use the workspace capability contract/, "Work retains extension prompt guidelines");
