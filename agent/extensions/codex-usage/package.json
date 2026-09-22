@@ -1,0 +1,10 @@
+{
+  "name": "pi-codex-usage",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

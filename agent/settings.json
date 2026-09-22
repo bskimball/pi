@@ -5,8 +5,7 @@
   "lastChangelogVersion": "0.86.1",
   "packages": [
     "npm:@ff-labs/pi-fff",
-    "npm:pi-intercom",
-    "npm:@howaboua/pi-codex-conversion"
+    "npm:pi-intercom"
   ],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"
