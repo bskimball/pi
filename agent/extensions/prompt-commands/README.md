@@ -18,7 +18,9 @@ Work is operations-first collaboration in the Apex inline-first shape: the lead 
 
 Fusion remains a closed roster: the lead, the persistent `sidekick` role (an idle sidekick is reused; `task_start` while every sidekick is busy spawns a parallel one for a disjoint unit), and the synchronous ephemeral `librarian`, `stevedore`, `oracle`, and `picasso`. Only the sidekick may be dispatched automatically. Each other specialist requires an explicit user request to use that specialist; a general review/research/verification request, a difficult bug, or a path-triggered review gate does not authorize dispatch. The Fusion mode card overrides automatic specialist-routing instructions; the lead and sidekick perform review and verification by default. Other existing specialists — including the Work crew (strategist, researcher, author, clerk) — remain excluded in Fusion. Its sidekick lifecycle, transcript continuity, and `task_chain`/`task_rebind` restrictions are Fusion-only. Apex delegation policy is unchanged.
 
-Fusion's [mode card](../../prompts/inactive/fusion.md#handoffs) owns the handoff criteria: choose complementary ownership, settle risky contracts before implementation, define observable acceptance, and integrate returned work without repeated small correction handoffs. These criteria are Fusion-only; the shared sidekick brief and runtime are unchanged.
+Fusion's [mode card](../../prompts/inactive/fusion.md#handoff-contract) owns the handoff criteria: name behavioral acceptance cases before implementation, prepare independent lead verification while the worker runs, use fresh compact handoffs for release-only work, and capture verification evidence once. These criteria are Fusion-only; the shared sidekick brief is unchanged.
+
+The saved `fusion` pair is authoritative; `models.fusion` mirrors its lead choice. Successful activation reports both selections and thinking levels. Sidekick launch and reuse receipts distinguish configured selection from child-reported identity, including mismatches or unavailable observations; they do not silently switch models.
 
 ## Presentation
 
@@ -31,5 +33,5 @@ Global defaults live in `agent/mode-settings.json`; session choices use `behavio
 Event contracts:
 - `pi:modes:query-busy`: mutable `{ busy }`, synchronously augmented by task listeners.
 - `pi:modes:changed`: `{ mode, fusion }`, updates task policy and parks settled sidekicks when leaving Work or Fusion.
-- `pi:fusion:configure`: `{ fusion, acknowledged?, promise?, error?, rollback? }`; the name is retained while the Work and Fusion pair share the same task runtime handshake.
+- `pi:fusion:configure`: `{ fusion, acknowledged?, promise?, error?, rollback? }`; Fusion's transactional sidekick configuration handshake.
 - `pi:ui:changed`: `{ ui, ctx }`, updates presentation without restarting the session.

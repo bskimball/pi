@@ -81,10 +81,12 @@ Fusion is a **small team**, not a bigger roster: one lead, one persistent `sidek
 
 ```text
 you: "investigate why checkout fails intermittently, then fix it"
-  └─ lead: writes a brief (owned paths, unknowns, acceptance check)
-       └─ task_start(sidekick) → investigates, implements, validates
-            ⇄ task_send (steer / follow-up) as the picture develops
-       ← sidekick returns: findings, diff, evidence
+  └─ lead: dispatches a read-only discovery unit
+       ← sidekick returns: findings, affected paths, evidence
+  └─ lead: defines implementation ownership and behavioral acceptance cases
+       └─ task_start(sidekick) → implements and runs the acceptance check
+       └─ lead: prepares independent verification while the sidekick works
+       ← sidekick returns: changed files, results, residual risks
   └─ lead: reviews the diff, verifies, resolves the todo item, reports
 
 # only on your explicit request:
@@ -94,7 +96,9 @@ you: "have oracle review that fix before we ship"
 
 Lead and sidekick keep **separate, persistent contexts** across the session — the lead sends a compact brief in, the sidekick sends back results and evidence, not a full transcript either direction. That separation, plus the "cheap sidekick executes, expensive lead plans/reviews" split, is the part borrowed from [Cognition's Fusion architecture](https://cognition.com/blog/local-fusion); the brief/result exchange protocol, the closed-roster gate, and the shared-todo-list discipline are this repo's own implementation on top of that idea. The sidekick is the *only* subagent dispatched automatically; a general "please verify this" or a difficult bug does not, by itself, authorize calling Oracle or any of the other three — you have to name it. See [`agent/prompts/inactive/fusion.md`](agent/prompts/inactive/fusion.md) for the exact handoff and ownership criteria the lead follows.
 
-The first time you switch to Fusion without a saved pair, `/mode fusion` itself prompts you to pick the lead and sidekick models and thinking levels — you don't have to run `/mode configure` first. `/mode configure` is the explicit way to (re)configure that pair at any time; it configures and activates Fusion. Changing model or thinking level while Fusion is active updates the lead's choice directly. The pair is stored locally in the gitignored `agent/mode-settings.json`.
+The first time you switch to Fusion without a saved pair, `/mode fusion` itself prompts you to pick the lead and sidekick models and thinking levels — you don't have to run `/mode configure` first. `/mode configure` is the explicit way to (re)configure that pair at any time; it configures and activates Fusion. Changing model or thinking level while Fusion is active updates the lead's choice directly. The pair is stored locally in the gitignored `agent/mode-settings.json`. Activation reports the selected pair; sidekick launch and reuse receipts distinguish configured selection from child-reported identity. These observations describe that point in time, not a guarantee of the model on a later response.
+
+Related discovery and implementation units retain useful sidekick context. Release-only units start fresh with a compact, authorized handoff; verification captures are reused for summaries instead of rerunning unchanged checks. The [Fusion mode card](agent/prompts/inactive/fusion.md) owns these workflow rules.
 
 ## Work
 

@@ -131,15 +131,47 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     allTools.push("fffind", "ffgrep", "intercom");
     await commands.mode("apex", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
-    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "fusion", models: {}, fusion: { lead: { provider: "configured", modelId: "lead", thinking: "medium" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } } } });
+    const prefsPath = join(dir, "mode-settings.json");
+    const newerGlobalPair = {
+      lead: { provider: "global", modelId: "newer-lead", thinking: "high" },
+      sidekick: { provider: "global", modelId: "newer-sidekick", thinking: "medium" },
+    };
+    const beforeResume = JSON.parse(readFileSync(prefsPath, "utf8"));
+    beforeResume.fusion = newerGlobalPair;
+    beforeResume.models.fusion = newerGlobalPair.lead;
+    writeFileSync(prefsPath, JSON.stringify(beforeResume));
+    entries.push({ type: "custom", customType: "behavior-mode", data: { mode: "fusion", models: { fusion: { provider: "stale", modelId: "lead", thinking: "off" } }, fusion: { lead: { provider: "configured", modelId: "lead", thinking: "medium" }, sidekick: { provider: "configured", modelId: "sidekick", thinking: "low" } } } });
+    ctx.modelRegistry = { find: () => undefined };
+    await emit("session_start", { reason: "resume" });
+    const unavailableEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
+    assert.deepEqual(unavailableEntry.data.models.fusion, unavailableEntry.data.fusion.lead, "unavailable model still records the authoritative requested pair");
+    assert.deepEqual(await emit("input", {}), { action: "handled" }, "unavailable model continues blocking input");
+    assert.deepEqual(JSON.parse(readFileSync(prefsPath, "utf8")).fusion, newerGlobalPair, "failed restore preserves global defaults");
     ctx.modelRegistry = { find: () => ({ provider: "configured", id: "lead" }) };
     pi.setModel = async () => true;
     await emit("session_start", { reason: "resume" });
     assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
+    const restoredEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
+    assert.deepEqual(restoredEntry.data.models.fusion, restoredEntry.data.fusion.lead, "successful restore normalizes session Fusion metadata");
+    let persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
+    assert.deepEqual(persisted.fusion, newerGlobalPair, "implicit session restore preserves newer global Fusion defaults");
+    assert.deepEqual(persisted.models.fusion, newerGlobalPair.lead);
     const fused = (await prompt()).systemPrompt;
     assert.equal(fused, FUSION_PREFACE + "Apex base" + FUSION_SYSTEM_BLOCK);
     assert.doesNotMatch(fused, /^You are an expert coding assistant operating inside pi/);
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
+    await commands.mode("fusion", ctx);
+    persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
+    assert.deepEqual(persisted.fusion, restoredEntry.data.fusion, "explicit Fusion activation updates global defaults to the selected session pair");
+    assert.deepEqual(persisted.models.fusion, restoredEntry.data.fusion.lead);
+    await emit("model_select", { source: "user", model: { provider: "override", id: "lead" } });
+    persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
+    assert.deepEqual(persisted.fusion.lead, { provider: "override", modelId: "lead", thinking: "medium" }, "explicit /model updates the authoritative global lead");
+    assert.deepEqual(persisted.models.fusion, persisted.fusion.lead);
+    await emit("thinking_level_select", { level: "high" });
+    persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
+    assert.equal(persisted.fusion.lead.thinking, "high", "thinking selection persists through the authoritative pair");
+    assert.deepEqual(persisted.models.fusion, persisted.fusion.lead);
     await commands.mode("pi", ctx);
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
     await commands.mode("work", ctx);
@@ -160,7 +192,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.match(workPrompt, /Active tool guidance[\s\S]*Read files/, "Work retains active tool snippets");
     assert.match(workPrompt, /Active tool rules[\s\S]*Use the workspace capability contract/, "Work retains extension prompt guidelines");
     assert.match(workPrompt, /<project_context>[\s\S]*Project boundary applies\./, "Work builder retains project context");
-    assert.match(workPrompt, /Current working directory:/, "Work builder retains prompt composition");
+    assert.match(workPrompt, /<cwd>/, "Work builder retains prompt composition");
     const workOptions = {
       cwd: dir,
       toolSnippets: { read: "Read files" },
@@ -247,7 +279,6 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
       assert.doesNotMatch(view, /not-in-available-snapshot/);
     }
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "unavailable selection leaves prior mode intact");
-    const prefsPath = join(dir, "mode-settings.json");
     const otherSession = JSON.parse(readFileSync(prefsPath, "utf8"));
     otherSession.mode = "fusion"; otherSession.ui = "apex";
     writeFileSync(prefsPath, JSON.stringify(otherSession));
@@ -584,6 +615,10 @@ test("successful switch records the actual Pi thinking level in staged state", a
     assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
     const lastEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
     assert.equal(lastEntry.data.fusion.lead.thinking, "medium", "persisted lead matches actual clamped level");
+    assert.deepEqual(lastEntry.data.models.fusion, lastEntry.data.fusion.lead, "session metadata follows the authoritative lead");
+    const savedPrefs = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
+    assert.deepEqual(savedPrefs.models.fusion, savedPrefs.fusion.lead, "global metadata follows the configured global pair");
+    assert.match(notices[notices.length - 1], /Lead configured\/lead \(medium\); sidekick configured\/sidekick \(low\)/);
   } finally {
     for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

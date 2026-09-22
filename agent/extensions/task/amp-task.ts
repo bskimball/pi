@@ -31,6 +31,8 @@ import {
   isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
+  orchestrateAgentList,
+  orchestrateAgentParamDescription,
   resolveAgentThinking,
   stderrDiagnostic,
   workCrewList,
@@ -556,10 +558,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   const apexAgentCatalog = apexAgentList(agents);
+  const orchestrateAgentCatalog = orchestrateAgentList(agents);
   const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${apexAgentCatalog}`;
   const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${apexAgentCatalog}`;
   const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), author (all email drafting and substantive email rewriting; other human-readable prose when separate context pays), or clerk (broad recon, monotonous reversible execution) when its routing trigger fires. Email reading, factual extraction, and summarization remain inline unless another trigger fires. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
   const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Always route email drafting and substantive email rewriting to author; keep email reading, factual extraction, and summarization inline unless another trigger fires. Route other human-readable or kindly worded prose to author when separate context pays, business/productivity planning to strategist, external research to researcher, and broad recon or monotonous reversible execution to clerk.`;
+  const taskOrchestrateDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${orchestrateAgentCatalog}`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",
@@ -1237,11 +1241,12 @@ export default function (pi: ExtensionAPI) {
   const applyTaskAdvertisement = (mode = process.env.PI_BEHAVIOR_MODE ?? "pi") => {
     const piMode = mode === "pi";
     const workMode = mode === "work";
-    taskToolDef.description = piMode ? taskPiDescription : workMode ? taskWorkDescription : taskFullDescription;
+    const orchestrateMode = mode === "apex-orchestrate";
+    taskToolDef.description = piMode ? taskPiDescription : workMode ? taskWorkDescription : orchestrateMode ? taskOrchestrateDescription : taskFullDescription;
     const properties = (taskToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
     taskToolDef.parameters = Type.Object({
       ...properties,
-      agent: Type.String({ description: piMode ? piAgentParamDescription(apexAgents) : workMode ? taskWorkAgentDescription : agentParamDescription(apexAgents) }),
+      agent: Type.String({ description: piMode ? piAgentParamDescription(apexAgents) : workMode ? taskWorkAgentDescription : orchestrateMode ? orchestrateAgentParamDescription(apexAgents) : agentParamDescription(apexAgents) }),
     }) as typeof taskToolDef.parameters;
     pi.registerTool(taskToolDef);
   };

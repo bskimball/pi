@@ -2,7 +2,7 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "0.86.1",
+  "lastChangelogVersion": "0.87.0",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom"
@@ -17,7 +17,7 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "hal-dark",
+  "theme": "apex-dark",
   "tuiMode": "fullscreen",
   "hideThinkingBlock": false
 }

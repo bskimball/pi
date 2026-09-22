@@ -133,17 +133,58 @@ const ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
   },
 ];
 
+function hintForClauses(
+  clauses: ReadonlyArray<{ agents: string[]; text: string }>,
+  agents: Map<string, AgentDef>,
+): string {
+  const kept = clauses
+    .filter((clause) => clause.agents.every((name) => agents.has(name)))
+    .map((clause) => clause.text);
+  if (kept.length === 0) return "";
+  return `This parameter chooses a specialist after delegation is justified; it does not decide whether to delegate. Route ${kept.join("; ")}. Route by the reason for delegation and deliverable, not file extension.`;
+}
+
 export function routingHint(agents: Map<string, AgentDef>): string {
-  const clauses = ROUTING_CLAUSES.filter((clause) =>
-    clause.agents.every((name) => agents.has(name)),
-  ).map((clause) => clause.text);
-  if (clauses.length === 0) return "";
-  return `This parameter chooses a specialist after delegation is justified; it does not decide whether to delegate. Route ${clauses.join("; ")}. Route by the reason for delegation and deliverable, not file extension.`;
+  return hintForClauses(ROUTING_CLAUSES, agents);
 }
 
 /** `agent` parameter description shared by the sync `task` and async `task_start` tools. */
 export function agentParamDescription(agents: Map<string, AgentDef>): string {
   const hint = routingHint(agents);
+  return `Agent to run. One of: ${[...agents.keys()].join(", ")}.${hint ? ` ${hint}` : ""}`;
+}
+
+/**
+ * Orchestrate routing: every visual and UI implementation slice goes to
+ * artisan (even mechanical or appearance-preserving ones); machinist takes
+ * non-visual slices only. Other clauses match the regular roster.
+ */
+const ORCHESTRATE_ROUTING_CLAUSES: ReadonlyArray<{ agents: string[]; text: string }> = [
+  {
+    agents: ["artisan"],
+    text: "all visual and UI implementation slices, including mechanical or appearance-preserving ones, to artisan",
+  },
+  {
+    agents: ["inspector"],
+    text: "live-page checks to inspector",
+  },
+  {
+    agents: ["scribe"],
+    text: "units whose deliverable is prose (docs, READMEs, changelogs, guides, copy) to scribe",
+  },
+  {
+    agents: ["machinist"],
+    text: "independent separable non-visual implementation slices to machinist",
+  },
+  {
+    agents: ["stevedore"],
+    text: "integrated lint, typecheck, test, build, git, and shipping work to stevedore",
+  },
+];
+
+/** `agent` parameter description for Apex Orchestrate: all visual/UI work routes to artisan. */
+export function orchestrateAgentParamDescription(agents: Map<string, AgentDef>): string {
+  const hint = hintForClauses(ORCHESTRATE_ROUTING_CLAUSES, agents);
   return `Agent to run. One of: ${[...agents.keys()].join(", ")}.${hint ? ` ${hint}` : ""}`;
 }
 
@@ -194,6 +235,30 @@ export function apexAgentList(agents: Map<string, AgentDef>): string {
   return [...agents.values()]
     .filter((def) => isApexRosterAgent(def.name))
     .map((def) => `- ${def.name}: ${def.description}`)
+    .join("\n");
+}
+
+/**
+ * Strip regular-mode inline carve-outs: whole sentences that keep work inline
+ * (or deny delegation) in regular mode. Sentences that merely mention regular
+ * mode for another reason are kept, as is "Not for UI or prose deliverables."
+ */
+export function stripRegularModeCarveout(description: string): string {
+  return description
+    .replace(
+      /[^.!?]*\bin regular mode\b[^.!?]*[.!?]/gi,
+      (sentence) =>
+        /\bstay|\bremain|\binline|\bdelegat/.test(sentence) ? "" : sentence,
+    )
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** `- name: description` lines for Apex Orchestrate: carve-outs stripped. */
+export function orchestrateAgentList(agents: Map<string, AgentDef>): string {
+  return [...agents.values()]
+    .filter((def) => isApexRosterAgent(def.name))
+    .map((def) => `- ${def.name}: ${stripRegularModeCarveout(def.description)}`)
     .join("\n");
 }
 

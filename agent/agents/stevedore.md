@@ -2,9 +2,9 @@
 name: stevedore
 description: Fast, cheap integrated-verification and release specialist for exact diagnostic experiment execution, release/git/deploy mechanics, and shipping platform CLIs. Not for code logic or third-party SaaS/admin/security/credential work.
 tools: read, ffgrep, fffind, ls, bash, edit, write, jev
-model: local-proxy/gpt-5.6-luna
+model: openai-codex/gpt-5.6-luna
 fallbackModels:
-  - local-proxy/grok-composer-2.5-fast
+  - xai/grok-composer-2.5-fast
   - local-proxy/gemini-3.8-flash-high
 thinking: medium
 inheritSkills: true

@@ -47,6 +47,34 @@ export function fusionModelId(
   return `${pair.sidekick.provider}/${pair.sidekick.modelId}`;
 }
 
+export interface FusionObservedIdentity {
+  model?: string;
+  thinking?: string;
+}
+
+/** Bounded Fusion-only receipt lines; observations always come from get_state. */
+export function fusionIdentityReceipt(
+  pair: FusionPairConfig,
+  observed?: FusionObservedIdentity,
+): string[] {
+  const configuredModel = fusionModelId(pair)!;
+  const configuredThinking = pair.sidekick.thinking ?? "unknown";
+  const lines = [
+    `configured sidekick: ${configuredModel} (thinking ${configuredThinking})`,
+    observed
+      ? `child-reported now: ${observed.model ?? "unknown"} (thinking ${observed.thinking ?? "unknown"})`
+      : "child-reported now: unknown (readback unavailable)",
+  ];
+  const modelMismatch = observed?.model !== undefined && observed.model !== configuredModel;
+  const thinkingMismatch = observed?.thinking !== undefined
+    && pair.sidekick.thinking !== undefined
+    && observed.thinking !== pair.sidekick.thinking;
+  if (modelMismatch || thinkingMismatch) {
+    lines.push("warning: child-reported identity differs from configured sidekick");
+  }
+  return lines;
+}
+
 /** Minimal structural worker view; the full Worker satisfies this. */
 export interface FusionWorkerState {
   id: string;
@@ -102,7 +130,7 @@ export interface FusionTransport {
   request(
     command: Record<string, unknown>,
     timeoutMs?: number,
-  ): Promise<{ success: boolean; error?: string }>;
+  ): Promise<{ success: boolean; error?: string; data?: unknown }>;
 }
 
 export interface PersistedTranscript {
@@ -127,7 +155,7 @@ export type ReuseOutcome =
   | { kind: "parked"; worker: FusionWorkerState }
   | { kind: "conflict"; reason: string }
   | { kind: "invalid"; reason: string }
-  | { kind: "reused"; worker: FusionWorkerState }
+  | { kind: "reused"; worker: FusionWorkerState; observed?: FusionObservedIdentity }
   | { kind: "failed"; worker: FusionWorkerState; reason: string };
 
 export type PromptOutcome =
@@ -170,9 +198,10 @@ const MODEL_TIMEOUT_MS = 30_000;
 async function safeRequest(
   applier: FusionTransport,
   command: Record<string, unknown>,
-): Promise<{ success: boolean; error?: string }> {
+  timeoutMs = MODEL_TIMEOUT_MS,
+): Promise<{ success: boolean; error?: string; data?: unknown }> {
   try {
-    return await applier.request(command, MODEL_TIMEOUT_MS);
+    return await applier.request(command, timeoutMs);
   } catch (error) {
     return {
       success: false,
@@ -184,6 +213,21 @@ async function safeRequest(
 export interface PriorSidekickIdentity {
   modelId?: string;
   thinking?: string;
+}
+
+/** Parse only identity explicitly reported by a child get_state response. */
+export function fusionIdentityFromState(
+  response: { success: boolean; data?: unknown },
+): FusionObservedIdentity | undefined {
+  if (!response.success || !isRecord(response.data)) return undefined;
+  const reportedModel = isRecord(response.data.model) ? response.data.model : undefined;
+  const modelId = typeof reportedModel?.id === "string" ? reportedModel.id : undefined;
+  const provider = typeof reportedModel?.provider === "string" ? reportedModel.provider : undefined;
+  const model = provider && modelId ? `${provider}/${modelId}` : undefined;
+  const thinking = typeof response.data.thinkingLevel === "string"
+    ? response.data.thinkingLevel
+    : undefined;
+  return { model, thinking };
 }
 
 /**
@@ -510,7 +554,10 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     // the same instruction alongside the generation prompt.
     const outgoing = schema ? `${prompt}\n\n${reportInstruction(schema)}` : prompt;
     const accepted = await this.acceptPrompt(worker, client, outgoing, promptTimeoutMs);
-    if (accepted.kind === "accepted") return { kind: "reused", worker };
+    if (accepted.kind === "accepted") {
+      const state = await safeRequest(client, { type: "get_state" }, 10_000);
+      return { kind: "reused", worker, observed: fusionIdentityFromState(state) };
+    }
     return accepted;
   }
 

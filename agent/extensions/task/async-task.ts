@@ -26,6 +26,8 @@ import {
   isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
+  orchestrateAgentList,
+  orchestrateAgentParamDescription,
   resolveAgentThinking,
   stderrDiagnostic,
   workCrewList,
@@ -175,8 +177,11 @@ import {
 import { assembleChainDigest, substitutePrev } from "./runtime/chain-prev.ts";
 import {
   FusionLifecycle,
+  fusionIdentityFromState,
+  fusionIdentityReceipt,
   fusionModelId,
   type FusionConfigureEvent,
+  type FusionObservedIdentity,
 } from "./runtime/fusion-lifecycle.ts";
 
 // ---------------------------------------------------------------- constants
@@ -211,6 +216,20 @@ const FUSION_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
 /** Single-line plain-text nudge appended to every Nth undispatched discovery result. */
 function fusionDiscoveryNudge(count: number): string {
   return `[fusion] ${count} lead discovery calls this turn with no sidekick unit. Stop broad exploration: delegate the remaining mechanical discovery with task_start, or continue only when the next read resolves a lead-owned judgment.`;
+}
+
+/** Lead inline implementation edits per user turn that trigger one orchestrate dispatch nudge. */
+export const ORCHESTRATE_INLINE_NUDGE_EVERY = 2;
+
+/** Tool names that count as lead inline implementation for the orchestrate dispatch nudge. */
+const ORCHESTRATE_IMPLEMENTATION_TOOLS: ReadonlySet<string> = new Set([
+  "edit",
+  "write",
+]);
+
+/** Single-line plain-text nudge appended to every Nth undispatched inline edit. */
+function orchestrateInlineNudge(count: number): string {
+  return `[orchestrate] ${count} inline implementation edits this turn with no writer in flight. Anything beyond a single-file known-path edit is a specialist slice: dispatch it with task_start (visual/UI to artisan, non-visual to machinist) instead of implementing it yourself.`;
 }
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
@@ -708,6 +727,7 @@ export default function (pi: ExtensionAPI) {
   const agents = discoverAgents();
   const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
   const apexAgentCatalog = apexAgentList(agents);
+  const orchestrateAgentCatalog = orchestrateAgentList(agents);
   const sidekickDef = agents.get("sidekick");
   const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
 
@@ -715,6 +735,12 @@ Available agents:
 ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+  const taskStartOrchestrateDescription = taskStartFullDescription
+    .replace(
+      "Multi-file, long-running, or frontend work may remain inline in regular mode.",
+      "In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist.",
+    )
+    .replace(apexAgentCatalog, orchestrateAgentCatalog);
   const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Pass context: "fresh" when the unit needs no prior findings: cached transcripts are parked and the unit starts clean. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
 
 Available agent:
@@ -736,14 +762,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const taskStartDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) return taskStartPersistentDescription;
     if (behaviorMode === "work") return taskStartWorkDescription;
-    return behaviorMode === "pi" ? taskStartPiDescription : taskStartFullDescription;
+    return behaviorMode === "pi" ? taskStartPiDescription : behaviorMode === "apex-orchestrate" ? taskStartOrchestrateDescription : taskStartFullDescription;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) {
       return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, while disjoint units may use parallel sidekicks.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
-    return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
+    return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : behaviorMode === "apex-orchestrate" ? orchestrateAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
   };
   const applyTaskStartAdvertisement = (mode = persistentSidekickMode()) => {
     taskStartToolDef.description = taskStartDescription(mode);
@@ -1381,6 +1407,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Lead discovery calls since the last user-turn start or task_start/task_send.
   // Counted in tool_result (fusion lead only); drives the dispatch nudge below.
   let fusionDiscoveryCalls = 0;
+  // Lead inline implementation edits since the last user-turn start or
+  // task_start/task_send. Counted in tool_result (orchestrate lead only);
+  // drives the dispatch nudge below.
+  let orchestrateInlineEdits = 0;
   // Set by the lead-session session_compact event; delivered once as a
   // [fusion] re-evaluation nudge on the lead's next tool result, then
   // cleared. Compaction is the free model-switch point, and every
@@ -1433,7 +1463,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       fusionParentSessionId?: string;
       resumeSessionFile?: string;
     },
-  ): Promise<{ worker?: Worker; error?: string }> => {
+  ): Promise<{ worker?: Worker; error?: string; fusionObserved?: FusionObservedIdentity }> => {
     const identity = params.rebind
       ? { id: createWorkerIdentity(nextId++).id, instanceId: params.rebind.instanceId }
       : createWorkerIdentity(nextId++);
@@ -1627,6 +1657,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       return { worker };
     }
 
+    let fusionObserved: FusionObservedIdentity | undefined;
     const applyState = (res: any) => {
         if (!res.success || !res.data || typeof res.data !== "object") return;
         const data = res.data as {
@@ -1671,7 +1702,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             if (!configured.success) { closeWorker(worker, "Fusion thinking configuration rejected", "sync"); return { error: "Fusion thinking configuration rejected." }; }
           }
         }
-        applyState(await client.request({ type: "get_state" }, 10_000));
+        const stateResponse = await client.request({ type: "get_state" }, 10_000);
+        applyState(stateResponse);
+        fusionObserved = fusionIdentityFromState(stateResponse);
         if (!worker.sessionFile) {
           closeWorker(worker, "Fusion transcript path unavailable", "sync");
           return { error: `${id} did not report a Fusion transcript path.` };
@@ -1766,7 +1799,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
     armIdle(worker);
     syncFleetWidget();
-    return { worker };
+    return { worker, fusionObserved };
   };
 
   function waitWorkerGeneration(
@@ -1988,7 +2021,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         );
         const sidekickLabel = "Fusion";
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
-        if (outcome.kind === "reused") return textResult(`reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new unit, prompt 1).`);
+        if (outcome.kind === "reused") {
+          const pair = fusionLifecycle.configured;
+          const identity = pair ? fusionIdentityReceipt(pair, outcome.observed) : [];
+          return textResult([
+            `reused ${outcome.worker.id} ${sidekickLabel} sidekick context (generation ${outcome.worker.generation ?? "?"}; new unit, prompt 1).`,
+            ...identity,
+          ].join("\n"));
+        }
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
         // "parked" resumes a saved transcript; "none" creates the first
         // sidekick or a fresh parallel worker for a disjoint clean unit.
@@ -2055,7 +2095,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const savedFusion = sidekickMode !== undefined && fusionResume
         ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.(), attachedTranscripts)
         : undefined;
-      const { worker, error } = await spawnWorker(def, {
+      const { worker, error, fusionObserved } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
         modelOverride: params.model?.trim() || undefined,
@@ -2088,10 +2128,13 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult(error ?? "Failed to start worker.", true);
       }
 
+      const identityLines = worker.fusion && fusionLifecycle.configured
+        ? fusionIdentityReceipt(fusionLifecycle.configured, fusionObserved)
+        : [`model: ${worker.model ?? "default"}`];
       const text = [
         `started ${worker.id}`,
         `agent: ${worker.agent}`,
-        `model: ${worker.model ?? "default"}`,
+        ...identityLines,
         `generation: ${worker.generation}`,
         contextNote,
         reportSchema ? "reportSchema: requested" : undefined,
@@ -3828,7 +3871,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       ? fusionLifecycle.gateSidekick(event.toolName)
       : undefined;
     if (sidekickReason) return { block: true, reason: sidekickReason };
-    if (event.toolName === "task_start" || event.toolName === "task_send") fusionDiscoveryCalls = 0;
+    if (event.toolName === "task_start" || event.toolName === "task_send") { fusionDiscoveryCalls = 0; orchestrateInlineEdits = 0; }
     if (behaviorMode !== "fusion") return;
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
@@ -3837,15 +3880,25 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     if (leadReason) return { block: true, reason: leadReason };
   });
   pi.on("tool_result", event => {
-    if (behaviorMode !== "fusion" || process.env.PI_FUSION_SIDEKICK === "1") return;
+    const sidekick = process.env.PI_FUSION_SIDEKICK === "1";
     const nudges: string[] = [];
-    if (fusionCompactionPending) {
-      fusionCompactionPending = false;
-      nudges.push(fusionCompactionNudge());
+    if (behaviorMode === "fusion" && !sidekick) {
+      if (fusionCompactionPending) {
+        fusionCompactionPending = false;
+        nudges.push(fusionCompactionNudge());
+      }
+      if (FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) {
+        fusionDiscoveryCalls += 1;
+        if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY === 0) nudges.push(fusionDiscoveryNudge(fusionDiscoveryCalls));
+      }
     }
-    if (FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) {
-      fusionDiscoveryCalls += 1;
-      if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY === 0) nudges.push(fusionDiscoveryNudge(fusionDiscoveryCalls));
+    // Orchestrate sibling of the Fusion backstop above: the lead stays off
+    // the tools while a writer is live, so local glue never nudges.
+    if (behaviorMode === "apex-orchestrate" && !sidekick) {
+      if (ORCHESTRATE_IMPLEMENTATION_TOOLS.has((event.toolName ?? "").toLowerCase()) && liveCount() === 0) {
+        orchestrateInlineEdits += 1;
+        if (orchestrateInlineEdits % ORCHESTRATE_INLINE_NUDGE_EVERY === 0) nudges.push(orchestrateInlineNudge(orchestrateInlineEdits));
+      }
     }
     if (!nudges.length) return;
     const existing = Array.isArray(event.content) ? event.content : [];
@@ -3869,10 +3922,12 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   // Busy gate is start → settled only (same pattern as bg-process).
-  // agent_start also bounds the Fusion discovery-nudge window: one user turn.
+  // agent_start also bounds the Fusion discovery-nudge and orchestrate
+  // inline-edit windows: one user turn.
   pi.on("agent_start", () => {
     agentBusy = true;
     fusionDiscoveryCalls = 0;
+    orchestrateInlineEdits = 0;
   });
   pi.on("agent_settled", () => {
     agentBusy = false;

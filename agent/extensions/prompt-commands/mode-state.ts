@@ -28,6 +28,11 @@ export function savePreferences(path: string, prefs: Preferences): void {
   writeFileSync(temp, JSON.stringify(prefs, null, 2) + "\n");
   renameSync(temp, path);
 }
+export function synchronizeFusionModel<T extends ModeState>(state: T): T {
+  if (state.fusion) state.models.fusion = structuredClone(state.fusion.lead);
+  return state;
+}
+
 export function restoreMode(entries: readonly any[], defaults: Preferences, fresh: boolean): ModeState {
   let saved: ModeState | undefined;
   let legacy = false;

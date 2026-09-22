@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
-import { MODES, isMode, readPreferences, restoreMode, savePreferences, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
+import { MODES, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 
@@ -47,11 +47,15 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   // stays blocked until a later /mode succeeds. Deliberately separate from
   // modelBlocked so /model and thinking selection cannot clear it.
   let recoveryBlocked: string | false = false;
+  const fusionPairLabel = (pair: FusionPair) =>
+    `Lead ${pair.lead.provider}/${pair.lead.modelId} (${pair.lead.thinking}); sidekick ${pair.sidekick.provider}/${pair.sidekick.modelId} (${pair.sidekick.thinking}).`;
   const persist = (setDefault = false) => {
+    synchronizeFusionModel(state);
     pi.appendEntry("behavior-mode", structuredClone(state));
     const latest = readPreferences(preferencePath);
     latest.models[state.mode] = state.models[state.mode];
     if (usesPersistentSidekick(state.mode)) latest.fusion = structuredClone(state.fusion);
+    synchronizeFusionModel(latest);
     if (setDefault) latest.mode = state.mode;
     savePreferences(preferencePath, latest);
   };
@@ -152,7 +156,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       modelBlocked = false;
       recoveryBlocked = false;
       ctx.ui.setStatus("mode", labels[mode]);
-      ctx.ui.notify(`Mode: ${labels[mode]}. Default for new sessions updated.`, "info");
+      const identity = usesPersistentSidekick(mode) && state.fusion
+        ? ` ${fusionPairLabel(state.fusion)}`
+        : "";
+      ctx.ui.notify(`Mode: ${labels[mode]}. Default for new sessions updated.${identity}`, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Compensate in reverse order. Every step reports; none fail silently.
@@ -241,7 +248,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     recoveryBlocked = false;
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
-    state = restoreMode(entries, preferences, fresh);
+    state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
     changing = true;
     modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion;
     // Restore through a clone: applyModel records the actual (possibly

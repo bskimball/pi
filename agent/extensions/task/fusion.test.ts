@@ -8,6 +8,8 @@ import {
   FusionLifecycle,
   applySidekickModel,
   fusionChainNudge,
+  fusionIdentityFromState,
+  fusionIdentityReceipt,
   fusionModelId,
 } from "./runtime/fusion-lifecycle.ts";
 
@@ -65,6 +67,34 @@ test("Fusion discovers the renamed sidekick profile without the old alias", () =
   assert.equal(agents.has("sidekick"), true);
   assert.equal(agents.get("sidekick")?.file.replaceAll("\\", "/").endsWith("agent/agents/sidekick.md"), true);
   assert.equal(agents.has("fusion-sidekick"), false);
+});
+
+test("Fusion identity receipts separate configuration from child-reported point-in-time state", () => {
+  const pair = { lead: { provider: "p", modelId: "l", thinking: "high" }, sidekick: { provider: "p", modelId: "s", thinking: "low" } };
+  const observed = fusionIdentityFromState({ success: true, data: { model: { provider: "q", id: "actual" }, thinkingLevel: "medium" } });
+  assert.deepEqual(observed, { model: "q/actual", thinking: "medium" });
+  assert.deepEqual(fusionIdentityReceipt(pair, observed), [
+    "configured sidekick: p/s (thinking low)",
+    "child-reported now: q/actual (thinking medium)",
+    "warning: child-reported identity differs from configured sidekick",
+  ]);
+  assert.deepEqual(fusionIdentityReceipt(pair, undefined), [
+    "configured sidekick: p/s (thinking low)",
+    "child-reported now: unknown (readback unavailable)",
+  ]);
+  assert.equal(fusionIdentityFromState({ success: false, data: { model: { provider: "p", id: "s" } } }), undefined, "failed readback never presents the configured request as observed");
+  const matching = fusionIdentityFromState({ success: true, data: { model: { provider: "p", id: "s" }, thinkingLevel: "low" } });
+  assert.deepEqual(fusionIdentityReceipt(pair, matching), [
+    "configured sidekick: p/s (thinking low)",
+    "child-reported now: p/s (thinking low)",
+  ]);
+  for (const data of [{}, { model: { id: "s" } }, { model: { provider: "p" } }]) {
+    const partial = fusionIdentityFromState({ success: true, data });
+    assert.deepEqual(fusionIdentityReceipt(pair, partial), [
+      "configured sidekick: p/s (thinking low)",
+      "child-reported now: unknown (thinking unknown)",
+    ], "incomplete identity is unknown, not a failed readback or a mismatch");
+  }
 });
 
 test("Fusion runtime rejects roster dispatch and preserves an existing busy gate", async () => {
@@ -253,11 +283,24 @@ test("Fusion sidekick cannot spawn or replace the lead's todo list", () => {
 test("FusionLifecycle reuses a settled transcript and parks dead transports", async () => {
   const h = fusionHarness();
   assert.deepEqual(await h.lifecycle.reuse("do it", {}, 1000), { kind: "none" });
-  const settled = h.fusionWorker();
+  const requests: string[] = [];
+  const settled = h.fusionWorker({
+    client: {
+      isClosed: false,
+      request: async (command: Record<string, unknown>) => {
+        requests.push(String(command.type));
+        return command.type === "get_state"
+          ? { success: true, data: { model: { provider: "p", id: "observed" }, thinkingLevel: "medium" } }
+          : { success: true };
+      },
+    },
+  });
   h.workers.push(settled);
   assert.equal(h.lifecycle.find(), settled);
   const reused: any = await h.lifecycle.reuse("do it", {}, 1000);
   assert.equal(reused.kind, "reused");
+  assert.deepEqual(reused.observed, { model: "p/observed", thinking: "medium" });
+  assert.deepEqual(requests, ["prompt", "get_state"], "reuse receipt reads child state after prompt acceptance");
   assert.deepEqual(h.started, ["task_1"]);
   assert.equal(settled.initialPrompt, "do it");
   assert.equal(settled.generation, 3);
@@ -674,5 +717,150 @@ test("Fusion configure handshake acknowledges synchronously and requires a pair"
     await request.rollback();
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
+  }
+});
+
+test("Apex Orchestrate strips regular-mode carve-outs and routes visual work to artisan", () => {
+  const prior = process.env.PI_BEHAVIOR_MODE;
+  process.env.PI_BEHAVIOR_MODE = "apex";
+  const bus = new Map<string, Function[]>();
+  const tools = new Map<string, any>();
+  const emitBus = (name: string, payload: any) => { for (const fn of bus.get(name) ?? []) fn(payload); };
+  const pi: any = {
+    registerTool: (tool: any) => { tools.set(tool.name, tool); },
+    registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on() {},
+    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); } },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi); ampTask(pi);
+    const taskStart = () => tools.get("task_start");
+    const taskStartAgent = () => taskStart().parameters.properties.agent.description as string;
+    const task = () => tools.get("task");
+    const taskAgent = () => task().parameters.properties.agent.description as string;
+
+    // Regular apex keeps the inline-biasing carve-outs verbatim.
+    assert.match(taskStart().description, /Multi-file, long-running, or frontend work may remain inline in regular mode\./);
+    assert.match(taskStart().description, /Ordinary frontend implementation stays with the lead in regular mode\./);
+    assert.match(taskStart().description, /Long or multi-file work alone is not a reason to delegate in regular mode\./);
+    assert.match(taskStart().description, /Not for UI or prose deliverables\./);
+    assert.match(taskStartAgent(), /substantial visual design work needing separate creative judgment to artisan/);
+    assert.match(taskStartAgent(), /independent separable non-visual implementation slices to machinist/);
+    assert.match(task().description, /Ordinary frontend implementation stays with the lead in regular mode\./);
+    assert.match(taskAgent(), /substantial visual design work needing separate creative judgment to artisan/);
+
+    emitBus("pi:modes:changed", { mode: "apex-orchestrate" });
+
+    // Orchestrate drops every "in regular mode" carve-out and routes visual/UI to artisan.
+    for (const text of [taskStart().description, taskStartAgent(), task().description, taskAgent()]) {
+      assert.doesNotMatch(text, /in regular mode/);
+    }
+    assert.match(taskStart().description, /In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist\./);
+    assert.match(taskStart().description, /Not for UI or prose deliverables\./);
+    assert.match(taskStartAgent(), /all visual and UI implementation slices, including mechanical or appearance-preserving ones, to artisan/);
+    assert.match(taskStartAgent(), /non-visual implementation slices to machinist/);
+    assert.match(task().description, /all visual and UI implementation goes to artisan, not machinist/);
+    assert.match(taskAgent(), /all visual and UI implementation slices, including mechanical or appearance-preserving ones, to artisan/);
+
+    // The orchestrate catalog keeps the same roster, minus carve-outs.
+    assert.match(taskStart().description, /- artisan:/);
+    assert.match(taskStart().description, /- machinist:/);
+    assert.doesNotMatch(taskStart().description, /- sidekick:/);
+    assert.doesNotMatch(taskStart().description, /- (strategist|researcher|author|clerk):/);
+
+    emitBus("pi:modes:changed", { mode: "apex" });
+
+    // Leaving orchestrate restores the regular-mode sentences unchanged.
+    assert.match(taskStart().description, /Multi-file, long-running, or frontend work may remain inline in regular mode\./);
+    assert.match(taskStart().description, /Ordinary frontend implementation stays with the lead in regular mode\./);
+    assert.match(taskStartAgent(), /substantial visual design work needing separate creative judgment to artisan/);
+  } finally {
+    if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
+  }
+});
+
+test("Orchestrate inline backstop nudges every 2 undispatched implementation edits", () => {
+  const prior = process.env.PI_BEHAVIOR_MODE;
+  const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+  process.env.PI_BEHAVIOR_MODE = "apex-orchestrate";
+  delete process.env.PI_FUSION_SIDEKICK;
+  const handlers = new Map<string, Function[]>();
+  const bus = new Map<string, Function[]>();
+  const emitBus = (name: string, payload: any) => { for (const fn of bus.get(name) ?? []) fn(payload); };
+  const pi: any = {
+    registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
+    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); } },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi);
+    const fireToolResult = (toolName: string, content: any[] = [{ type: "text", text: "ok" }]) => {
+      const event = { toolName, content, isError: false };
+      for (const fn of handlers.get("tool_result") ?? []) {
+        const out = fn(event) as any;
+        if (out) return out;
+      }
+      return undefined;
+    };
+    const fireToolCall = (toolName: string) => {
+      for (const fn of handlers.get("tool_call") ?? []) fn({ toolName, input: {} });
+    };
+    const fireAgentStart = () => {
+      for (const fn of handlers.get("agent_start") ?? []) fn();
+    };
+    const nudgeText = (out: any) => out?.content?.at(-1)?.text as string | undefined;
+
+    fireAgentStart();
+    assert.equal(fireToolResult("edit"), undefined, "1st inline edit: no nudge");
+    const second = fireToolResult("write");
+    assert.ok(second, "2nd inline edit nudges");
+    assert.equal(second.content.length, 2, "nudge appended, original blocks kept");
+    assert.equal(second.content[1].type, "text", "nudge is a text block");
+    const text = nudgeText(second);
+    assert.match(text!, /^\[orchestrate\] 2 inline implementation edits this turn/);
+    assert.match(text!, /task_start/);
+    assert.equal(text!.includes("\n"), false, "nudge is a single line");
+    assert.equal(fireToolResult("edit"), undefined, "3rd inline edit: no nudge");
+    assert.match(nudgeText(fireToolResult("write"))!, /^\[orchestrate\] 4 inline implementation edits this turn/, "second nudge at 4");
+
+    fireAgentStart();
+    for (let i = 0; i < 6; i++) {
+      assert.equal(fireToolResult("read"), undefined, "read never counts");
+      assert.equal(fireToolResult("bash"), undefined, "bash never counts");
+    }
+    assert.equal(fireToolResult("edit"), undefined, "counter untouched by read/bash");
+    assert.match(nudgeText(fireToolResult("edit"))!, /^\[orchestrate\] 2 inline implementation edits this turn/, "nudge fires on the 2nd edit after read/bash");
+
+    fireToolCall("task_start");
+    assert.equal(fireToolResult("edit"), undefined, "no nudge within 1 edit of dispatch");
+    assert.match(nudgeText(fireToolResult("write"))!, /2 inline implementation edits/, "nudge resumes 2 edits after task_start");
+
+    fireToolCall("task_send");
+    assert.equal(fireToolResult("edit"), undefined, "task_send resets too");
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "nudge resumes 2 edits after task_send");
+
+    fireAgentStart();
+    assert.equal(fireToolResult("edit"), undefined, "new user turn resets");
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "nudge resumes 2 edits into the new turn");
+
+    for (const mode of ["apex", "pi", "work", "fusion"]) {
+      emitBus("pi:modes:changed", { mode });
+      fireAgentStart();
+      for (let i = 0; i < 4; i++) assert.equal(fireToolResult("edit"), undefined, `no nudge in ${mode} mode`);
+    }
+    emitBus("pi:modes:changed", { mode: "apex-orchestrate" });
+    process.env.PI_FUSION_SIDEKICK = "1";
+    fireAgentStart();
+    for (let i = 0; i < 4; i++) assert.equal(fireToolResult("edit"), undefined, "no nudge for the sidekick itself");
+    delete process.env.PI_FUSION_SIDEKICK;
+    fireAgentStart();
+    assert.equal(fireToolResult("edit"), undefined);
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "lead nudges again after sidekick check");
+  } finally {
+    for (const fn of handlers.get("session_shutdown") ?? []) fn({}, {});
+    if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
+    if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
   }
 });
