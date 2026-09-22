@@ -14,7 +14,7 @@ export interface ReportSchema {
   required?: unknown;
 }
 
-const IMPLEMENTATION_AGENTS = new Set(["artisan", "machinist", "scribe"]);
+const IMPLEMENTATION_AGENTS = new Set(["artisan", "machinist", "scribe", "author"]);
 const REVIEW_AGENTS = new Set(["oracle"]);
 
 export const DEFAULT_IMPLEMENTATION_REPORT_SCHEMA = JSON.stringify({

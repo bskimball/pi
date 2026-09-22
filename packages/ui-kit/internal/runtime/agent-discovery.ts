@@ -159,6 +159,7 @@ export function piAgentParamDescription(agents: Map<string, AgentDef>): string {
 export const WORK_CREW_AGENTS = [
   "strategist",
   "researcher",
+  "author",
   "clerk",
 ] as const;
 
@@ -171,7 +172,7 @@ export function isWorkCrewAgent(name: string): boolean {
 /**
  * Fusion-only agents: advertised and runnable only in Fusion mode.
  * Currently just the persistent sidekick; Work dispatches its own
- * strategist/researcher/clerk crew instead.
+ * strategist/researcher/author/clerk crew instead.
  */
 export const FUSION_ONLY_AGENTS = [
   "sidekick",

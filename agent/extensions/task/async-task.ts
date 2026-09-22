@@ -719,13 +719,13 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
-  const taskStartWorkDescription = `Start a Work crew specialist in an isolated session. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays; prefer the synchronous \`task\` tool for a single bounded result in-line. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Park the worker with task_close when done.
+  const taskStartWorkDescription = `Start a Work crew specialist in an isolated session. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), author (human-readable prose), or clerk (broad recon, monotonous reversible execution) only when separate context pays; prefer the synchronous \`task\` tool for a single bounded result in-line. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Park the worker with task_close when done.
 
 Available agents:
 ${workCrewList(agents)}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, broad recon or monotonous reversible execution to clerk.`;
+  const taskStartWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, human-readable or kindly worded prose to author, and broad recon or monotonous reversible execution to clerk.`;
   const taskStartPiDescription = `Start an asynchronous specialist only when the user names that specialist or asks you to delegate. Do not auto-route from this description. Returns a worker id (task_N) immediately; use task_wait, task_send, and task_close to manage the worker.
 
 Available agents:
@@ -2011,7 +2011,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult(`sidekick is Fusion-only — ${params.agent} cannot run in this mode; switch to Fusion or dispatch an Apex specialist.`, true);
       }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
-        return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`, true);
+        return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, author, or clerk, or switch modes.`, true);
       }
       if (!runtime.canStart()) {
         return textResult(

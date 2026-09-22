@@ -111,6 +111,7 @@ const DEFAULT_AGENT_HUES: Record<string, string> = {
   scout: "#f9e2af",
   scribe: "#f5c2e7",
   stevedore: "#74c7ec",
+  author: "#f5c2e7",
   fallback: "#6c7086",
 };
 
@@ -557,8 +558,8 @@ export default function (pi: ExtensionAPI) {
   const apexAgentCatalog = apexAgentList(agents);
   const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${apexAgentCatalog}`;
   const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${apexAgentCatalog}`;
-  const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), or clerk (broad recon, monotonous reversible execution) only when separate context pays. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
-  const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, broad recon or monotonous reversible execution to clerk.`;
+  const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), author (human-readable prose), or clerk (broad recon, monotonous reversible execution) only when separate context pays. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
+  const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Route business/productivity planning to strategist, external research to researcher, human-readable or kindly worded prose to author, and broad recon or monotonous reversible execution to clerk.`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",
@@ -593,7 +594,7 @@ export default function (pi: ExtensionAPI) {
         process.env.PI_BEHAVIOR_MODE === "work" &&
         !isWorkCrewAgent(params.agent)
       ) {
-        const text = `Work permits synchronous task only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, or clerk, or switch modes.`;
+        const text = `Work permits synchronous task only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, author, or clerk, or switch modes.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       const def = agents.get(params.agent);

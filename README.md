@@ -41,7 +41,7 @@ They're orthogonal — you can run Fusion behavior under the HAL skin, or Apex O
 | **Apex** | Inline-first: the lead does most work directly, delegates selectively | Full roster | Coding-first base prompt (`agent/SYSTEM.md`) + Apex overlay |
 | **Apex Orchestrate** | Specialist-first: substantial slices go to specialists; lead plans, integrates, verifies, and handles control-plane work inline | Full roster | Same base prompt + strict-orchestrator overlay |
 | **Fusion** | Sidekick-first: persistent sidekicks are the default delegate (one by default, parallel ones for disjoint units); four others only on explicit request | Closed six-role team | Same base prompt + Fusion overlay |
-| **Work** | Operations-first, own dedicated prompt; inline-first with a closed three-crew roster | Closed four-role team (lead + strategist, researcher, clerk) | Dedicated operations-first prompt, not the coding-first base |
+| **Work** | Operations-first, own dedicated prompt; inline-first with a closed four-specialist roster | Closed five-role team (lead + strategist, researcher, author, clerk) | Dedicated operations-first prompt, not the coding-first base |
 
 "Pi mode" means **stock behavior inside this configured install** — your extensions, tools, skills, and project instructions are all still present, and the model can still delegate when you ask it to. It does not uninstall anything or reset you to a fresh, unconfigured Pi. (A brand-new install defaults to `/mode apex` + `/ui apex`; this table describes what each mode *does*, not the out-of-the-box default.)
 
@@ -98,7 +98,7 @@ The first time you switch to Fusion without a saved pair, `/mode fusion` itself 
 
 ## Work
 
-Work is operations-first: the lead does the bulk of the work directly (inline-first, like Apex) using a dedicated prompt instead of the coding-first base, dispatching a closed three-crew team — `strategist` (business/productivity planning), `researcher` (external source-traced research), `clerk` (broad recon plus monotonous reversible execution) — via `task`, or `task_start` / `task_send` when multi-turn or steering is needed. No persistent sidekick, no other agents. Business workflows and integrations remain owned by their own project; no custom "work" agents ship in this repo.
+Work is operations-first: the lead does the bulk of the work directly (inline-first, like Apex) using a dedicated prompt instead of the coding-first base, dispatching a closed four-specialist team — `strategist` (Eddie, business/productivity planning), `researcher` (Oscar, external source-traced research), `author` (Flo, human-readable and kindly worded prose), `clerk` (Gomez, broad recon plus monotonous reversible execution) — via `task`, or `task_start` / `task_send` when multi-turn or steering is needed. No persistent sidekick, no other agents. Business workflows and integrations remain owned by their own project.
 
 ## Trying a mode
 
@@ -108,7 +108,7 @@ Work is operations-first: the lead does the bulk of the work directly (inline-fi
 /mode apex-orchestrate     # specialist-first, same roster
 /orchestrate on            # equivalent toggle, from Apex
 /mode fusion               # closed lead+sidekick team (first switch without a saved pair prompts for one)
-/mode work                 # operations-first, inline-first, strategist/researcher/clerk
+/mode work                 # operations-first, inline-first, strategist/researcher/author/clerk
 /mode configure            # pick lead/sidekick models + thinking for Fusion
 /ui apex                   # switch presentation only — independent of /mode
 ```

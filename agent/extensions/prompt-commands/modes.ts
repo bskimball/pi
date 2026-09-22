@@ -212,7 +212,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       let value = args.trim().toLowerCase();
       if (value === "configure") {
         if (state.mode === "work") {
-          ctx.ui.notify("Work mode has no lead/sidekick pair to configure \u2014 it dispatches strategist, researcher, and clerk. Switch to Fusion to configure a pair.", "info");
+          ctx.ui.notify("Work mode has no lead/sidekick pair to configure \u2014 it dispatches strategist, researcher, author, and clerk. Switch to Fusion to configure a pair.", "info");
           return;
         }
         const pair = await configureFusion(ctx);

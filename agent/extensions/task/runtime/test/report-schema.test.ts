@@ -115,6 +115,7 @@ describe("report-schema", () => {
     );
     assert.equal(defaultReportSchemaForAgent("artisan"), DEFAULT_IMPLEMENTATION_REPORT_SCHEMA);
     assert.equal(defaultReportSchemaForAgent("scribe"), DEFAULT_IMPLEMENTATION_REPORT_SCHEMA);
+    assert.equal(defaultReportSchemaForAgent("author"), DEFAULT_IMPLEMENTATION_REPORT_SCHEMA);
     assert.equal(defaultReportSchemaForAgent("oracle"), DEFAULT_REVIEW_REPORT_SCHEMA);
     assert.equal(defaultReportSchemaForAgent("inspector"), DEFAULT_INSPECTION_REPORT_SCHEMA);
     assert.equal(defaultReportSchemaForAgent("scout"), undefined);
