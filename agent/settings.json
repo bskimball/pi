@@ -1,11 +1,12 @@
 {
   "defaultModel": "gpt-5.6-sol",
-  "defaultProvider": "local-proxy",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
   "lastChangelogVersion": "0.86.1",
   "packages": [
     "npm:@ff-labs/pi-fff",
-    "npm:pi-intercom"
+    "npm:pi-intercom",
+    "npm:@howaboua/pi-codex-conversion"
   ],
   "skills": [
     "../node_modules/pi-mcp-adapter/skills"

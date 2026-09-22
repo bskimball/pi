@@ -359,7 +359,7 @@ optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
-(`gpt-5.6-sol`), `defaultProvider` (`local-proxy`),
+(`gpt-5.6-sol`), `defaultProvider` (`openai-codex`),
 `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
 (`npm:@ff-labs/pi-fff` for FFF fuzzy finding, `npm:pi-intercom` for the
 `intercom` tool — the third-party MCP dependency used here is still composed
@@ -373,11 +373,11 @@ and `tuiMode`.
 `enabledModels` is intentionally omitted so `/model` and Ctrl+P see every configured
 provider without a scope allowlist. Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
-Active default and subagent routes use `local-proxy` (for example
-`local-proxy/gpt-5.6-luna`, `local-proxy/gpt-5.6-sol`, `local-proxy/grok-4.5`,
-`local-proxy/claude-opus-5`, plus Cloudflare Workers AI fallbacks). Direct
-`openai-codex/*` and `xai/*` provider routes remain available for manual
-selection but are not the active default or agent frontmatter path.
+The active default and all GPT agent routes use `openai-codex` (for example
+`openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-luna`, and
+`openai-codex/gpt-6-astra`). Non-GPT agent routes still use configured providers
+such as `local-proxy/claude-opus-5`, `local-proxy/gemini-3.8-flash-high`, xAI,
+OpenCode, and Cloudflare Workers AI fallbacks.
 
 ---
 
@@ -423,12 +423,12 @@ Either form works:
 
 ```yaml
 fallbackModels:
-  - local-proxy/gpt-5.6-sol
+  - openai-codex/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
 ```
 
 ```yaml
-fallbackModels: [local-proxy/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
+fallbackModels: [openai-codex/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
 ```
 
 Both single and double surrounding quotes on individual list items are
