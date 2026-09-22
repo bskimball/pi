@@ -307,6 +307,25 @@ test("FusionLifecycle chain counting tolerates workers that predate the counter"
   assert.equal(fusionChainNudge("task_9", 2), "[fusion] task_9 has taken 2 prompts in this unit (1 assignment + 1 correction). This unit is now closed to further prompts: reassess the contract, then use task_start for a new unit on the persistent sidekick, or take the work back after settle/abort.");
 });
 
+test("FusionLifecycle fresh context parks cached transcripts instead of continuing them", async () => {
+  const h = fusionHarness();
+  // No sidekick yet: a declared-fresh unit still must not resume a transcript.
+  assert.deepEqual(await h.lifecycle.reuse("clean unit", { context: "fresh" }, 1000), { kind: "fresh" });
+  const idle = h.fusionWorker();
+  h.workers.push(idle);
+  const fresh: any = await h.lifecycle.reuse("unrelated unit", { context: "fresh" }, 1000);
+  assert.equal(fresh.kind, "fresh", "fresh is never silently downgraded to reuse");
+  assert.deepEqual(h.started, [], "the parked sidekick takes no new generation");
+  assert.ok(h.parked.some((entry: string) => entry.startsWith("task_1:")), "cached transcript parked");
+  assert.equal(h.lifecycle.find(), undefined, "no sidekick carries the declined context forward");
+  // Omitting context still continues the cached findings.
+  const reusable = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
+  h.workers.push(reusable);
+  const reused: any = await h.lifecycle.reuse("follow-on unit", {}, 1000);
+  assert.equal(reused.kind, "reused");
+  assert.equal(reused.worker.id, "task_2");
+});
+
 test("FusionLifecycle reuse conflicts name truthful remedies and validates report contracts", async () => {
   const h = fusionHarness();
   h.workers.push(h.fusionWorker());
@@ -316,7 +335,7 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.doesNotMatch(model.reason, /task_close/);
   const fork = await h.lifecycle.reuse("x", { context: "fork" }, 1000) as any;
   assert.equal(fork.kind, "conflict");
-  assert.match(fork.reason, /new parent session/);
+  assert.match(fork.reason, /cannot fork a transcript/);
   assert.doesNotMatch(fork.reason, /task_close/);
   const cwd = await h.lifecycle.reuse("x", { cwd: "/other" }, 1000) as any;
   assert.equal(cwd.kind, "none", "a different cwd may spawn a disjoint sidekick");

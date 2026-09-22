@@ -715,7 +715,7 @@ Available agents:
 ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
-  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
+  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Pass context: "fresh" when the unit needs no prior findings: cached transcripts are parked and the unit starts clean. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
@@ -1992,8 +1992,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
         // "parked" resumes a saved transcript; "none" creates the first
         // sidekick or a fresh parallel worker for a disjoint clean unit.
+        // "fresh" declined the cached findings, so it never resumes one.
         if (!fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
-        fusionResume = outcome.kind === "parked" || fusionLifecycle.findAll().length === 0;
+        fusionResume = outcome.kind !== "fresh"
+          && (outcome.kind === "parked" || fusionLifecycle.findAll().length === 0);
         if (!runtime.canStart()) {
           const busy = fusionLifecycle.live().map((worker) => worker.id).join(", ");
           return textResult(

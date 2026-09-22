@@ -122,6 +122,8 @@ export interface ReuseInputs {
 
 export type ReuseOutcome =
   | { kind: "none" }
+  /** Idle transcripts parked on request; the caller spawns a clean sidekick. */
+  | { kind: "fresh" }
   | { kind: "parked"; worker: FusionWorkerState }
   | { kind: "conflict"; reason: string }
   | { kind: "invalid"; reason: string }
@@ -414,6 +416,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
   /**
    * task_start reuse: continue an idle sidekick's cached transcript, park dead
    * transports for resume, or report none so a disjoint clean unit can spawn.
+   * An explicit `context: "fresh"` opts out of transcript continuation.
    */
   async reuse(
     prompt: string,
@@ -421,7 +424,10 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     promptTimeoutMs: number,
   ): Promise<ReuseOutcome> {
     const all = this.findAll();
-    if (!all.length) return { kind: "none" };
+    // A declared-fresh unit wants no inherited findings, so it must not
+    // resume a persisted transcript either.
+    const wantsFresh = inputs.context === "fresh";
+    if (!all.length) return wantsFresh ? { kind: "fresh" } : { kind: "none" };
     if (inputs.model?.trim()) {
       return {
         kind: "conflict",
@@ -430,13 +436,13 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           `not by a fresh worker. Run /mode configure to change it.`,
       };
     }
-    if (inputs.context !== undefined && inputs.context !== "fresh") {
+    if (inputs.context !== undefined && !wantsFresh) {
       return {
         kind: "conflict",
         reason:
-          `Fusion sidekick reuse continues the designated transcript for this session; ` +
-          `per-assignment context separation is not available. Split the work across prompts, ` +
-          `or start a new parent session for a clean transcript.`,
+          `Fusion sidekick reuse cannot fork a transcript. Omit context to continue the ` +
+          `sidekick's cached findings, or pass context: "fresh" to park them and start ` +
+          `this unit on a clean sidekick.`,
       };
     }
     // Dead transports park for a later transcript resume; every remaining
@@ -461,6 +467,17 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           candidate.cwd === undefined ||
           inputs.cwd === candidate.cwd),
     );
+    if (wantsFresh) {
+      // Park the cached transcripts the lead just declined; the caller then
+      // spawns a clean sidekick under the configured pair.
+      for (const candidate of idle) {
+        this.deps.parkWorker(
+          candidate,
+          "Fusion fresh context requested; parking cached transcript",
+        );
+      }
+      return { kind: "fresh" };
+    }
     if (!idle.length) {
       // Busy workers keep their clean units. A new task_start may spawn a
       // parallel sidekick only when the lead has declared a disjoint unit.

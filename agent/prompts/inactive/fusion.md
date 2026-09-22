@@ -25,6 +25,7 @@ The base prompt still governs safety, scope, verification, todo thresholds, and 
 
 `task_start` is the normal delegation path. It begins a clean unit, reusing an idle sidekick's cached transcript or starting another sidekick when all existing workers are busy and the new unit is disjoint.
 
+- `task_start` with `context: "fresh"` parks the cached transcript and starts the unit clean. Use it when the new unit shares no findings with the last one; omit it when the sidekick's context is genuine evidence.
 - `task_send steer` may clarify execution of the running unit. It must not change the outcome, owned paths, or acceptance check.
 - `task_send prompt` is one corrective pass against the same settled contract. The runtime blocks a second correction.
 - Any changed outcome, path set, or acceptance check is a new `task_start` unit, even when the same worker is reused.
