@@ -10,7 +10,7 @@ import { looksSecretish, buildMemoryTriageQuestions, collectMemoryTriageFindings
 import { buildOracleTriggerQuestions, collectOracleTriggerFindings, formatOracleTriggerAdvisory } from "./internal/oracle-trigger.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
 import { buildTodoEvidenceQuestions, collectTodoEvidenceFindings, diffTodoTransitions, formatTodoEvidenceAdvisory, formatTodoState, nextTodoStatusMap, snapshotTodos } from "./internal/todo-evidence.ts";
-import { buildSkillQuestion, formatSkillAdvisory, resolveSkillChoice, type SkillCandidate } from "./internal/skill-router.ts";
+import { BREADTH_ID, buildSkillBreadthQuestion, buildSkillQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SuggestedSkill } from "./internal/skill-router.ts";
 import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
 export { extractWorkflowIndex };
 import { JEV_SUGGESTION_TYPE, registerSuggestionReceipt, type JevSuggestionDetails } from "./internal/suggestion-receipt.ts";
@@ -324,6 +324,7 @@ export default function (pi: ExtensionAPI): void {
     if (routeSkills) {
       try {
         questions.skill = buildSkillQuestion(candidates);
+        questions[BREADTH_ID] = buildSkillBreadthQuestion(candidates);
       } catch {
         // A malformed catalog disables routing for this turn, never the turn itself.
       }
@@ -359,6 +360,7 @@ export default function (pi: ExtensionAPI): void {
       ? `User request:\n${trimmed}\n\n${workflowIndex}`
       : trimmed;
     const epoch = sessionEpoch;
+    const firstStartedAt = Date.now();
     const result = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
     if (epoch !== sessionEpoch) return undefined;
     if (result.status !== "completed") {
@@ -381,6 +383,9 @@ export default function (pi: ExtensionAPI): void {
     const lines: string[] = [];
     const notes: string[] = [];
     let selectedSkill: { name: string; probability: number } | undefined;
+    let suggested: SuggestedSkill[] = [];
+    const breadthAnswer = result.answers[BREADTH_ID];
+    const breadth = breadthAnswer?.type === "noul" && Number.isFinite(breadthAnswer.noul) ? breadthAnswer.noul : undefined;
     let skillDecision: ReturnType<typeof resolveSkillChoice> | undefined;
     const receiptFindings: JevSuggestionDetails["findings"] = [];
     if (questions.skill) {
@@ -390,13 +395,32 @@ export default function (pi: ExtensionAPI): void {
         minMargin: config.skillRouter.minMargin,
       });
       skillDecision = decision;
-      if (decision.reason === "selected" && decision.skill) {
-        lines.push(formatSkillAdvisory(decision.skill, decision.probability));
-        notes.push(`skill=${decision.skill.name}`);
-        selectedSkill = {
-          name: decision.skill.name,
-          probability: decision.probability,
-        };
+      let relevance: Record<string, JevAnswer> | undefined;
+      let asked: Record<string, JevQuestion> | undefined;
+      if (breadth !== undefined && breadth >= config.skillRouter.breadthThreshold) {
+        const remaining = config.skillRouter.deadlineMs - (Date.now() - firstStartedAt);
+        if (remaining > 0 && !ctx.signal?.aborted) {
+          asked = buildSkillRelevanceQuestions(candidates, result.answers.skill);
+          const second = await evaluateAdvisory(state, asked, Math.min(config.skillRouter.deadlineMs, remaining), ctx.signal, ctx.modelRegistry);
+          if (epoch !== sessionEpoch) return undefined;
+          logTelemetry({
+            event: "evaluation", sessionId, workspaceId, evaluationId: second.evaluationId,
+            sources: ["skill-router"], status: second.status === "completed" ? "success" : second.status,
+            elapsedMs: second.elapsedMs,
+            ...(second.status === "completed" ? { inputTokens: second.usage.input_tokens, outputTokens: second.usage.output_tokens } : {}),
+            breadth,
+          });
+          if (second.status === "completed") {
+            relevance = second.answers;
+            publishStatus(ctx, advisoryMeter, second, "skill breadth");
+          }
+        }
+      }
+      suggested = resolveSkillSuggestions(decision, candidates, breadth ?? 0, config.skillRouter.breadthThreshold, relevance, asked);
+      if (suggested.length) {
+        lines.push(formatSkillAdvisory(suggested));
+        notes.push(`skill=${suggested[0]!.skill.name}`);
+        selectedSkill = { name: suggested[0]!.skill.name, probability: suggested[0]!.probability };
       }
     }
     if (config.routingAdvisory.enabled) {
@@ -427,6 +451,8 @@ export default function (pi: ExtensionAPI): void {
       outputTokens: result.usage.output_tokens,
       skill: selectedSkill?.name,
       probability: selectedSkill?.probability,
+      skills: suggested.map(({ skill, probability }) => ({ name: skill.name.slice(0, 80), probability })),
+      breadth,
       findings: receiptFindings.map(({ id, probability }) => ({
         id,
         probability,
@@ -454,13 +480,10 @@ export default function (pi: ExtensionAPI): void {
     if (lines.length === 0) return undefined;
 
     const suggestionId = nextEphemeralId("suggestion");
-    if (selectedSkill) {
-      const candidate = candidates.find((skill) => skill.name === selectedSkill.name);
-      if (candidate) {
-        const skillPath = normalizeToolPath(candidate.filePath, ctx.cwd);
-        // Latest suggestion wins per target, so one later read cannot double-credit stale prompts.
-        pendingSkills.set(skillPath, suggestionId);
-      }
+    for (const { skill } of suggested) {
+      const skillPath = normalizeToolPath(skill.filePath, ctx.cwd);
+      // Latest suggestion wins per target, so one later read cannot double-credit stale prompts.
+      pendingSkills.set(skillPath, suggestionId);
     }
     logTelemetry({
       event: "suggestion",
@@ -472,6 +495,8 @@ export default function (pi: ExtensionAPI): void {
       status: "success",
       skill: selectedSkill?.name,
       probability: selectedSkill?.probability,
+      skills: suggested.map(({ skill, probability }) => ({ name: skill.name.slice(0, 80), probability })),
+      breadth,
       findings: receiptFindings.map(({ id, probability }) => ({
         id,
         probability,
@@ -480,6 +505,7 @@ export default function (pi: ExtensionAPI): void {
     const details: JevSuggestionDetails = {
       kind: "turn",
       skill: selectedSkill,
+      skills: suggested.map(({ skill, probability }) => ({ name: skill.name, probability })),
       findings: receiptFindings,
     };
     return {

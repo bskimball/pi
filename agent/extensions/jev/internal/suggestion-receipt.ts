@@ -10,6 +10,7 @@ export interface JevSuggestionDetails {
   kind: "turn" | "code" | "todo" | "memory" | "review";
   file?: string;
   skill?: { name: string; probability: number };
+  skills?: Array<{ name: string; probability: number }>;
   findings: Array<{ id: string; label: string; probability: number }>;
 }
 
@@ -34,13 +35,11 @@ function rowsFrom(details: JevSuggestionDetails | undefined): JevSuggestionRow[]
     id: "Jev suggestion",
     subject: details.kind === "turn" ? "turn advisory" : (file || `${details.kind} finding`),
   }];
-  const skillName = clean(details.skill?.name, 80);
-  if (skillName && validProbability(details.skill?.probability)) {
-    rows.push({
-      id: "skill",
-      subject: skillName,
-      detail: `p=${details.skill.probability.toFixed(2)}`,
-    });
+  for (const skill of (details.skills ?? (details.skill ? [details.skill] : [])).slice(0, 12)) {
+    const skillName = clean(skill?.name, 80);
+    if (skillName && validProbability(skill?.probability)) {
+      rows.push({ id: "skill", subject: skillName, detail: `p=${skill.probability.toFixed(2)}` });
+    }
   }
   for (const finding of details.findings.slice(0, 8)) {
     const id = clean(finding?.id, 80);

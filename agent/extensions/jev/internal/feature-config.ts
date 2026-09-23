@@ -22,6 +22,7 @@ export interface CodeJudgeSettings extends FeatureSettings {
 export interface SkillRouterSettings extends FeatureSettings {
   minMargin: number;
   minConfidence: number;
+  breadthThreshold: number;
 }
 
 export interface JevFeatureConfig {
@@ -34,7 +35,7 @@ export interface JevFeatureConfig {
 }
 
 export const FEATURE_DEFAULTS: JevFeatureConfig = {
-  skillRouter: { enabled: false, threshold: 0.55, deadlineMs: 2500, minMargin: 0.15, minConfidence: 0.6 },
+  skillRouter: { enabled: false, threshold: 0.55, deadlineMs: 2500, minMargin: 0.15, minConfidence: 0.6, breadthThreshold: 0.6 },
   codeJudge: { enabled: false, threshold: 0.8, deadlineMs: 2500, maxChars: 16000, evidenceBar: 0.5, goodTraitBar: 0.10 },
   routingAdvisory: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
   todoEvidence: { enabled: false, threshold: 0.8, deadlineMs: 2500 },
@@ -74,6 +75,7 @@ function skillRouterSettings(value: unknown, defaults: SkillRouterSettings): Ski
     ...base,
     minMargin: boundedNumber(block.minMargin, defaults.minMargin, 0, 1),
     minConfidence: boundedNumber(block.minConfidence, defaults.minConfidence, 0, 1),
+    breadthThreshold: boundedNumber(block.breadthThreshold, defaults.breadthThreshold, 0, 1),
   };
 }
 

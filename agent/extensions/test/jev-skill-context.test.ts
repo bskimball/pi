@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { JevAnswer } from "../jev/internal/client.ts";
-import { resolveSkillChoice, type SkillCandidate, type SkillRouterPolicy } from "../jev/internal/skill-router.ts";
+import { buildSkillBreadthQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SkillRouterPolicy } from "../jev/internal/skill-router.ts";
 import { collectFindings } from "../jev/internal/code-judge.ts";
 import { extractWorkflowIndex } from "../jev/internal/workflow-index.ts";
 
@@ -208,6 +208,61 @@ describe("resolveSkillChoice three-part gate", () => {
     );
     assert.equal(decision.reason, "unusable");
     assert.equal(decision.runnerUp, "");
+  });
+});
+
+describe("breadth skill routing", () => {
+  const candidates = [
+    { name: "autotask", description: "tickets", filePath: "/autotask/SKILL.md" },
+    { name: "m365", description: "mail", filePath: "/m365/SKILL.md" },
+    { name: "ninjaone", description: "devices", filePath: "/ninjaone/SKILL.md" },
+  ];
+  const answer = choice({ choice: "ninjaone", confidence: 0.9, probabilities: { ninjaone: 0.98, autotask: 0.81, m365: 0.78, none_needed: 0.01 } });
+  const decision = resolveSkillChoice(answer, candidates, POLICY);
+  const asked = buildSkillRelevanceQuestions(candidates, answer);
+  const relevance = { ninjaone: noul(0.98), autotask: noul(0.81), m365: noul(0.78) };
+
+  it("selects every above-bar skill, orders by relevance and formats a scope-safe advisory", () => {
+    const matches = resolveSkillSuggestions(decision, candidates, 0.82, 0.6, relevance, asked);
+    assert.deepEqual(matches.map(match => match.skill.name), ["ninjaone", "autotask", "m365"]);
+    assert.equal(formatSkillAdvisory(matches), "Jev skill matches (this request appears to span multiple systems): ninjaone (p=0.98), autotask (p=0.81), m365 (p=0.78). Consider all of them; the user's request defines scope, not this list.");
+  });
+
+  it("keeps a single winner below the breadth bar", () => {
+    const matches = resolveSkillSuggestions(decision, candidates, 0.59, 0.6, relevance, asked);
+    assert.deepEqual(matches.map(match => match.skill.name), ["ninjaone"]);
+    assert.equal(formatSkillAdvisory(matches), "Jev skill match: ninjaone (p=0.98). Candidate only — it does not narrow the request's scope. Load it with the read tool if this turn needs it.");
+  });
+
+  it("bounds fitting and overflowing lists and labels omissions", () => {
+    const long = Array.from({ length: 12 }, (_, i) => ({ skill: { name: `${i}-${"a".repeat(76)}`, description: "", filePath: "" }, probability: 0.8 }));
+    const fitting = formatSkillAdvisory(long.slice(0, 2));
+    const overflowing = formatSkillAdvisory(long);
+    assert.ok(fitting.length <= 400);
+    assert.ok(overflowing.length <= 400);
+    assert.doesNotMatch(fitting, /\+\d+ more/);
+    assert.match(overflowing, /\+\d+ more/);
+    assert.match(overflowing, /the user's request defines scope/);
+  });
+
+  it("provides the catalog in the independent breadth question", () => {
+    const question = buildSkillBreadthQuestion(candidates);
+    assert.match(question.instructions, /autotask, m365, ninjaone/);
+    assert.ok(question.instructions.length < 3000);
+  });
+
+  it("treats missing or malformed first-pass breadth as single-skill routing", () => {
+    for (const breadthAnswer of [undefined, choice({ choice: "ninjaone", confidence: 0.9 })]) {
+      const breadth = breadthAnswer?.type === "noul" ? breadthAnswer.noul : undefined;
+      const matches = resolveSkillSuggestions(decision, candidates, breadth ?? 0, 0.6, undefined, undefined);
+      assert.deepEqual(matches.map(match => match.skill.name), ["ninjaone"]);
+    }
+  });
+
+  it("falls back to the winner on a partial or unusable second answer", () => {
+    for (const partial of [{ ninjaone: noul(0.9) }, { ...relevance, m365: choice({ choice: "m365", confidence: 0.9 }) }]) {
+      assert.deepEqual(resolveSkillSuggestions(decision, candidates, 0.82, 0.6, partial, asked).map(match => match.skill.name), ["ninjaone"]);
+    }
   });
 });
 

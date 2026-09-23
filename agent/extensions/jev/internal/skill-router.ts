@@ -57,6 +57,52 @@ export function buildSkillQuestion(candidates: SkillCandidate[]): JevQuestion {
   };
 }
 
+export const BREADTH_ID = "spans_multiple_skills";
+
+export function buildSkillBreadthQuestion(candidates: SkillCandidate[]): JevQuestion {
+  const names = candidates.map(candidate => candidate.name.replace(/[\r\n\t\x00-\x1f\x7f]+/g, " ").slice(0, 60));
+  const catalog = names.join(", ");
+  return { type: "noul", instructions: `Answering this request well requires more than one of these skills because it spans multiple systems, channels, or workflows. Available skills: ${catalog}.` };
+}
+
+const MAX_BREADTH_SKILLS = 12;
+
+export function buildSkillRelevanceQuestions(candidates: SkillCandidate[], answer: JevAnswer | undefined): Record<string, JevQuestion> {
+  const probabilities = answer?.type === "choice" ? answer.probabilities : undefined;
+  const ranked = [...candidates].sort((a, b) => (probabilities?.[toOptionKey(b.name)] ?? 0) - (probabilities?.[toOptionKey(a.name)] ?? 0));
+  const questions: Record<string, JevQuestion> = Object.create(null);
+  for (const candidate of ranked.slice(0, MAX_BREADTH_SKILLS)) {
+    questions[toOptionKey(candidate.name)] = {
+      type: "noul",
+      instructions: `The ${candidate.name} skill is relevant to handling this request.`,
+      criteria: { true: candidate.description },
+    };
+  }
+  return questions;
+}
+
+export interface SuggestedSkill { skill: SkillCandidate; probability: number }
+
+export function resolveSkillSuggestions(
+  decision: SkillChoiceResult,
+  candidates: SkillCandidate[],
+  breadth: number,
+  breadthThreshold: number,
+  relevance: Record<string, JevAnswer> | undefined,
+  asked: Record<string, JevQuestion> | undefined,
+): SuggestedSkill[] {
+  const fallback = decision.skill ? [{ skill: decision.skill, probability: decision.probability }] : [];
+  if (breadth < breadthThreshold || !relevance || !asked) return fallback;
+  const keys = Object.keys(asked);
+  if (!keys.length || keys.some(key => relevance[key]?.type !== "noul" || !Number.isFinite((relevance[key] as { noul?: number }).noul))) return fallback;
+  const selected = candidates.filter(candidate => {
+    const key = toOptionKey(candidate.name);
+    return key in asked && relevance[key]?.type === "noul" && relevance[key].noul >= breadthThreshold;
+  }).map(skill => ({ skill, probability: (relevance[toOptionKey(skill.name)] as { noul: number }).noul }));
+  if (decision.skill && !selected.some(item => item.skill === decision.skill)) fallback.forEach(item => selected.push(item));
+  return selected.sort((a, b) => b.probability - a.probability || a.skill.name.localeCompare(b.skill.name));
+}
+
 export type SkillChoiceReason =
   | "selected"
   | "none_needed"
@@ -159,7 +205,22 @@ export function resolveSkillChoice(
   return { skill: matches[0]!, reason: "selected", winner, probability, runnerUp, margin, confidence };
 }
 
-export function formatSkillAdvisory(skill: SkillCandidate, probability: number): string {
-  const name = skill.name.replace(/\s+/g, " ").trim();
-  return `Jev skill match: ${name} (p=${probability.toFixed(2)}). Load it with the read tool if this turn needs it.`;
+export function formatSkillAdvisory(suggestions: SuggestedSkill[]): string {
+  const names = suggestions.map(({ skill, probability }) => `${skill.name.replace(/[\r\n\t\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)} (p=${probability.toFixed(2)})`);
+  if (suggestions.length === 1) {
+    return `Jev skill match: ${names[0]}. Candidate only — it does not narrow the request's scope. Load it with the read tool if this turn needs it.`;
+  }
+  const prefix = "Jev skill matches (this request appears to span multiple systems): ";
+  const suffix = ". Consider all of them; the user's request defines scope, not this list.";
+  let listed = "";
+  let count = 0;
+  for (const name of names) {
+    const next = listed ? `${listed}, ${name}` : name;
+    const remaining = names.length - count - 1;
+    const marker = remaining ? `, +${remaining} more` : "";
+    if (prefix.length + next.length + marker.length + suffix.length > 400) break;
+    listed = next;
+    count += 1;
+  }
+  return `${prefix}${listed}${count < names.length ? `, +${names.length - count} more` : ""}${suffix}`;
 }

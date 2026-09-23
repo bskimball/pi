@@ -160,10 +160,14 @@ the match — "anything I missed work-wise" names none of mail, calendar, or Tea
 while the host table maps those workflows to `m365`. The catalog stays the options;
 the index is state, not a second vote. If no context file declares the table, routing
 falls back to the bare prompt exactly as before. The routing advisory's guard Nouls
-on the same call still see only the bare prompt. If a real skill wins with probability
-at or above `threshold`, the extension adds
-one model-visible `Jev suggestion` custom message naming the match. The lead still
-decides whether to read and use that skill; nothing is loaded automatically.
+on the same call still see only the bare prompt. A fifth Noul, `spans_multiple_skills`,
+is asked alongside the Choice when skill routing runs. At or above skill-router
+`breadthThreshold` (default 0.6), one additional bounded call checks relevance for
+up to 12 skills ranked by the Choice distribution. Every skill above that bar is
+suggested, plus the Choice winner if it passed its own gate. An unusable second
+answer falls back to the single gated winner. The model-visible suggestion is
+advisory only: the user's request defines scope, not the candidate list. The lead
+still decides which skills to read; nothing is loaded automatically.
 
 Skills whose frontmatter sets `disable-model-invocation: true` are excluded and can
 never be suggested. The catalog is capped at 31 skills because the client allows 32
