@@ -102,7 +102,7 @@ Related discovery and implementation units retain useful sidekick context. Relea
 
 ## Work
 
-Work is operations-first: the lead does the bulk of the work directly (inline-first, like Apex) using a dedicated prompt instead of the coding-first base, dispatching a closed four-specialist team — `strategist` (Eddie, business/productivity planning), `researcher` (Oscar, external source-traced research), `author` (Flo, human-readable and kindly worded prose), `clerk` (Gomez, broad recon plus monotonous reversible execution) — via `task`, or `task_start` / `task_send` when multi-turn or steering is needed. No persistent sidekick, no other agents. Business workflows and integrations remain owned by their own project.
+Work is operations-first: HAL captures each commitment you state into Autotask (ticket or project task) or Microsoft To Do, acts on it, and closes it; the lead does the bulk of the work directly (inline-first, like Apex) using a dedicated prompt instead of the coding-first base, dispatching a closed four-specialist team — `strategist` (Eddie, business/productivity planning), `researcher` (Oscar, external source-traced research), `author` (Flo, human-readable and kindly worded prose), `clerk` (Gomez, broad recon plus monotonous reversible execution) — via `task`, or `task_start` / `task_send` when multi-turn or steering is needed. No persistent sidekick, no other agents. Business workflows and integrations remain owned by their own project.
 
 ## Trying a mode
 
