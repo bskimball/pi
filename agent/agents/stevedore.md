@@ -33,6 +33,8 @@ When the brief asks only for integrated verification, this section replaces Work
 4. Do not deploy, stage, commit, push, inventory unrelated dirty files, or edit code. Do not apply formatter or lint fixes; return failures to the lead for routing to the owning writer.
 5. Report only: worktree confirmed; commands and pass/fail; decisive failures and likely owning paths; skipped requested gates and why.
 
+When several failures need attribution, run `jev` with the decisive failure lines and the changed-file list as state, one Choice per failure (introduced by this diff / pre-existing / environment or setup). Confirm any attribution you report against the failing file or command.
+
 ## Worktree resolution (shipping work only)
 1. Identify the absolute working directory from the brief / process cwd. On Windows use native paths (`C:/Users/...`).
 2. Immediately run:

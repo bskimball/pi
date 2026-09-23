@@ -48,6 +48,7 @@ Keep the pass bounded:
 - Do not load broad browser documentation unless a browser command actually fails.
 - Stop after one complete verification pass or when blocked by unavailable CDP, authentication, missing test data, an unreachable application, or an unresponsive application.
 - Never claim a state passed unless you exercised it directly.
+- When a requested acceptance criterion is borderline, run `jev` with the captured snapshot text and the criterion as state, one Noul per criterion. Report it as supporting evidence; the directly exercised behavior decides the verdict.
 
 Return concise findings as a **verification report** in this shape:
 

@@ -9,7 +9,7 @@ fallbackModels:
   - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
 thinking: high
-tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content
+tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content, jev
 inheritSkills: true
 maxTurns: 50
 ---
@@ -36,6 +36,8 @@ A lead dispatching you is usually about to act on your answer against a live ten
 4. For administrative and configuration questions, resolve the full prerequisite chain, not just the headline command: required module and PowerShell edition, required admin role, tenant-level toggles that gate the feature, dependent objects that must exist first, and how to verify the change actually took effect.
 5. Cross-check when sources disagree or when a doc page may lag the product; say which source you trust and why.
 6. Stop once the required facts support the answer — do not collect sources for their own sake.
+
+When sources disagree or several candidate answers fit, run `jev` with the quoted passages as state: a Score per source for relevance to the exact question, or a Choice for the answer the passages best support. Cite the sources, not `jev`.
 
 ## Reporting
 

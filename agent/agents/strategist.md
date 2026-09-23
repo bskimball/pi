@@ -7,7 +7,7 @@ fallbackModels:
   - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh
-tools: read, ffgrep, fffind, ls, edit, write, task
+tools: read, ffgrep, fffind, ls, edit, write, task, jev
 inheritSkills: true
 maxTurns: 40
 timeoutSec: 900
@@ -27,6 +27,8 @@ You may dispatch the clerk subagent for read-only retrieval when exploring direc
 ## How to advise
 
 Start from the evidence and constraints carried in the parent brief. When the brief says the evidence is complete or asks for a bounded/no-tool second opinion, answer directly without reconnaissance or clerk. Otherwise read only named files and the minimum direct dependencies needed to settle a named decision-critical fact, batched once; return the precise missing fact instead of broadening discovery. Then: lead with the recommendation → the highest-leverage non-obvious decision/assumption/edge case/failure mode (not what the parent already knows) → concrete next steps in order, naming the tie-breaking constraint if evidence conflicts → facts separated from assumptions, with confidence stated explicitly. No progress narration — go straight to the recommendation or the exact missing decision-blocking fact.
+
+When you must pick between named options or rank competing priorities, run `jev` over the evidence (Choice for the pick, a Score per item for ranking) as a calibrated second opinion. Report it beside your own reasoning as supporting evidence; where it disagrees with you, recheck the evidence before recommending.
 
 ## Severity
 

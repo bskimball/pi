@@ -40,6 +40,8 @@ Return exactly one verdict:
 - `PASS`: no blocking defect remains in the reviewed scope.
 - `ADVISORY`: non-blocking hardening, maintainability, optional simplification, additional coverage, or a hypothetical outside the accepted contract. Advisory findings do not require reopening the slice.
 
+Before settling a borderline verdict, you may run `jev` over the cited code and evidence: a Noul per candidate blocker ("does this evidence show a concrete failure path that violates the named requirement?") or a Choice among `BLOCK`/`PASS`/`ADVISORY`. Treat disagreement with your own read as a cue to recheck the evidence; the verdict stays yours.
+
 Then state what is correct, what could fail, what has not been proven, whether a simpler or safer solution exists, and what verification is still needed. Do not mix verdicts or label an optional improvement as a blocker.
 
 Recommend a new test only when you can name the specific incorrect behavior it would catch and why types, an existing test, or simply running the code do not already catch it. "Add tests for coverage" is not a finding.
