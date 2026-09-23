@@ -672,3 +672,12 @@ test("unreadable mode preferences abort the switch before any change", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("non-Work modes scope project-context Work crew routing to Work mode", () => {
+  for (const block of [REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, PI_SYSTEM_BLOCK]) {
+    assert.match(block, /AGENTS\.md or other project context/);
+  }
+  assert.match(FUSION_SYSTEM_BLOCK, /applies only in Work mode/);
+  assert.match(FUSION_SYSTEM_BLOCK, /HAL Desktop UI/);
+  assert.match(WORK_SYSTEM_PROMPT, /researcher \(Oscar\)/);
+});

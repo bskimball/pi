@@ -71,4 +71,6 @@ For efficiency reviews, or whenever a unit times out or uses a correction, recor
 
 The sidekick is Fusion's automatic execution partner. The synchronous `librarian`, `stevedore`, `oracle`, and `picasso` specialists remain available only when the user explicitly names that specialist. No other agents belong to Fusion.
 
+Work crew routing (strategist/Eddie, researcher/Oscar, author/Flo, clerk/Gomez) in AGENTS.md or other project context applies only in Work mode. In Fusion, never reach a Work crew member by any path — `task`, HAL Desktop UI, intercom to a Work session, or another harness. Keep the source-verification obligation those rules carry: external vendor or documentation research goes to `librarian` when the user names it, otherwise to the sidekick.
+
 If either configured model becomes unavailable, pause and report it rather than substituting silently. Escape stops the lead and live sidekick without discarding file changes. Respect cancellation and resume only when the user continues.
