@@ -6,7 +6,7 @@ fallbackModels:
   - xai/grok-4.7
   - meta/muse-spark-1.3-contributor
   - openai-codex/gpt-5.6-terra
-  - local-proxy/claude-sonnet-5
+  - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content

@@ -32,7 +32,9 @@ import {
   type Observatory,
   type ObservatoryOrbResult,
   type SkinName,
+  type BuildFooter,
 } from "./index.ts";
+import { createFooterRuntime } from "./internal/presentation/footer.ts";
 import { runFeaturedExtensionCommand } from "./internal/runtime/featured-commands.ts";
 import { releaseStaleUiKitClaimant, uiKitShared } from "./once.ts";
 
@@ -43,6 +45,8 @@ export interface UiHostOptions {
     ctx: ExtensionContext,
     pi: ExtensionAPI,
   ) => { frames: string[]; intervalMs: number; message: string };
+  /** This UI's footer look; without one, Pi's stock footer stays. */
+  buildFooter?: BuildFooter;
 }
 
 const presentationEnabled = () => uiChromeEnabled();
@@ -87,6 +91,7 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
 
   let observatory: Observatory | undefined;
   let observatoryCtx: ExtensionContext | undefined;
+  const footer = createFooterRuntime(pi, () => activeHost()?.buildFooter);
 
   function contextFill(ctx: ExtensionContext): number | undefined {
     try {
@@ -310,6 +315,7 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
       ctx.ui.setWorkingIndicator(undefined);
       ctx.ui.setWorkingMessage(undefined);
       ctx.ui.setHiddenThinkingLabel(undefined);
+      footer.clear(ctx);
       clearObservatory();
       queueMicrotask(() => {
         shared.chromeClear = false;
@@ -375,5 +381,6 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
       reportRenderFailure("working-indicator", error);
     }
     ctx.ui.setEditorComponent((tui, theme, keybindings) => new SkinEditor(tui, theme, keybindings));
+    footer.install(ctx);
   }
 }

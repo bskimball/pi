@@ -29,9 +29,9 @@ Pi discovers extensions two ways: a bare `*.ts` file in `agent/extensions/`, or 
 
 ```text
 agent/extensions/
-├── apex/            → apex-ui.ts          Apex UI (shark Observatory, braille indicator)
-├── claude/          → claude-ui.ts        Claude UI (star motifs, Claude verbs)
-├── hal/             → hal-ui.ts           HAL UI (orb landing, square glyphs)
+├── apex/            → apex-ui.ts          Apex UI (shark Observatory, braille indicator, sonar footer)
+├── claude/          → claude-ui.ts        Claude UI (star motifs, Claude verbs, Claude Code footer)
+├── hal/             → hal-ui.ts           HAL UI (orb landing, square glyphs, HAL panel footer)
 ├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
 ├── lsp/             → index.ts            language-server navigation
 ├── bg-process.ts    + bg-process/         bg_start/status/list/kill
@@ -69,7 +69,7 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 - Async workers in every mode, including Fusion's sidekicks, use the shared above-editor Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Click or Enter opens a bounded read-only peek. Settled/failed sessions switch directly only from `/agents peek <id>` or `/agents open <id>` command context; pointer/shortcut peeks prepare that explicit command without replacing a draft. Live JSONL writers are never switched into. Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
 - `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) disables them too. Task children are spawned with chrome off so workers never paint chrome.
 - Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
-- There is no custom footer. Pi owns the footer.
+- Custom footer: each UI owns its look via a pure `buildFooter` renderer passed to `installUiHost` (at most 3 lines; event-cached data only, never a render-time session scan). The kit owns snapshot collection and install/teardown. `/ui pi` and `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) restore Pi's stock footer.
 
 ### Rendering Constraints
 

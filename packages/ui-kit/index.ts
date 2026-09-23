@@ -11,8 +11,18 @@ export {
   stripAnsi,
   TREE,
   cleanInline,
+  fitLine,
+  formatTokens,
   type ToolRenderContext,
 } from "./internal/presentation/ui-common.ts";
+export {
+  FOOTER_MAX_LINES,
+  type BuildFooter,
+  type FooterPaint,
+  type FooterSnapshot,
+  type FooterStatus,
+  type FooterUsage,
+} from "./internal/presentation/footer.ts";
 export {
   fallbackTruncateToWidth,
   fallbackVisibleWidth,

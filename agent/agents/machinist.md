@@ -1,7 +1,7 @@
 ---
 name: machinist
 description: Implementation specialist for independent separable non-visual slices across backend logic, data, CLI, build/config, refactors, migrations, bug fixes, and tests. Long or multi-file work alone is not a reason to delegate in regular mode. Not for UI or prose deliverables.
-model: openai-codex/gpt-5.6-sol
+model: openai-codex/gpt-6-sol
 fallbackModels:
   - meta/muse-1.3-contributor
   - xai/grok-4.6

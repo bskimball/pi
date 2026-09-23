@@ -149,7 +149,7 @@ semantics: `node_modules/pi-mcp-adapter/README.md` ("Server Options" and
 | `idleTimeout` | number (minutes) | `10` | `0` disables. |
 | `requestTimeoutMs` | number | SDK default | Global request timeout. |
 | `showStatusIcon` | boolean | `true` | Plug icon in MCP status text. This configuration sets it to `false`; it remains relevant to `/mcp` output even though persistent footer status is disabled. |
-| `mcpFooterStatus` | `"full" \| "compact" \| "off"` | `"full"` | Persistent MCP status verbosity. This configuration sets it to `"off"` so Pi's stable built-in footer remains two lines. `/mcp status` remains available. |
+| `mcpFooterStatus` | `"full" \| "compact" \| "off"` | `"full"` | Persistent MCP status verbosity. This configuration sets it to `"off"` so the stock footer stays two lines; custom UI footers render extension statuses as separate items. `/mcp status` remains available. |
 | `hostConfigDiscovery` | `"off" \| "prompt" \| "on"` | `"off"` | Whether to discover other hosts' MCP configs. |
 | `directTools` | boolean | `false` | Global default; per-server overrides. |
 | `disableProxyTool` | boolean | `false` | Hide the `mcp` proxy tool once direct tools cover everything. |
@@ -359,7 +359,7 @@ optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
-(`gpt-5.6-sol`), `defaultProvider` (`openai-codex`),
+(`gpt-6-sol`), `defaultProvider` (`openai-codex`),
 `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
 (`npm:@ff-labs/pi-fff` for FFF fuzzy finding, `npm:pi-intercom` for the
 `intercom` tool — the third-party MCP dependency used here is still composed
@@ -374,9 +374,9 @@ and `tuiMode`.
 provider without a scope allowlist. Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
 The active default and all GPT agent routes use `openai-codex` (for example
-`openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-luna`, and
+`openai-codex/gpt-6-sol`, `openai-codex/gpt-6-luna`, and
 `openai-codex/gpt-6-astra`). Non-GPT agent routes still use configured providers
-such as `local-proxy/claude-opus-5`, `local-proxy/gemini-3.8-flash-high`, xAI,
+such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `local-proxy/gemini-3.8-flash-high`, xAI,
 OpenCode, and Cloudflare Workers AI fallbacks.
 
 ---

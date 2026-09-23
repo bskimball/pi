@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installUiHost } from "@pi/ui-kit";
 import { registerClaudeLanding } from "./landing.ts";
+import { buildFooter } from "./footer.ts";
 import { buildWorkingIndicator } from "./working.ts";
 
 export {
@@ -19,5 +20,6 @@ export default function (pi: ExtensionAPI) {
     skin: "claude",
     thinkingLabel: "\u00b7 thinking",
     buildWorkingIndicator,
+    buildFooter,
   });
 }

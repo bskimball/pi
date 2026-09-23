@@ -1,7 +1,7 @@
 ---
 name: advisor
 description: Strategic planner used on explicit user request, and in orchestrate mode for course changes or conflicting specialist findings. Advisory only; does not implement.
-model: opencode/claude-fable-5-1
+model: claude-bridge/claude-opus-5-5
 fallbackModels:
   - openai-codex/gpt-6-astra
   - xai/grok-4.7

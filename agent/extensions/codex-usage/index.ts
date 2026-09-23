@@ -3,12 +3,13 @@ import { getUsage, isSupportedModel, type UsageStatus } from "./usage.ts";
 
 const STATUS_KEY = "codex-usage";
 
-function format(status: UsageStatus): string | undefined {
+function format(ctx: ExtensionContext, status: UsageStatus): string | undefined {
   const parts = [
     status.fiveHourRemaining === undefined ? undefined : `5h ${Math.round(status.fiveHourRemaining)}% left`,
     status.weeklyRemaining === undefined ? undefined : `weekly ${Math.round(status.weeklyRemaining)}% left`,
   ].filter((part): part is string => Boolean(part));
-  return parts.length ? `Codex usage: ${parts.join(" · ")}` : undefined;
+  // Dim to match Pi's footer; the undimmed mode label that follows stays distinct.
+  return parts.length ? ctx.ui.theme.fg("dim", `Codex: ${parts.join(" · ")}`) : undefined;
 }
 
 export default function codexUsage(pi: ExtensionAPI): void {
@@ -26,7 +27,7 @@ export default function codexUsage(pi: ExtensionAPI): void {
       return;
     }
     const status = await getUsage(ctx);
-    if (!stopped && current === generation) ctx.ui.setStatus(STATUS_KEY, status ? format(status) : undefined);
+    if (!stopped && current === generation) ctx.ui.setStatus(STATUS_KEY, status ? format(ctx, status) : undefined);
   };
 
   pi.on("session_start", async (_event, ctx) => {
