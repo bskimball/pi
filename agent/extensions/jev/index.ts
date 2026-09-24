@@ -507,7 +507,6 @@ export default function (pi: ExtensionAPI): void {
       findings: receiptFindings,
     };
     return {
-      systemPrompt: event.systemPrompt,
       message: {
         customType: JEV_SUGGESTION_TYPE,
         content: [{ type: "text" as const, text: lines.join("\n") }],

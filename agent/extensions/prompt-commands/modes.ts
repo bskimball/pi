@@ -1,13 +1,10 @@
-import { dirname, join } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { join } from "node:path";
+import { getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import { MODES, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 
-// Resolve the installed builder rather than maintaining a divergent copy of Pi's prompt.
-const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
 
@@ -29,9 +26,8 @@ function workToolGuidance(options: BuildSystemPromptOptions, selectedTools: read
   ].filter(Boolean).join("\n\n");
 }
 
-function joinPromptAppends(...sections: Array<string | undefined>): string | undefined {
-  const present = sections.filter((section): section is string => Boolean(section?.trim()));
-  return present.length ? present.join("\n\n") : undefined;
+function joinPromptAppends(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = ""): void {
@@ -287,41 +283,32 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
     return undefined;
   });
-  pi.on("before_agent_start", async (event, ctx) => {
-    if (state.mode === "apex") return { systemPrompt: event.systemPrompt + regular };
-    if (state.mode === "apex-orchestrate") return { systemPrompt: event.systemPrompt + orchestrate };
-    if (state.mode === "fusion") return { systemPrompt: fusionPreface + event.systemPrompt + fusion };
-    const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: BuildSystemPromptOptions) => string };
-    const selectedTools = pi.getActiveTools();
-    // Pi keeps the stock builder and installed-tool guidance, plus a
-    // user-directed specialist overlay. It does not inherit Apex routing.
-    if (state.mode !== "work") {
-      return {
-        systemPrompt: buildSystemPrompt({
-          ...event.systemPromptOptions,
-          customPrompt: undefined,
-          appendSystemPrompt: joinPromptAppends(event.systemPromptOptions.appendSystemPrompt, piBlock),
-          cwd: ctx.cwd,
-          selectedTools,
-        }),
-      };
+  pi.on("before_agent_start", (event) => {
+    const options = event.systemPromptOptions;
+    if (state.mode === "apex") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, regular);
+    else if (state.mode === "apex-orchestrate") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, orchestrate);
+    else if (state.mode === "fusion") {
+      if (options.customPrompt) options.customPrompt = fusionPreface + options.customPrompt;
+      options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, options.customPrompt ? fusion : fusionPreface + fusion);
+    } else if (state.mode === "work") {
+      options.customPrompt = work;
+      options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, workToolGuidance(options, pi.getActiveTools()));
+    } else {
+      options.customPrompt = undefined;
+      options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, piBlock);
     }
-    // Runner handlers execute sequentially, so earlier extensions may have
-    // appended dynamic context to the stock baseline. Preserve that suffix
-    // when replacing only the baseline with Work's standalone prompt.
-    const baseline = buildSystemPrompt(event.systemPromptOptions);
-    const options: BuildSystemPromptOptions = {
-      ...event.systemPromptOptions,
-      cwd: ctx.cwd,
-      selectedTools,
-      customPrompt: work,
-      appendSystemPrompt: joinPromptAppends(event.systemPromptOptions.appendSystemPrompt, workToolGuidance(event.systemPromptOptions, selectedTools)),
-    };
-    if (!event.systemPrompt.startsWith(baseline)) {
-      ctx.ui.notify("Work prompt could not preserve an earlier extension's full prompt rewrite; only builder context is included.", "warning");
-      return { systemPrompt: buildSystemPrompt(options) };
+  });
+  const warned = new Set<string>();
+  pi.on("context_with_system", (event, ctx) => {
+    const system = getCurrentSystemMessage(event.messages);
+    if (!system) return;
+    const marker = ({ apex: regular, "apex-orchestrate": orchestrate, fusion, pi: piBlock, work })[state.mode].trim().split("\n")[0];
+    const problem = marker && !Object.values(system.sections ?? {}).join("\n").includes(marker)
+      ? `missing ${labels[state.mode]} mode block` : undefined;
+    if (problem && !warned.has(problem)) {
+      warned.add(problem);
+      ctx.ui.notify(`Prompt delivery: ${problem}; check option-projecting providers such as claude-bridge.`, "warning");
     }
-    return { systemPrompt: buildSystemPrompt(options) + event.systemPrompt.slice(baseline.length) };
   });
   registerPresentationSwitch(pi);
 }

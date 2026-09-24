@@ -160,9 +160,7 @@ export default function (pi: ExtensionAPI): void {
       ? `\n\n${memoryWriteReminder}`
       : "";
     compactReminderPending = false;
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${overview}${warning}${reminder}`,
-    };
+    event.systemPromptOptions.appendSystemPrompt = [event.systemPromptOptions.appendSystemPrompt, `${overview}${warning}${reminder}`].filter(part => part?.trim()).join("\n\n");
   });
 
   pi.registerTool({

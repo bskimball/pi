@@ -71,6 +71,14 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 - Headless by design (execute, not chrome): `bg-process`, `powershell`, `mcp-adapter`, `web-search`, `continual-memory`, `read-guard`, `lsp`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
 - Custom footer: each UI owns its look via a pure `buildFooter` renderer passed to `installUiHost` (at most 3 lines; event-cached data only, never a render-time session scan). The kit owns snapshot collection and install/teardown. `/ui pi` and `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) restore Pi's stock footer.
 
+### Prompt Delivery
+
+Providers do not all consume the same prompt: Pi-native providers send Pi's rendered prompt, while `pi-claude-bridge` rebuilds Claude's prompt from `systemPromptOptions` (`customPrompt`, `appendSystemPrompt`, context files, skills) and drops anything else. Text added any other way silently disappears on that provider (mode cards, memory, and user context were lost this way after switching Opus from `local-proxy` to `claude-bridge`).
+
+- In `before_agent_start`, inject prompt text only by mutating `event.systemPromptOptions` in place (`appendSystemPrompt`, or `customPrompt` to replace the base). Never return `systemPrompt`; Pi turns it into `forceSystemPrompt`, which freezes the prompt for every later handler and is ignored by the bridge.
+- `agent/extensions/test/prompt-delivery.test.ts` runs every extension's handlers through Pi's render and the installed bridge projection. When adding or switching a provider that assembles its own prompt, extend that test with the provider's projection before relying on it.
+- At runtime, `prompt-commands/modes.ts` warns once when Pi's current system sections lack the active mode card. It cannot see forced prompts (Pi applies them after `context_with_system`); the test is the guard for those.
+
 ### Rendering Constraints
 
 These come from real Windows Terminal failures and still apply to any custom rendering:

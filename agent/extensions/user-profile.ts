@@ -21,20 +21,19 @@ export function loadUserProfile(agentDir: string): string | undefined {
 }
 
 export function applyUserProfileToSystemPrompt(
-  systemPrompt: string,
+  appendSystemPrompt: string | undefined,
   profile: string | undefined,
   isSubagent = process.env.PI_SUBAGENT === "1",
 ): string | undefined {
   if (isSubagent || !profile) return undefined;
-  return `${systemPrompt}\n\n# Private user context\n\n${profile}`;
+  return [appendSystemPrompt, `# Private user context\n\n${profile}`].filter(part => part?.trim()).join("\n\n");
 }
 
 export default function (pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event) => {
     if (process.env.PI_BEHAVIOR_MODE === "pi") return undefined;
     const profile = loadUserProfile(getAgentDir());
-    const systemPrompt = applyUserProfileToSystemPrompt(event.systemPrompt, profile);
-    if (!systemPrompt) return undefined;
-    return { systemPrompt };
+    const append = applyUserProfileToSystemPrompt(event.systemPromptOptions.appendSystemPrompt, profile);
+    if (append) event.systemPromptOptions.appendSystemPrompt = append;
   });
 }

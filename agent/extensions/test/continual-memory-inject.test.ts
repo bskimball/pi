@@ -107,16 +107,20 @@ test("continual memory injection gates subagents and emits compact reminder once
   mkdirSync(cwd);
   await withPiSubagent("1", async () => {
     const { handlers } = loadExtension();
-    assert.equal(await handlers.before_agent_start({ systemPrompt: "base" }, context(cwd)), undefined);
+    const options = { appendSystemPrompt: "base" };
+    assert.equal(await handlers.before_agent_start({ systemPromptOptions: options }, context(cwd)), undefined);
+    assert.equal(options.appendSystemPrompt, "base");
   });
   await withPiSubagent(undefined, async () => {
     const { handlers } = loadExtension();
     handlers.session_compact({});
-    const first = await handlers.before_agent_start({ systemPrompt: "base" }, context(cwd));
-    assert.match(first.systemPrompt, /^base\n\n/);
-    assert.match(first.systemPrompt, /offer memory_write — do not auto-write/);
-    const second = await handlers.before_agent_start({ systemPrompt: "base" }, context(cwd));
-    assert.doesNotMatch(second.systemPrompt, /offer memory_write — do not auto-write/);
+    const first = { appendSystemPrompt: "base" };
+    await handlers.before_agent_start({ systemPromptOptions: first }, context(cwd));
+    assert.match(first.appendSystemPrompt, /^base\n\n/);
+    assert.match(first.appendSystemPrompt, /offer memory_write — do not auto-write/);
+    const second = { appendSystemPrompt: "base" };
+    await handlers.before_agent_start({ systemPromptOptions: second }, context(cwd));
+    assert.doesNotMatch(second.appendSystemPrompt, /offer memory_write — do not auto-write/);
   });
 });
 
@@ -196,10 +200,12 @@ test("cwd switching never retains the prior project store", async () => {
   await execute(tools.memory_write, {
     action: "create", scope: "project", kind: "memory", title: "Only A", content: "alpha",
   }, context(a));
-  const promptB = await handlers.before_agent_start({ systemPrompt: "base" }, context(b));
-  assert.doesNotMatch(promptB.systemPrompt, /Only A|alpha/);
-  const promptA = await handlers.before_agent_start({ systemPrompt: "base" }, context(a));
-  assert.match(promptA.systemPrompt, /Only A: alpha/);
+  const promptB = { appendSystemPrompt: "base" };
+  await handlers.before_agent_start({ systemPromptOptions: promptB }, context(b));
+  assert.doesNotMatch(promptB.appendSystemPrompt, /Only A|alpha/);
+  const promptA = { appendSystemPrompt: "base" };
+  await handlers.before_agent_start({ systemPromptOptions: promptA }, context(a));
+  assert.match(promptA.appendSystemPrompt, /Only A: alpha/);
 });
 
 test("malformed project blocks project writes without blocking local or global", async () => {
@@ -264,9 +270,10 @@ test("session tree reconstructs local memory without disturbing project memory",
     data: store([entry("local", "local_note", "2025-01-01T00:00:00.000Z", "branch-local")]),
   });
   await handlers.session_tree({}, ctx);
-  const prompt = await handlers.before_agent_start({ systemPrompt: "base" }, ctx);
-  assert.match(prompt.systemPrompt, /Project: kept/);
-  assert.match(prompt.systemPrompt, /local_note: branch-local/);
+  const prompt = { appendSystemPrompt: "base" };
+  await handlers.before_agent_start({ systemPromptOptions: prompt }, ctx);
+  assert.match(prompt.appendSystemPrompt, /Project: kept/);
+  assert.match(prompt.appendSystemPrompt, /local_note: branch-local/);
 });
 
 test("overview is project-first, recency-ordered, bounded, and truncates bodies", () => {
