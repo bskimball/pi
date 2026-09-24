@@ -221,15 +221,37 @@ function fusionDiscoveryNudge(count: number): string {
 /** Lead inline implementation edits per user turn that trigger one orchestrate dispatch nudge. */
 export const ORCHESTRATE_INLINE_NUDGE_EVERY = 2;
 
-/** Tool names that count as lead inline implementation for the orchestrate dispatch nudge. */
-const ORCHESTRATE_IMPLEMENTATION_TOOLS: ReadonlySet<string> = new Set([
-  "edit",
-  "write",
-]);
+type OrchestrateCategory = "implementation" | "live-page" | "gates" | "discovery";
+const ORCHESTRATE_THRESHOLDS: Record<OrchestrateCategory, number> = {
+  implementation: ORCHESTRATE_INLINE_NUDGE_EVERY,
+  "live-page": 1,
+  gates: 2,
+  discovery: FUSION_DISCOVERY_NUDGE_EVERY,
+};
 
-/** Single-line plain-text nudge appended to every Nth undispatched inline edit. */
-function orchestrateInlineNudge(count: number): string {
-  return `[orchestrate] ${count} inline implementation edits this turn with no writer in flight. Anything beyond a single-file known-path edit is a specialist slice: dispatch it with task_start (visual/UI to artisan, non-visual to machinist) instead of implementing it yourself.`;
+function orchestrateCategory(tool: string, input: unknown): OrchestrateCategory | undefined {
+  if (tool === "edit" || tool === "write") return "implementation";
+  if (tool === "browser_attach") return "live-page";
+  if (new Set(["read", "ffgrep", "fffind", "grep", "find", "ls", "lsp"]).has(tool)) return "discovery";
+  if (tool !== "bash" && tool !== "powershell") return undefined;
+  const command = (input as { command?: unknown } | undefined)?.command;
+  if (typeof command !== "string") return undefined;
+  if (tool === "bash" && /(?:^|;|&&|\|\||\|)\s*(?:[A-Za-z_]\w*=\S+\s+)*(?:npx\s+)?agent-browser(?=\s|$|[;&|])/.test(command)) return "live-page";
+  if (/\b(?:cat\s*>>?\s*[^\s;&|]+|tee\s+(?!-)[^\s;&|]+|sed\s+-i\b|Set-Content\b|Out-File\b|Add-Content\b)/i.test(command)
+    || /(?<![\d>&])>(?![&>])\s*(?!\/dev\/null\b)[\w./~$-]+/.test(command)) return "implementation";
+  if (/\b(?:npm\s+(?:run\s+(?:lint|typecheck|test|build|check)\b|test\b)|(?:pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|typecheck|test|build|check)\b|vp\s+(?:check|test|build|lint)\b|tsc\b|oxlint\b|eslint\b|vitest\b|jest\b|node\s+(?:--experimental-transform-types\s+)?--test\b)/i.test(command)) return "gates";
+  if (tool === "bash" && /^\s*(?:cat\s+[^>]|sed\s+-n\b|head\b|tail\b|grep\b|rg\b|ls\b|find\b|git\s+(?:log|show|diff)\b)/.test(command)) return "discovery";
+  return undefined;
+}
+
+function orchestrateInlineNudge(category: OrchestrateCategory, count: number): string {
+  const dispatch: Record<OrchestrateCategory, string> = {
+    implementation: "task_start agent machinist (or artisan for visual/UI implementation)",
+    "live-page": "task_start agent inspector for live-page checks",
+    gates: "task_start agent stevedore for one verification-only pass after writers settle",
+    discovery: "task_start agent scout with a slice-pack brief",
+  };
+  return `[orchestrate] ${count} inline ${category} calls this turn; dispatch ${dispatch[category]}.`;
 }
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
@@ -1410,7 +1432,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Lead inline implementation edits since the last user-turn start or
   // task_start/task_send. Counted in tool_result (orchestrate lead only);
   // drives the dispatch nudge below.
-  let orchestrateInlineEdits = 0;
+  const orchestrateCounts: Record<OrchestrateCategory, number> = { implementation: 0, "live-page": 0, gates: 0, discovery: 0 };
+  const resetOrchestrateCounts = () => { for (const category of Object.keys(orchestrateCounts) as OrchestrateCategory[]) orchestrateCounts[category] = 0; };
   // Set by the lead-session session_compact event; delivered once as a
   // [fusion] re-evaluation nudge on the lead's next tool result, then
   // cleared. Compaction is the free model-switch point, and every
@@ -3871,7 +3894,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       ? fusionLifecycle.gateSidekick(event.toolName)
       : undefined;
     if (sidekickReason) return { block: true, reason: sidekickReason };
-    if (event.toolName === "task_start" || event.toolName === "task_send") { fusionDiscoveryCalls = 0; orchestrateInlineEdits = 0; }
+    if (event.toolName === "task_start" || event.toolName === "task_send") { fusionDiscoveryCalls = 0; resetOrchestrateCounts(); }
     if (behaviorMode !== "fusion") return;
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
@@ -3894,10 +3917,13 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     }
     // Orchestrate sibling of the Fusion backstop above: the lead stays off
     // the tools while a writer is live, so local glue never nudges.
-    if (behaviorMode === "apex-orchestrate" && !sidekick) {
-      if (ORCHESTRATE_IMPLEMENTATION_TOOLS.has((event.toolName ?? "").toLowerCase()) && liveCount() === 0) {
-        orchestrateInlineEdits += 1;
-        if (orchestrateInlineEdits % ORCHESTRATE_INLINE_NUDGE_EVERY === 0) nudges.push(orchestrateInlineNudge(orchestrateInlineEdits));
+    if (behaviorMode === "apex-orchestrate" && !sidekick && process.env.PI_SUBAGENT !== "1") {
+      const category = orchestrateCategory((event.toolName ?? "").toLowerCase(), event.input);
+      const agent = category === "discovery" ? "scout" : category === "live-page" ? "inspector" : category === "gates" ? "stevedore" : undefined;
+      const specialistLive = workers.entries().some(({ item }) => !item.closed && item.lifecycle !== "settled" && item.lifecycle !== "failed" && item.lifecycle !== "closed" && (agent ? item.agent === agent : item.agent === "machinist" || item.agent === "artisan"));
+      if (category && !specialistLive) {
+        const count = ++orchestrateCounts[category];
+        if (count % ORCHESTRATE_THRESHOLDS[category] === 0) nudges.push(orchestrateInlineNudge(category, count));
       }
     }
     if (!nudges.length) return;
@@ -3927,7 +3953,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   pi.on("agent_start", () => {
     agentBusy = true;
     fusionDiscoveryCalls = 0;
-    orchestrateInlineEdits = 0;
+    resetOrchestrateCounts();
   });
   pi.on("agent_settled", () => {
     agentBusy = false;

@@ -780,10 +780,12 @@ test("Apex Orchestrate strips regular-mode carve-outs and routes visual work to 
   }
 });
 
-test("Orchestrate inline backstop nudges every 2 undispatched implementation edits", () => {
+test("Orchestrate inline backstop classifies specialist work per turn", () => {
   const prior = process.env.PI_BEHAVIOR_MODE;
   const priorSidekick = process.env.PI_FUSION_SIDEKICK;
+  const priorSubagent = process.env.PI_SUBAGENT;
   process.env.PI_BEHAVIOR_MODE = "apex-orchestrate";
+  delete process.env.PI_SUBAGENT;
   delete process.env.PI_FUSION_SIDEKICK;
   const handlers = new Map<string, Function[]>();
   const bus = new Map<string, Function[]>();
@@ -796,8 +798,8 @@ test("Orchestrate inline backstop nudges every 2 undispatched implementation edi
   };
   try {
     asyncTask(pi);
-    const fireToolResult = (toolName: string, content: any[] = [{ type: "text", text: "ok" }]) => {
-      const event = { toolName, content, isError: false };
+    const fireToolResult = (toolName: string, content: any[] = [{ type: "text", text: "ok" }], input: any = {}) => {
+      const event = { toolName, content, input, isError: false };
       for (const fn of handlers.get("tool_result") ?? []) {
         const out = fn(event) as any;
         if (out) return out;
@@ -819,31 +821,42 @@ test("Orchestrate inline backstop nudges every 2 undispatched implementation edi
     assert.equal(second.content.length, 2, "nudge appended, original blocks kept");
     assert.equal(second.content[1].type, "text", "nudge is a text block");
     const text = nudgeText(second);
-    assert.match(text!, /^\[orchestrate\] 2 inline implementation edits this turn/);
+    assert.match(text!, /^\[orchestrate\] 2 inline implementation calls this turn/);
     assert.match(text!, /task_start/);
     assert.equal(text!.includes("\n"), false, "nudge is a single line");
     assert.equal(fireToolResult("edit"), undefined, "3rd inline edit: no nudge");
-    assert.match(nudgeText(fireToolResult("write"))!, /^\[orchestrate\] 4 inline implementation edits this turn/, "second nudge at 4");
+    assert.match(nudgeText(fireToolResult("write"))!, /^\[orchestrate\] 4 inline implementation calls this turn/, "second nudge at 4");
 
     fireAgentStart();
-    for (let i = 0; i < 6; i++) {
-      assert.equal(fireToolResult("read"), undefined, "read never counts");
-      assert.equal(fireToolResult("bash"), undefined, "bash never counts");
-    }
-    assert.equal(fireToolResult("edit"), undefined, "counter untouched by read/bash");
-    assert.match(nudgeText(fireToolResult("edit"))!, /^\[orchestrate\] 2 inline implementation edits this turn/, "nudge fires on the 2nd edit after read/bash");
+    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined);
+    assert.match(nudgeText(fireToolResult("bash", undefined, { command: "cat agent/skills/agent-browser/SKILL.md" }))!, /6 inline discovery calls.*scout/, "browser skill read is discovery, not live-page");
+    for (const command of ["git status", "echo ok 2>&1", "echo ok > /dev/null"]) assert.equal(fireToolResult("bash", undefined, { command }), undefined);
+    assert.equal(fireToolResult("bg_start"), undefined);
+    assert.equal(fireToolResult("edit"), undefined, "counter untouched by discovery");
+    assert.match(nudgeText(fireToolResult("edit"))!, /^\[orchestrate\] 2 inline implementation calls this turn/, "nudge fires on the 2nd edit after discovery");
+
+    fireAgentStart();
+    assert.match(nudgeText(fireToolResult("browser_attach"))!, /1 inline live-page calls.*inspector/);
+    assert.match(nudgeText(fireToolResult("bash", undefined, { command: "agent-browser --cdp 29300 snapshot" }))!, /2 inline live-page calls.*inspector/);
+    assert.match(nudgeText(fireToolResult("bash", undefined, { command: "cd repo && TOKEN=x npx agent-browser --cdp 29300 snapshot" }))!, /3 inline live-page calls.*inspector/);
+    fireAgentStart();
+    assert.equal(fireToolResult("bash", undefined, { command: "npm run lint" }), undefined);
+    assert.match(nudgeText(fireToolResult("bash", undefined, { command: "vp test" }))!, /2 inline gates calls.*stevedore/);
+    fireAgentStart();
+    assert.equal(fireToolResult("bash", undefined, { command: "cat > file <<EOF" }), undefined);
+    assert.match(nudgeText(fireToolResult("powershell", undefined, { command: "Set-Content file value" }))!, /2 inline implementation calls.*machinist/);
 
     fireToolCall("task_start");
-    assert.equal(fireToolResult("edit"), undefined, "no nudge within 1 edit of dispatch");
-    assert.match(nudgeText(fireToolResult("write"))!, /2 inline implementation edits/, "nudge resumes 2 edits after task_start");
+    assert.equal(fireToolResult("edit"), undefined, "dispatch resets implementation count");
+    assert.match(nudgeText(fireToolResult("write"))!, /2 inline implementation calls/, "nudge resumes 2 edits after task_start");
 
     fireToolCall("task_send");
     assert.equal(fireToolResult("edit"), undefined, "task_send resets too");
-    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "nudge resumes 2 edits after task_send");
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation calls/, "nudge resumes 2 edits after task_send");
 
     fireAgentStart();
     assert.equal(fireToolResult("edit"), undefined, "new user turn resets");
-    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "nudge resumes 2 edits into the new turn");
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation calls/, "nudge resumes 2 edits into the new turn");
 
     for (const mode of ["apex", "pi", "work", "fusion"]) {
       emitBus("pi:modes:changed", { mode });
@@ -855,12 +868,19 @@ test("Orchestrate inline backstop nudges every 2 undispatched implementation edi
     fireAgentStart();
     for (let i = 0; i < 4; i++) assert.equal(fireToolResult("edit"), undefined, "no nudge for the sidekick itself");
     delete process.env.PI_FUSION_SIDEKICK;
+    process.env.PI_SUBAGENT = "1";
+    fireAgentStart();
+    for (const [tool, input] of [["edit", {}], ["write", {}], ["browser_attach", {}], ["bash", { command: "agent-browser snapshot" }], ["bash", { command: "npm run lint" }], ["bash", { command: "vp test" }], ...Array.from({ length: 6 }, () => ["read", {}])] as [string, any][]) {
+      assert.equal(fireToolResult(tool, undefined, input), undefined, `subagent cannot dispatch ${tool}`);
+    }
+    delete process.env.PI_SUBAGENT;
     fireAgentStart();
     assert.equal(fireToolResult("edit"), undefined);
-    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation edits/, "lead nudges again after sidekick check");
+    assert.match(nudgeText(fireToolResult("edit"))!, /2 inline implementation calls/, "lead nudges again after subagent check");
   } finally {
     for (const fn of handlers.get("session_shutdown") ?? []) fn({}, {});
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
+    if (priorSubagent === undefined) delete process.env.PI_SUBAGENT; else process.env.PI_SUBAGENT = priorSubagent;
   }
 });

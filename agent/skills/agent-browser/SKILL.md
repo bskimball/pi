@@ -1,11 +1,13 @@
 ---
 name: agent-browser
-description: Live-page interaction instructions for the dedicated authenticated debug Chrome. For natural-language requests involving clicks, forms, login state, screenshots, or browser inspection, call browser_attach first and then follow the returned custom prompt. Public-page lookup uses web_search and fetch_content instead.
+description: Live-page interaction instructions for the dedicated authenticated debug Chrome. For natural-language requests involving clicks, forms, login state, screenshots, or browser inspection, call browser_attach first and then follow the returned custom prompt. Public-page lookup uses web_search and fetch_content instead. In Apex Orchestrate, the lead dispatches inspector instead.
 ---
 
 # Dedicated Browser Automation
 
 This Pi installation has one supported browser target: the dedicated authenticated debug Chrome on classic CDP port **29300**, using profile `~/.pi/browser/chrome-profile`.
+
+In Apex Orchestrate mode, live-page verification belongs to the inspector specialist; the lead dispatches inspector rather than attaching or running `agent-browser` itself.
 
 For a natural-language browser request, call `browser_attach` before any `agent-browser` command. The tool runs the same deterministic attach and custom browser-prompt pathway as `/browser`. If the current prompt or tool result already contains a successful `[Connect step]`, the browser is attached; continue with interaction instead of attaching again.
 

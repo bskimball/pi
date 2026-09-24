@@ -93,7 +93,7 @@ Skills are listed at launch. Use a skill when the task matches its description. 
 
 ## Investigate before acting
 
-Never speculate about code you have not read. If the user references a file, read it before answering or editing. Ground every answer in actual code and tool output. Read enough code to avoid guessing, then stop — every read or search should resolve a concrete uncertainty. Parallelize independent reads.
+Never speculate about code you have not read. If the user references a file, read it before answering or editing. Ground every answer in actual code and tool output. Read enough code to avoid guessing, then stop — every read or search should resolve a concrete uncertainty. Parallelize independent reads. When the active mode card routes discovery to a specialist (Apex Orchestrate: scout; Fusion: sidekick), investigating means dispatching that specialist; direct symbol/path lookups remain yours.
 
 Every token a tool returns is re-sent on every later turn of the session, so unbounded output is a recurring cost, not a one-time one. Keep tool results narrow:
 

@@ -539,9 +539,9 @@ export function registerBrowserAttachTool(pi: ExtensionAPI): void {
     name: "browser_attach",
     label: "Browser Attach",
     description:
-      "Attach to the dedicated authenticated debug Chrome and return the custom browser handoff prompt. Use this FIRST for natural-language requests that require live-page interaction, clicks, form filling, login state, screenshots, or browser inspection. Do not invoke agent-browser directly before this tool. A prompt that already contains a successful [Connect step] is already attached.",
+      "Attach to the dedicated authenticated debug Chrome and return the custom browser handoff prompt. Use this FIRST for natural-language requests that require live-page interaction, clicks, form filling, login state, screenshots, or browser inspection. Do not invoke agent-browser directly before this tool. A prompt that already contains a successful [Connect step] is already attached. In Apex Orchestrate mode, live-page verification routes to the inspector specialist instead of the lead attaching.",
     promptSnippet:
-      "For live-page browser work, call browser_attach first; then follow its returned custom browser prompt.",
+      "For live-page browser work, call browser_attach first; then follow its returned custom browser prompt. In Apex Orchestrate, dispatch inspector instead.",
     parameters: Type.Object({
       task: Type.Optional(Type.String({
         description: "The browser task or HTTP(S) URL from the user.",

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_PREFACE, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
+import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
 import { restoreMode, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 
@@ -101,18 +101,19 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     promptCommands(pi);
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
     await emit("session_start", { reason: "new" });
-    const prompt = (systemPrompt = "Apex base") => emit("before_agent_start", {
-      systemPrompt,
-      systemPromptOptions: {
+    const prompt = async (systemPrompt = "Apex base") => {
+      const options = {
         cwd: dir,
         toolSnippets: { read: "Read files" },
         promptGuidelines: ["Use the workspace capability contract"],
         contextFiles: [{ path: "AGENTS.md", content: "Project boundary applies." }],
-      },
-    });
-    assert.equal((await prompt()).systemPrompt, "Apex base" + REGULAR_SYSTEM_BLOCK);
+      };
+      await emit("before_agent_start", { systemPrompt, systemPromptOptions: options });
+      return { systemPrompt: buildSystemPrompt(options) };
+    };
+    assert.match((await prompt()).systemPrompt, /Regular mode \(active\)/);
     await commands.orchestrate("on", ctx);
-    assert.equal((await prompt()).systemPrompt, "Apex base" + ORCHESTRATE_SYSTEM_BLOCK);
+    assert.match((await prompt()).systemPrompt, /Strict orchestrator mode \(active\)/);
     busy = true;
     await commands.mode("pi", ctx);
     assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate");
@@ -130,6 +131,12 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start"]);
     allTools.push("fffind", "ffgrep", "intercom");
     await commands.mode("apex", ctx);
+    const warningCount = notices.length;
+    await emit("context_with_system", { messages: [
+      { role: "system", content: "", sections: { addendum: PI_SYSTEM_BLOCK }, timestamp: 1 },
+      { role: "system", content: "", sections: { addendum: REGULAR_SYSTEM_BLOCK }, timestamp: 2 },
+    ] });
+    assert.equal(notices.length, warningCount, "Pi→Apex section patch does not warn based on historical Pi head");
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
     const prefsPath = join(dir, "mode-settings.json");
     const newerGlobalPair = {
@@ -157,8 +164,8 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.deepEqual(persisted.fusion, newerGlobalPair, "implicit session restore preserves newer global Fusion defaults");
     assert.deepEqual(persisted.models.fusion, newerGlobalPair.lead);
     const fused = (await prompt()).systemPrompt;
-    assert.equal(fused, FUSION_PREFACE + "Apex base" + FUSION_SYSTEM_BLOCK);
-    assert.doesNotMatch(fused, /^You are an expert coding assistant operating inside pi/);
+    assert.match(fused, /Fusion mode \(active\)/);
+    assert.match(fused, /^You are an expert coding assistant operating inside pi/, "Fusion preserves stock base without a custom prompt");
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("fusion", ctx);
     persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
@@ -201,14 +208,11 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
       appendSystemPrompt: "Caller-provided instruction.",
       contextFiles: [{ path: "AGENTS.md", content: "Project boundary applies." }],
     };
-    const stockBaseline = buildSystemPrompt(workOptions);
-    const memorySuffix = "\n\n## Continual memory\nMemory-like dynamic context.";
-    const retainedDynamic = await emit("before_agent_start", { systemPrompt: stockBaseline + memorySuffix, systemPromptOptions: workOptions });
-    assert.match(retainedDynamic.systemPrompt, /Memory-like dynamic context\./, "Work retains a prior extension's dynamic suffix");
-    assert.equal(retainedDynamic.systemPrompt.split("Memory-like dynamic context.").length - 1, 1, "dynamic suffix is retained once");
-    assert.match(retainedDynamic.systemPrompt, /Caller-provided instruction\./, "Work preserves caller append instructions");
-    assert.doesNotMatch(retainedDynamic.systemPrompt, /^You are an expert coding assistant operating inside pi/, "Work does not restore the stock coding base");
-    assert.doesNotMatch(retainedDynamic.systemPrompt, /Coding-first base that Work must replace/);
+    await emit("before_agent_start", { systemPrompt: buildSystemPrompt(workOptions), systemPromptOptions: workOptions });
+    const retainedDynamic = buildSystemPrompt(workOptions);
+    assert.match(retainedDynamic, /Caller-provided instruction\./, "Work preserves caller append instructions");
+    assert.doesNotMatch(retainedDynamic, /^You are an expert coding assistant operating inside pi/, "Work does not restore the stock coding base");
+    assert.doesNotMatch(retainedDynamic, /Coding-first base that Work must replace/);
     assert.equal(WORK_SYSTEM_PROMPT.includes("operations-first lead"), true);
     await commands.mode("pi", ctx);
     writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({
@@ -340,8 +344,9 @@ test("mode switch failure after tool change restores prior tools, model, env, an
     assert.match(notices[notices.length - 1], /Mode switch to Apex failed.*restored Pi/);
     assert.deepEqual(active, allTools, "prior Pi tool set restored");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "mode env restored");
-    const prompt = await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir } });
-    assert.match(prompt.systemPrompt, /^You are an expert coding assistant operating inside pi/, "still Pi prompt");
+    const options = { cwd: dir };
+    await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: options });
+    assert.match(buildSystemPrompt(options), /^You are an expert coding assistant operating inside pi/, "still Pi prompt");
     const lastEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
     assert.equal(lastEntry.data.mode, "pi", "compensation entry reflects restored state");
     assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi", "prefs default untouched");
@@ -404,8 +409,9 @@ test("failed fusion configure runs sidekick rollback and restores the lead", asy
     assert.deepEqual(active, allTools, "prior Apex tool set restored");
     assert.equal(process.env.PI_BEHAVIOR_MODE, "apex");
     assert.equal(thinkingLevels[thinkingLevels.length - 1], "medium", "lead thinking restored");
-    const prompt = await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: { cwd: dir } });
-    assert.equal(prompt.systemPrompt, "Apex base" + REGULAR_SYSTEM_BLOCK, "still Regular prompt");
+    const options = { cwd: dir };
+    await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: options });
+    assert.match(buildSystemPrompt(options), /Regular mode \(active\)/, "still Regular prompt");
   } finally {
     for (const [key, value] of Object.entries({ PI_CODING_AGENT_DIR: saved.dir, PI_SUBAGENT: saved.sub, PI_BEHAVIOR_MODE: saved.mode })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
