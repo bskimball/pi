@@ -61,6 +61,7 @@ function idle(pi: ExtensionAPI, ctx: ExtensionContext): boolean {
 export function registerPresentationSwitch(pi: ExtensionAPI): void {
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
+  applyUiEnv(resolveInstalledUi(readPreferences(preferencePath).ui));
 
   pi.registerCommand("ui", {
     description: "Switch Pi, Apex, Claude, or HAL presentation, independently of behavior",
