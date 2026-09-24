@@ -180,6 +180,7 @@ import {
   fusionIdentityFromState,
   fusionIdentityReceipt,
   fusionModelId,
+  fusionContextOverLimit,
   type FusionConfigureEvent,
   type FusionObservedIdentity,
 } from "./runtime/fusion-lifecycle.ts";
@@ -763,7 +764,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist.",
     )
     .replace(apexAgentCatalog, orchestrateAgentCatalog);
-  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Pass context: "fresh" when the unit needs no prior findings: cached transcripts are parked and the unit starts clean. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
+  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Pass context: "fresh" when the unit needs no prior findings: cached transcripts are parked and the unit starts clean. Idle sidekicks over 100k context tokens also start fresh. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
@@ -1486,7 +1487,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       fusionParentSessionId?: string;
       resumeSessionFile?: string;
     },
-  ): Promise<{ worker?: Worker; error?: string; fusionObserved?: FusionObservedIdentity }> => {
+  ): Promise<{ worker?: Worker; error?: string; fusionObserved?: FusionObservedIdentity; priorContextTokens?: number }> => {
     const identity = params.rebind
       ? { id: createWorkerIdentity(nextId++).id, instanceId: params.rebind.instanceId }
       : createWorkerIdentity(nextId++);
@@ -1585,7 +1586,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "--session-dir",
       sessionDir,
       "--exclude-tools",
-      params.fusion ? `${EXCLUDED_CHILD_TOOLS},todo_write` : EXCLUDED_CHILD_TOOLS,
+      params.fusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS,
       "--name",
       `async-${def.name}-${id}`,
     ];
@@ -1681,6 +1682,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
 
     let fusionObserved: FusionObservedIdentity | undefined;
+    let priorContextTokens: number | undefined;
     const applyState = (res: any) => {
         if (!res.success || !res.data || typeof res.data !== "object") return;
         const data = res.data as {
@@ -1714,6 +1716,21 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           if (!switched.success) {
             closeWorker(worker, "Fusion transcript restore rejected", "sync");
             return { error: `${id} could not restore Fusion transcript: ${switched.error ?? "unknown"}` };
+          }
+          const stats = await client.request({ type: "get_session_stats" }, 10_000).catch(() => undefined);
+          const statsData = stats?.success ? stats.data as { contextUsage?: { tokens?: unknown } } | undefined : undefined;
+          const tokens = statsData?.contextUsage?.tokens;
+          if (typeof tokens === "number" && Number.isFinite(tokens)) {
+            worker.latestContextTokens = tokens;
+            if (fusionContextOverLimit(tokens)) {
+              const reset = await client.request({ type: "new_session" }, 30_000);
+              if (!reset.success || (reset.data as { cancelled?: boolean } | undefined)?.cancelled) {
+                closeWorker(worker, "Fusion oversized transcript reset rejected", "sync");
+                return { error: `${id} could not reset oversized Fusion transcript.` };
+              }
+              worker.latestContextTokens = undefined;
+              priorContextTokens = tokens;
+            }
           }
         }
         if (forcedFusionModel) {
@@ -1822,7 +1839,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
     armIdle(worker);
     syncFleetWidget();
-    return { worker, fusionObserved };
+    return { worker, fusionObserved, priorContextTokens };
   };
 
   function waitWorkerGeneration(
@@ -2029,6 +2046,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       // Only the first sidekick resumes the persisted transcript; parallel
       // clean units start fresh so workers never share one transcript file.
       let fusionResume = false;
+      let priorContextTokens: number | undefined;
       if (sidekickMode) {
         if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`Fusion sidekick cannot spawn workers.`, true);
         if (params.agent !== "sidekick") return textResult(`Fusion permits task_start only for sidekick.`, true);
@@ -2053,6 +2071,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           ].join("\n"));
         }
         if (outcome.kind === "failed") return textResult(`${outcome.worker.id} ${outcome.reason}`, true);
+        if (outcome.kind === "fresh") priorContextTokens = outcome.priorContextTokens;
         // "parked" resumes a saved transcript; "none" creates the first
         // sidekick or a fresh parallel worker for a disjoint clean unit.
         // "fresh" declined the cached findings, so it never resumes one.
@@ -2118,7 +2137,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const savedFusion = sidekickMode !== undefined && fusionResume
         ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.(), attachedTranscripts)
         : undefined;
-      const { worker, error, fusionObserved } = await spawnWorker(def, {
+      const { worker, error, fusionObserved, priorContextTokens: restoredContextTokens } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
         modelOverride: params.model?.trim() || undefined,
@@ -2151,6 +2170,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult(error ?? "Failed to start worker.", true);
       }
 
+      priorContextTokens ??= restoredContextTokens;
       const identityLines = worker.fusion && fusionLifecycle.configured
         ? fusionIdentityReceipt(fusionLifecycle.configured, fusionObserved)
         : [`model: ${worker.model ?? "default"}`];
@@ -2160,6 +2180,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         ...identityLines,
         `generation: ${worker.generation}`,
         contextNote,
+        priorContextTokens === undefined ? undefined : `started fresh: prior sidekick transcript was ~${Math.round(priorContextTokens / 1000)}k tokens (over 100k limit); brief must carry decisions, commands, and evidence.`,
         reportSchema ? "reportSchema: requested" : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,

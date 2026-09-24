@@ -1523,6 +1523,30 @@ describe("fusion close backstop", () => {
     });
   });
 
+  it("dedupes unchanged task_wait nudges until status changes or the list is rewritten", async () => {
+    await withFusionEnv(async () => {
+      const mock = createMockPi();
+      try {
+        const todos = [
+          { id: "a", content: "Do the work", status: "in_progress" },
+          { id: "b", content: "Verify it", status: "pending" },
+        ];
+        await writeTodos(mock, todos);
+        assert.ok(fireToolResult(mock, "task_wait"));
+        assert.equal(fireToolResult(mock, "task_wait"), undefined);
+        await writeTodos(mock, [{ ...todos[0], status: "completed" }, todos[1]]);
+        const changed = fireToolResult(mock, "task_wait");
+        assert.ok(changed);
+        assert.match(changed.content[1].text, /#b pending/);
+        assert.equal(fireToolResult(mock, "task_wait"), undefined);
+        await writeTodos(mock, [{ ...todos[0], status: "completed" }, todos[1]]);
+        assert.ok(fireToolResult(mock, "task_wait"), "rewrite resets dedupe");
+      } finally {
+        mock.emit("session_shutdown", {}, {});
+      }
+    });
+  });
+
   it("returns undefined when every item is done", async () => {
     await withFusionEnv(async () => {
       const mock = createMockPi();

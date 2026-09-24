@@ -86,7 +86,7 @@ Presentation remains independent: `pi:ui:changed` lets the active UI host refres
 
 Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
-The **Fusion sidekick lifecycle module** (`task/runtime/fusion-lifecycle.ts`) owns the configured pair, designated-worker reuse, configuration acknowledgement/rollback, parking, parent-session isolation, and tool gates. `async-task.ts` retains process spawn and RPC framing; `worker-runtime.ts` enforces Fusion's idle-timeout exemption through every generation/event path. Rejected prompts settle; unknown prompt acceptance requires abort/closure before releasing the single-writer gate. Saved transcripts are parent-scoped; a missing saved file is an error, never a silent context reset.
+The **Fusion sidekick lifecycle module** (`task/runtime/fusion-lifecycle.ts`) owns the configured pair, designated-worker reuse, configuration acknowledgement/rollback, parking, parent-session isolation, and tool gates. `async-task.ts` retains process spawn and RPC framing; `worker-runtime.ts` enforces Fusion's idle-timeout exemption through every generation/event path. Rejected prompts settle; unknown prompt acceptance requires abort/closure before releasing the single-writer gate. Saved transcripts are parent-scoped; a missing saved file is an error, never a silent context reset. Reuse is context-bounded: an idle sidekick or restored transcript over `FUSION_REUSE_CONTEXT_TOKENS` (100k, from last assistant usage or `get_session_stats`) starts clean and the `task_start` receipt says so; unknown size keeps the transcript.
 
 ### `/dispatch <request>`
 

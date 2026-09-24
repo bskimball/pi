@@ -144,6 +144,7 @@ export interface RuntimeEventWorker extends RuntimeWorker {
   pendingUi: Map<string, RuntimePendingUiRequest>;
   latestAssistantText: string;
   latestResult: string;
+  latestContextTokens?: number;
   modelError?: string;
   modelAttemptUsedTools: boolean;
   circuitFailureAttempt?: number;
@@ -647,8 +648,15 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
             role?: string;
             stopReason?: string;
             errorMessage?: string;
+            usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
           };
           if (assistant.role === "assistant") {
+            const usage = assistant.usage;
+            if (usage && [usage.input, usage.cacheRead, usage.cacheWrite].every(
+              (value) => typeof value === "number" && Number.isFinite(value),
+            )) {
+              worker.latestContextTokens = usage.input! + usage.cacheRead! + usage.cacheWrite!;
+            }
             const text = hooks.extractAssistantText(message);
             if (text) {
               worker.latestAssistantText = storeLatestText(text);

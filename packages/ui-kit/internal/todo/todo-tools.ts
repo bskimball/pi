@@ -365,6 +365,7 @@ export function dockClickResult(
 export function installTodoTools(pi: ExtensionAPI): void {
   /** Current plan for this process/session. Each successful write replaces it. */
   let current: TodoListView | undefined;
+  let lastNudgedOpen: string | undefined;
   let currentCtx: ExtensionContext | undefined;
   let panelCollapsed = false;
   let dockPane: DockPane = "todos";
@@ -986,6 +987,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     currentCtx = ctx;
     uiPromptDepth = 0;
     current = event?.reason === "new" ? undefined : reconstructTodoState(ctx);
+    lastNudgedOpen = undefined;
     liveAgents = currentDockAgents();
     if (presentationEnabled && liveAgents.length > 0 && !current) {
       dockPane = "agents";
@@ -997,6 +999,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     clearPanel();
     currentCtx = ctx;
     current = reconstructTodoState(ctx);
+    lastNudgedOpen = undefined;
     liveAgents = currentDockAgents();
     if (presentationEnabled && liveAgents.length > 0 && !current) {
       dockPane = "agents";
@@ -1007,6 +1010,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     clearPanel();
     current = undefined;
+    lastNudgedOpen = undefined;
     currentCtx = undefined;
     uiPromptDepth = 0;
     liveAgents = [];
@@ -1227,6 +1231,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
       const view = buildTodoList(validated);
       current = view;
+      lastNudgedOpen = undefined;
       currentCtx = ctx;
       renderPanel();
       return textResult(summarize(current), false, { view: current });
@@ -1343,6 +1348,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
       item => item.status === "pending" || item.status === "in_progress",
     );
     if (open.length === 0) return;
+    const signature = JSON.stringify(open.map(item => [item.id, item.status]));
+    if (event.toolName === "task_wait") {
+      if (signature === lastNudgedOpen) return;
+      lastNudgedOpen = signature;
+    }
     const existing = Array.isArray(event.content) ? event.content : [];
     return {
       content: [...existing, { type: "text" as const, text: fusionCloseNudge(event.toolName, open) }],

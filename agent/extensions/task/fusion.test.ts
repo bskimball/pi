@@ -5,11 +5,13 @@ import ampTask from "./amp-task.ts";
 import { discoverAgents } from "./runtime/agent-discovery.ts";
 import {
   FUSION_CHAIN_PROMPT_CAP,
+  FUSION_REUSE_CONTEXT_TOKENS,
   FusionLifecycle,
   applySidekickModel,
   fusionChainNudge,
   fusionIdentityFromState,
   fusionIdentityReceipt,
+  fusionContextOverLimit,
   fusionModelId,
 } from "./runtime/fusion-lifecycle.ts";
 
@@ -357,6 +359,40 @@ test("FusionLifecycle chain counting tolerates workers that predate the counter"
   assert.match(h.lifecycle.noteChainPrompt(worker)!, /has taken 2 prompts/, "unknown chain reads as prompt 1, then fills the budget");
   assert.equal(worker.fusionChainPrompts, 2);
   assert.equal(fusionChainNudge("task_9", 2), "[fusion] task_9 has taken 2 prompts in this unit (1 assignment + 1 correction). This unit is now closed to further prompts: reassess the contract, then use task_start for a new unit on the persistent sidekick, or take the work back after settle/abort.");
+});
+
+test("FusionLifecycle parks oversized idle context and reuses smaller or unknown context", async () => {
+  for (const tokens of [undefined, FUSION_REUSE_CONTEXT_TOKENS]) {
+    const h = fusionHarness();
+    h.workers.push(h.fusionWorker({ latestContextTokens: tokens }));
+    assert.equal((await h.lifecycle.reuse("next unit", {}, 1000)).kind, "reused");
+    assert.deepEqual(h.parked, []);
+    assert.deepEqual(h.started, ["task_1"]);
+  }
+  const h = fusionHarness();
+  h.workers.push(h.fusionWorker({ latestContextTokens: FUSION_REUSE_CONTEXT_TOKENS + 1 }));
+  assert.deepEqual(await h.lifecycle.reuse("clean unit", {}, 1000), {
+    kind: "fresh", priorContextTokens: FUSION_REUSE_CONTEXT_TOKENS + 1,
+  });
+  assert.equal(h.started.length, 0);
+  assert.ok(h.parked.some(entry => entry.startsWith("task_1:")));
+  assert.equal(h.lifecycle.find(), undefined);
+});
+
+test("Fusion prefers an eligible idle worker over an oversized one", async () => {
+  const h = fusionHarness();
+  h.workers.push(h.fusionWorker({ latestContextTokens: FUSION_REUSE_CONTEXT_TOKENS + 1 }));
+  h.workers.push(h.fusionWorker({ id: "task_2", latestContextTokens: FUSION_REUSE_CONTEXT_TOKENS }));
+  const result = await h.lifecycle.reuse("next unit", {}, 1000);
+  assert.equal(result.kind, "reused");
+  assert.equal((result as any).worker.id, "task_2");
+  assert.deepEqual(h.parked, []);
+});
+
+test("restored context limit decision treats unknown and boundary size as reusable", () => {
+  assert.equal(fusionContextOverLimit(undefined), false);
+  assert.equal(fusionContextOverLimit(FUSION_REUSE_CONTEXT_TOKENS), false);
+  assert.equal(fusionContextOverLimit(FUSION_REUSE_CONTEXT_TOKENS + 1), true);
 });
 
 test("FusionLifecycle fresh context parks cached transcripts instead of continuing them", async () => {

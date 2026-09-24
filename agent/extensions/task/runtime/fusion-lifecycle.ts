@@ -90,6 +90,7 @@ export interface FusionWorkerState {
    * and respawn instead of steering past the cap.
    */
   fusionChainPrompts?: number;
+  latestContextTokens?: number;
   cwd?: string;
   model?: string;
   thinking?: string;
@@ -113,6 +114,11 @@ export interface FusionWorkerState {
  * be reassessed and reissued through task_start with a cleaner contract.
  */
 export const FUSION_CHAIN_PROMPT_CAP = 2;
+export const FUSION_REUSE_CONTEXT_TOKENS = 100_000;
+
+export function fusionContextOverLimit(tokens: number | undefined): boolean {
+  return tokens !== undefined && Number.isFinite(tokens) && tokens > FUSION_REUSE_CONTEXT_TOKENS;
+}
 
 /** Single-line receipt emitted when a unit consumes its final correction. */
 export function fusionChainNudge(id: string, count: number): string {
@@ -151,7 +157,7 @@ export interface ReuseInputs {
 export type ReuseOutcome =
   | { kind: "none" }
   /** Idle transcripts parked on request; the caller spawns a clean sidekick. */
-  | { kind: "fresh" }
+  | { kind: "fresh"; priorContextTokens?: number }
   | { kind: "parked"; worker: FusionWorkerState }
   | { kind: "conflict"; reason: string }
   | { kind: "invalid"; reason: string }
@@ -527,7 +533,11 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       // parallel sidekick only when the lead has declared a disjoint unit.
       return parked ? { kind: "parked", worker: parked } : { kind: "none" };
     }
-    const worker = idle[0];
+    const worker = idle.find((candidate) => !fusionContextOverLimit(candidate.latestContextTokens)) ?? idle[0];
+    if (fusionContextOverLimit(worker.latestContextTokens)) {
+      this.deps.parkWorker(worker, "Fusion context limit exceeded; parking cached transcript");
+      return { kind: "fresh", priorContextTokens: worker.latestContextTokens };
+    }
     const client = worker.client!;
     const schema = inputs.reportSchema?.trim() || undefined;
     if (schema) {
