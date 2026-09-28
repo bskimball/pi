@@ -12,7 +12,7 @@ Do not redirect requests to an unrelated application repository based on terms s
 agent/
 ├── SYSTEM.md              # base system prompt
 ├── settings.json          # model, theme (currently claude-dark), tuiMode, compaction
-├── models.json / mcp.json # provider + MCP configuration
+├── models.json / mcp-adapter.json # provider + MCP configuration (pi-mcp-adapter no longer reads mcp.json)
 ├── agents/                # specialist briefs (_shared*.md are composed in)
 ├── prompts/               # slash-command prompts (inactive/ = extension-owned; poteto/ = /poteto playbooks, not slash commands)
 ├── skills/                # local skills
@@ -46,6 +46,7 @@ agent/extensions/
 ├── web-search.ts                          Exa search + fetch_content
 ├── jev/                     → index.ts              Advisory Jev Choice/Score/Noul classifier (single tool)
 ├── at-path-complete.ts                    scoped @ listing for gitignored paths
+├── claude-bridge-sonnet-5-5.ts            TEMPORARY: adds claude-sonnet-5-5 to claude-bridge; delete once pi-ai ships it (it notifies)
 └── test/                                  cross-extension tests
 ```
 

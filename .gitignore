@@ -2,6 +2,7 @@
 agent/auth.json
 agent/models.json
 agent/mcp.json
+agent/mcp-adapter.json
 agent/USER_PROFILE.local.md
 web-search.json
 jev.json
