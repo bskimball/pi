@@ -11,20 +11,15 @@ config/markdown formats used in this repo. Two kinds of format are covered:
   (`agent/extensions/*.ts`) and not part of upstream Pi. Documented here in
   full, sourced directly from the implementation.
 
-Declared and locked package version: `@earendil-works/pi-coding-agent@0.85.1`
-(see `package.json` and `package-lock.json`). `pi-mcp-adapter@2.32.1` still
-peers `@earendil-works/pi-ai@^0.84.1`; npm's 0.x caret excludes 0.85.x, so a
-clean install needs `npm install --legacy-peer-deps`. (`pi-mcp-adapter@2.33.0`
-widens that peer range but currently depends on a GitHub `pkg.pr.new` remote
-tarball, which this machine's npm `allow-remote=none` policy blocks.) Upstream
-docs can drift between versions; when in doubt, compare `package.json` with the
-installed version and read `node_modules/@earendil-works/pi-coding-agent/docs/*.md`
-directly.
+Package versions are declared in `package.json` and locked in `package-lock.json`.
+Native MCP requires Pi 0.99.0 or newer; this configuration uses Pi 0.99.1.
+When in doubt, compare the installed version and read
+`node_modules/@earendil-works/pi-coding-agent/docs/*.md` directly.
 
 ## Contents
 
 - [Ignored secret configs and their example files](#ignored-secret-configs-and-their-example-files)
-- [`agent/mcp.json` (local custom, MCP servers)](#agentmcpjson-local-custom-mcp-servers)
+- [`agent/mcp.json` (upstream Pi, MCP servers)](#agentmcpjson-upstream-pi-mcp-servers)
 - [`agent/models.json` (upstream Pi, custom providers/models)](#agentmodelsjson-upstream-pi-custom-providersmodels)
 - [`web-search.json` (local custom, web-search extension)](#web-searchjson-local-custom-web-search-extension)
 - [`jev.json` (local custom, Jev extension)](#jevjson-local-custom-jev-extension)
@@ -69,119 +64,56 @@ obviously-fake literals.
 
 ---
 
-## `agent/mcp.json` (local custom, MCP servers)
+## `agent/mcp.json` (upstream Pi, MCP servers)
 
-**Loaded by:** `agent/extensions/mcp-adapter.ts`, which wraps the
-`pi-mcp-adapter` npm package (`node_modules/pi-mcp-adapter`) on the same
-`ExtensionAPI`. Apex skins `mcp` / `mcpScript` receipts from `apex-ui`
-when presentation is enabled. Direct and namespace MCP tools keep the
-adapter's own chrome. Do not also add
-`pi-mcp-adapter` to `agent/settings.json` `packages` — that would load a second
-adapter instance beside this wrapper.
+**Authoritative doc:** `node_modules/@earendil-works/pi-coding-agent/docs/mcp.md`.
+For scripting, read the same package's `docs/cli.md` section "How codemode works"
+and the local `agent/skills/mcp-scripting-recipes/SKILL.md`.
 
-Because the adapter is composed directly rather than loaded as a package, Pi
-does not auto-discover its bundled skill directory. Register it explicitly via
-`agent/settings.json` `skills` (this repo uses
-`../node_modules/pi-mcp-adapter/skills`, resolved relative to `agent/`). That
-exposes the authoritative `mcp-scripting` skill without installing a second
-adapter instance through `packages`.
+**Location:** `~/.pi/agent/mcp.json` (global, ignored). Trusted projects can use
+`.pi/mcp.json`; their same-name servers replace global entries. Native Pi does
+not read the retired `mcp-adapter.json` or adapter cache/approval files.
 
-**Location:** `<Pi agent dir>/mcp.json` (`agent/mcp.json` here). This is one of
-several files `pi-mcp-adapter` merges; see the package's own file-precedence
-table in `node_modules/pi-mcp-adapter/README.md#file-layout` for the full list
-(`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`, `.mcp.json`,
-`.pi/mcp.json`, etc.). This repo only tracks `agent/mcp.json`.
+**Root shape:** `{ "mcpServers": { "<name>": { /* server */ } },
+"autoEnableCodemode": true }`. The latter is optional and defaults to true.
+Server names accept letters, digits, `_`, and `-`.
 
-**Reload behavior:** `/mcp disable|enable <server>` requires `/reload` to take
-effect. Editing the file directly is picked up per the adapter's normal config
-load/merge cycle (on session start / reload); it is not hot-reloaded mid-session
-like `models.json`.
+| Server fields | Notes |
+|---|---|
+| `command`, `args`, `env`, `cwd` | Stdio; command is one executable, arguments are separate strings. Relative cwd resolves against the session directory. |
+| `url`, `headers`, `oauth` | Streamable HTTP. Legacy SSE is unsupported. |
+| `type` | Optional: inferred from command or URL. Accepted explicit values are `stdio`, `http`, `streamable-http`. |
+| `timeout` | Positive per-request seconds, default 60; progress notifications reset it. |
+| `enabled` | Default true; false retains the definition without connecting. |
+| `exposure` | Default `codemode`; also `codemode-deferred`, `deferred`, `direct`, `hidden`. |
+| `toolExposure` | Overrides exposure for exact tool names or `*` patterns. |
+| `oauth` fields | `clientId`, `clientSecret`, `callbackPort`, `callbackUrl`, `scope`; see upstream for callback constraints. |
 
-### Root shape
+`env`, `headers`, and OAuth client secrets can resolve `${NAME}` or a whole-value
+`!command`. Use environment references for credentials. Context7 uses
+`headers.Authorization: "Bearer ${CONTEXT7_API_KEY}"`, not adapter bearer fields.
+HTTP servers without an Authorization header can use OAuth; approve sign-in
+through `/mcp login <server>` or `pi mcp login <server>`. Native tokens live in
+ignored `agent/mcp-auth.json`; adapter credential-store entries are not imported.
 
-```jsonc
-{
-  "mcpServers": { "<name>": { /* ServerEntry */ } },
-  "imports": ["cursor", "claude-code"],
-  "settings": { /* McpSettings, optional */ }
-}
-```
+**Tools and rendering:** native tools use `mcp__<server>__<tool>` names (sanitized
+or shortened where necessary), default to codemode exposure, and keep Pi's native
+rendering. Codemode discovers them with `searchTools`/`describeTool` and calls
+`tools[exactName](args)`. `tool_search` can load undeclared tools for direct calls.
+The retired adapter's `mcp` gateway, namespace proxies, `mcpScript`, and bundled
+skill are no longer registered.
 
-`imports` is optional and may contain `"cursor"`, `"claude-code"`,
-`"claude-desktop"`, `"codex"`, `"opencode"`, `"windsurf"`, or `"vscode"`.
-It imports MCP definitions discovered from those hosts; see the adapter README
-for discovery and merge precedence.
+**Validation and reload:** `pi mcp list` connects every enabled server, lists its
+tools, and exits nonzero on errors. Run `/reload` or start a new session after
+configuration changes. `/mcp` manages native connection state, exposure, and sign-in.
+Servers connect at startup; normal server log messages go to `agent/mcp.log`
+(rotated as `agent/mcp.log.1`).
 
-Full type definitions: `node_modules/pi-mcp-adapter/types.ts`
-(`ServerEntry`, `McpSettings`, `McpConfig`). Full field docs with resolution
-semantics: `node_modules/pi-mcp-adapter/README.md` ("Server Options" and
-"Settings" sections).
-
-### `mcpServers.<name>` (ServerEntry) — common fields
-
-| Field | Type | Notes |
-|---|---|---|
-| `command` | string | Stdio transport executable. Mutually exclusive with `url`/`socket`. |
-| `args` | string[] | Command arguments. |
-| `env` | object | Env vars for the stdio process. Supports `${VAR}`/`$env:VAR` interpolation; a value starting with `!` runs a command at connect time (`!!` escapes a literal `!`). **Secret-bearing.** |
-| `cwd` | string | Working directory; supports `~` and env expansion. |
-| `url` | string | HTTP endpoint (StreamableHTTP w/ SSE fallback). Mutually exclusive with `command`/`socket`. |
-| `socket` | string | Explicit `rmcp-mux` Unix socket path. Mutually exclusive with `command`/`url`. |
-| `headers` | object | HTTP headers; same interpolation/`!command` rules as `env`. **Secret-bearing.** |
-| `auth` | `"oauth" \| "bearer" \| false` | Auth mode for HTTP servers. |
-| `bearerToken` / `bearerTokenEnv` | string | Static token or env var name. `bearerToken` supports interpolation and `!command`. **Secret-bearing.** |
-| `oauth` | object \| `false` | `{ grantType, clientId, clientSecret, scope, redirectUri, clientName, clientUri }`. `clientSecret` is secret-bearing and supports `!command`. |
-| `lifecycle` | `"lazy" \| "eager" \| "keep-alive" \| "lazy-keep-alive"` | Default `"lazy"`. See adapter README for exact semantics. |
-| `idleTimeout` | number (minutes) | Overrides global `settings.idleTimeout`. |
-| `requestTimeoutMs` | number | Overrides global `settings.requestTimeoutMs`; omitted/`<=0` uses the MCP SDK default. |
-| `exposeResources` | boolean | Default `true`. |
-| `directTools` | boolean \| string[] | Register tools individually instead of through the `mcp` proxy tool. |
-| `includeTools` / `excludeTools` | string[] | Glob-capable allow/deny lists (exclude applied after include). |
-| `debug` | boolean | Show server stderr. Default `false`. |
-| `trace` | boolean | Metadata-only JSONL protocol tracing for this server. Never persists payloads/prompts/args/results/auth/URLs. |
-| `disabled` | boolean | Only literal `true` disables a server; keeps it visible in config/status. |
-
-### `settings` (McpSettings) — common fields
-
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `toolPrefix` | `"server" \| "short" \| "none" \| "mcp"` | `"server"` | Tool name prefixing scheme. |
-| `idleTimeout` | number (minutes) | `10` | `0` disables. |
-| `requestTimeoutMs` | number | SDK default | Global request timeout. |
-| `showStatusIcon` | boolean | `true` | Plug icon in MCP status text. This configuration sets it to `false`; it remains relevant to `/mcp` output even though persistent footer status is disabled. |
-| `mcpFooterStatus` | `"full" \| "compact" \| "off"` | `"full"` | Persistent MCP status verbosity. This configuration sets it to `"off"` so the stock footer stays two lines; custom UI footers render extension statuses as separate items. `/mcp status` remains available. |
-| `hostConfigDiscovery` | `"off" \| "prompt" \| "on"` | `"off"` | Whether to discover other hosts' MCP configs. |
-| `directTools` | boolean | `false` | Global default; per-server overrides. |
-| `disableProxyTool` | boolean | `false` | Hide the `mcp` proxy tool once direct tools cover everything. |
-| `autoAuth` | boolean | `false` | Auto-run OAuth on connect/tool call when a server needs auth. |
-| `sampling` / `samplingAutoApprove` | boolean | `true` / `false` | MCP server sampling through Pi models. |
-| `elicitation` | boolean | `true` (when UI available) | Allow servers to request user input. |
-| `outputGuard` | boolean \| object | `true` | Caps inline text output (50 KiB/2000 lines) and `details.mcpResult` (16 KiB); see adapter README "Output Guard". |
-| `trace` | object | — | `{ enabled, file, maxBytes, maxEvents }`. Opt-in metadata-only tracing. |
-| `authRequiredMessage` | string | — | `${server}` is substituted. |
-| `oauthDir` | string | — | Legacy plaintext `tokens.json` import dir only; persistent OAuth creds live in the OS credential store, not here. |
-
-### Env / secret resolution
-
-- `env`, `headers`, `bearerToken`, `oauth.clientSecret` values support
-  `${VAR}` / `$env:VAR` interpolation, and a leading `!command` executes a
-  command (stdin/stderr suppressed, 1 MiB stdout cap, 10s timeout,
-  non-empty output required) to obtain the value at connect/auth time. Use
-  `!!` to escape a literal leading `!`.
-- OAuth tokens are stored in the OS credential store, not in this file or
-  `oauthDir`.
-- The active `agent/mcp.json` should use env-var references for secrets (for
-  example, Context7 uses `bearerTokenEnv: "CONTEXT7_API_KEY"`); the tracked
-  example file models this pattern without a real token.
-
-### Example (`agent/mcp.example.json`)
-
-Includes one stdio server (`chrome-devtools`, no secrets) and Context7 as an
-HTTP server using `bearerTokenEnv`, plus a minimal settings block that disables
-persistent MCP footer status. The
-`chrome-devtools-mcp` package is pinned to a tested
-version because `npx -y` downloads and executes that package when it is not
-already cached. Review and update the pin deliberately.
+**Example:** `agent/mcp.example.json` contains the configured Chrome stdio server
+and Context7 HTTP server with an environment-only credential reference. The Chrome
+server targets the dedicated debug browser on port 29300. Its npm version stays
+pinned because `npx -y` may download and execute it. Review that pin deliberately.
+The old ignored adapter config/runtime files remain inert for rollback.
 
 ---
 
@@ -362,14 +294,10 @@ This repo's tracked `agent/settings.json` sets: `defaultModel`
 (`gpt-6-sol`), `defaultProvider` (`openai-codex`),
 `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
 (`npm:@ff-labs/pi-fff` for FFF fuzzy finding, `npm:pi-intercom` for the
-`intercom` tool — the third-party MCP dependency used here is still composed
-locally by `mcp-adapter.ts` instead of loaded from this array; see the mcp.json
-section above for why),
-`skills` (registers the `pi-mcp-adapter` bundled skill directory so
-`mcp-scripting` is discoverable without loading the adapter twice),
-`steeringMode`,
+`intercom` tool), `steeringMode`,
 `transport`, `terminal.showTerminalProgress`, `editorPaddingX`, `theme` (`claude-dark`),
-and `tuiMode`.
+and `tuiMode`. Native MCP is built in and needs no package or external skill
+registration; see the mcp.json section above.
 `enabledModels` is intentionally omitted so `/model` and Ctrl+P see every configured
 provider without a scope allowlist. Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
@@ -574,9 +502,9 @@ Local skills live under `agent/skills/` as `*/SKILL.md` directories (freeform
 beyond the required `SKILL.md`; `generate-image` ships `generate_image.py`).
 `typesafe-ai/SKILL.md` is the vendor TypeSafe skill; local `typesafe-ai/PI.md`
 pairs it with the existing Jev extension so in-session Choice/Score/Noul uses
-the `jev` tool instead of a second client. `mcp-scripting-recipes` complements
-the adapter's authoritative `mcp-scripting` skill. The adapter skill itself is
-loaded via `settings.skills`, not by copying it into `agent/skills/`.
+the `jev` tool instead of a second client. `mcp-scripting-recipes` documents native
+Pi codemode discovery, bounded composition, and error handling; its upstream
+contract is in the installed Pi MCP and CLI docs.
 
 ---
 
@@ -606,7 +534,7 @@ custom tools/commands/shortcuts, and extension loading/discovery rules. Not
 reproduced here.
 
 **Locations used in this repo:** `agent/extensions/*.ts` (flat files:
-`mcp-adapter.ts`, `web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
+`web-search.ts`, `prompt-commands.ts`, `bg-process.ts`,
 `crash-logger.ts`, `continual-memory.ts`, `read-guard.ts`,
 `at-path-complete.ts`),
 `agent/extensions/apex/`, `agent/extensions/task/`,
@@ -622,8 +550,7 @@ complementary to this file's focus on *config/markdown parameter shapes*.
 
 No project-local `.pi/extensions/` exist in this repo; only global
 `agent/extensions/` is used. `agent/settings.json` package-loads `pi-fff`; the
-third-party MCP dependency is composed locally instead: `mcp-adapter.ts` boots
-`pi-mcp-adapter` (see the mcp.json section above for why). (`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in
+MCP integration is Pi-native (see the mcp.json section above). (`npm:pi-sticky-input` was dropped at Pi 0.84.1 in favor of the built-in
 `tuiMode: "fullscreen"`.)
 
 ---

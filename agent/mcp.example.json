@@ -6,19 +6,13 @@
         "-y",
         "chrome-devtools-mcp@1.6.0",
         "--browserUrl=http://127.0.0.1:29300"
-      ],
-      "lifecycle": "lazy"
+      ]
     },
     "context7": {
       "url": "https://mcp.context7.com/mcp",
-      "auth": "bearer",
-      "bearerTokenEnv": "CONTEXT7_API_KEY"
+      "headers": {
+        "Authorization": "Bearer ${CONTEXT7_API_KEY}"
+      }
     }
-  },
-  "settings": {
-    "toolPrefix": "server",
-    "idleTimeout": 10,
-    "showStatusIcon": false,
-    "mcpFooterStatus": "off"
   }
 }

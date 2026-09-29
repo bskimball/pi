@@ -1,118 +1,65 @@
 ---
 name: mcp-scripting-recipes
-description: Local mcpScript patterns for discovery-first resolution, bounded fan-out, partial failures, and timeout budgeting. Read the authoritative mcp-scripting skill first for the API contract; use this skill for safe, server-agnostic composition recipes.
+description: Native Pi codemode recipes for MCP tool discovery, bounded fan-out, partial failures, and timeout budgeting. Use when composing multiple MCP calls or filtering large tool results.
 ---
 
-# mcpScript recipes
+# Native MCP scripting recipes
 
-Read `mcp-scripting` first for the adapter's authoritative API. These recipes are local, server-agnostic patterns only. Never hardcode current MCP tool paths or server-specific argument shapes.
+Use Pi's built-in `codemode` for chains, loops, parallel calls, and result filtering. Native MCP configuration is `~/.pi/agent/mcp.json`; servers default to `codemode` exposure. For the authoritative contract, read the installed `node_modules/@earendil-works/pi-coding-agent/docs/cli.md` section "How codemode works" and `docs/mcp.md` in that package.
 
-## Security boundaries
+## Discover, inspect, call
 
-- `mcpScript` runs trusted agent-authored JavaScript. It is not a sandbox for untrusted code.
-- Isolation stops runaway loops from freezing the main process; it does not protect against malicious scripts.
-- `tools.call` preserves normal connection, authentication, approval, and per-call output controls. Final emitted/returned script output is separately output-guarded. `tools.search` and `tools.describe` inspect local adapter metadata and do not call a server.
-- Never inline secrets in script source. Credentials stay in MCP config / environment resolution.
-- Apex may hide script source from the call header summary only; the full source still exists in the model/tool transcript.
-
-## Contracts to remember
-
-- `tools.search` and `tools.describe` resolve bare results (not `{ok,...}` envelopes).
-- `tools.call` returns `{ ok: true, data }` or `{ ok: false, error }`.
-- Use `emit()` for useful intermediate/final user-visible output.
-- Result `details.calls` is on the `mcpScript` tool result outside the script, not inside individual `tools.call` returns.
-
-## 1. Resolve → describe → call
-
-Handle empty search, describe failures, and call envelopes explicitly.
+1. Find candidates with `await searchTools(query, { limit, namespace })` or filter `ALL_TOOLS`. Both return metadata with `name` and `description`; namespace is optional.
+2. Inspect an exact returned name with `await describeTool(name)`. It returns the description and declaration, or `undefined`.
+3. Supply arguments from that declaration to `await tools[name](args)`. Native names have the form `mcp__<server>__<tool>` but may be sanitized or shortened; use the discovered name.
+4. Validate the result shape before filtering or acting on it. Return useful output with `text(value)` or a top-level `return`.
 
 ```js
-const { items } = await tools.search({ query: "find the intended capability" });
-const candidate = items[0];
-if (!candidate) {
-  emit({ error: "No matching tool" });
-  return { error: "No matching tool" };
-}
-
-const details = await tools.describe({ path: candidate.path });
-if (details.error) {
-  emit({ error: "describe failed", path: candidate.path, details });
-  return details;
-}
-
-const result = await tools.call(details.path, {/* args from schema */});
-if (!result.ok) {
-  emit({ error: result.error, path: details.path });
-  return result;
-}
-
-emit({ path: details.path, completed: true });
-return result.data;
+// @options: {"max_output_tokens": 2000, "timeout_ms": 30000}
+const candidates = await searchTools("find the intended capability", { limit: 5 });
+const candidate = candidates[0];
+if (!candidate) return { error: "No matching tool" };
+const declaration = await describeTool(candidate.name);
+if (!declaration) return { error: "Tool unavailable", name: candidate.name };
+text({ name: candidate.name, declaration });
+// Inspect this output first, then call tools[theExactName] with the declared arguments.
 ```
 
-## 2. Bounded fan-out with partial failures
+## Results and failures
 
-Cap concurrency without external dependencies. Partition successes and errors.
+- MCP calls resolve to the full `CallToolResult`: `content`, optional `structuredContent`, and optional `isError`. A server result with `isError` resolves; check it explicitly.
+- Invalid arguments, blocked calls, and pipeline failures reject with an Error. Use `try/catch` or `Promise.allSettled`; there is no `{ ok, data }` wrapper.
+- Prefer validated `structuredContent` for domain fields. Otherwise inspect the text blocks in `content`. Return an unfamiliar result for inspection instead of coercing it into an empty array or object.
+- `image(result.content[i])` forwards an individual MCP image block to the model.
+
+## Bounded fan-out
+
+Use only exact names and arguments already inspected. Limit the work list and concurrency; collect each failure without retrying a possibly completed action.
 
 ```js
-const paths = [/* exact paths from prior search/describe */];
-const argsByPath = new Map(/* path -> args */);
-const concurrency = 3;
-const successes = [];
-const errors = [];
+// @options: {"max_output_tokens": 2000, "timeout_ms": 30000}
+const work = [/* { name: exactDiscoveredName, args: inspectedArguments } */];
+const outcomes = [];
 let next = 0;
-
 async function worker() {
-  while (next < paths.length) {
-    const i = next++;
-    const path = paths[i];
+  while (next < work.length) {
+    const item = work[next++];
     try {
-      const result = await tools.call(path, argsByPath.get(path) ?? {});
-      if (result.ok) successes.push({ path, data: result.data });
-      else errors.push({ path, error: result.error });
+      const result = await tools[item.name](item.args);
+      outcomes.push({ name: item.name, ok: result.isError !== true, result });
     } catch (error) {
-      errors.push({ path, error: String(error) });
+      outcomes.push({ name: item.name, ok: false, error: String(error) });
     }
   }
 }
-
-await Promise.all(
-  Array.from({ length: Math.min(concurrency, paths.length) }, () => worker()),
-);
-
-emit({ total: paths.length, ok: successes.length, failed: errors.length });
-return { successes, errors };
-```
-
-## 3. Timeout budgeting
-
-Cap the work list, set `timeoutMs` on the `mcpScript` tool call (outside the script), and inspect `details.calls` on the returned tool result after the run to tune future budgets. Do not expect `details` inside `tools.call` results.
-
-```js
-// mcpScript tool args (outside the script):
-// { timeoutMs: 20000, code: "<source below>" }
-
-const { items } = await tools.search({ query: "capability keywords", limit: 5 });
-const selected = items.slice(0, 3); // hard cap: never unbounded fan-out
-const outcomes = [];
-
-for (const item of selected) {
-  const details = await tools.describe({ path: item.path });
-  if (details.error) {
-    outcomes.push({ path: item.path, stage: "describe", error: details.error });
-    continue;
-  }
-  const result = await tools.call(details.path, {/* minimal args */});
-  outcomes.push(
-    result.ok
-      ? { path: details.path, stage: "call", ok: true }
-      : { path: details.path, stage: "call", ok: false, error: result.error },
-  );
-}
-
-emit({ attempted: selected.length, outcomes });
+await Promise.all(Array.from({ length: Math.min(3, work.length) }, () => worker()));
 return outcomes;
-
-// After mcpScript returns, inspect tool-result details.calls (search/describe/call
-// query or path, outcome, duration) to tighten timeoutMs and caps next time.
 ```
+
+## Execution boundaries
+
+Codemode runs in a fresh QuickJS sandbox with no Node, direct filesystem, network, or timer access. It can execute enabled tools through `tools`, including tools with side effects. Each nested call follows Pi's tool pipeline and permission hooks. Failure does not undo earlier calls; await all intended work before returning.
+
+Put credentials in configuration/environment resolution, not script source or output. Use an explicit first-line `// @options` deadline: `timeout_ms` has no default. `max_output_tokens` defaults to 10000; longer output is truncated and saved to a temporary file. Scripts have a 256 MB memory limit, so bound inputs, concurrency, and retained results rather than accumulating entire datasets. Keep observations fresh and stop on uncertainty, no progress, or an unrecognized result.
+
+Use `/mcp` or `pi mcp list` for server status, and `/mcp login <server>` or `pi mcp login <server>` for user-approved OAuth. `tool_search` can load deferred tools for direct model calls; codemode's `searchTools` discovers tools without that declaration step.

@@ -27,10 +27,6 @@ import {
 import { jevReceiptArg } from "../presentation/jev-receipt.ts";
 import { lspReceiptArg } from "../presentation/lsp-receipt.ts";
 import {
-  mcpReceiptArg,
-  mcpScriptReceiptArg,
-} from "../presentation/mcp-receipt.ts";
-import {
   memoryListReceiptArg,
   memoryWriteReceiptArg,
 } from "../presentation/memory-receipt.ts";
@@ -128,10 +124,6 @@ export function formatToolArg(
         return memoryWriteReceiptArg(args as any, safeBudget);
       case "lsp":
         return lspReceiptArg(args as any, safeBudget);
-      case "mcp":
-        return mcpReceiptArg(args as any, safeBudget);
-      case "mcpScript":
-        return mcpScriptReceiptArg(args as any, safeBudget);
       case "jev":
         return jevReceiptArg(args as any, safeBudget);
       default:

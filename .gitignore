@@ -2,6 +2,8 @@
 agent/auth.json
 agent/models.json
 agent/mcp.json
+agent/mcp-auth.json
+agent/mcp-auth-refresh-*.lock/
 agent/mcp-adapter.json
 agent/USER_PROFILE.local.md
 web-search.json
@@ -20,6 +22,7 @@ agent/models-store.json
 agent/mode-settings.json
 agent/mcp-cache.json
 agent/mcp-npx-cache.json
+agent/mcp.log.1
 agent/trust.json
 agent/harness/
 agent/logs/

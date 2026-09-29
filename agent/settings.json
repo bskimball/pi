@@ -8,9 +8,6 @@
     "npm:pi-intercom",
     "npm:pi-claude-bridge"
   ],
-  "skills": [
-    "../node_modules/pi-mcp-adapter/skills"
-  ],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",

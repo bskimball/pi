@@ -166,7 +166,7 @@ These extend the base install and are not required to try modes/UI:
 - **Browser automation** (`/browser`) — attaches to a dedicated, separately profiled debug Chrome on CDP port 29300 for co-browsing and live-page checks. Requires that Chrome to be launched with `--remote-debugging-port=29300` once; see [`agent/skills/agent-browser/SKILL.md`](agent/skills/agent-browser/SKILL.md).
 - **Deploy** (`/deploy`) — delegates lint/format/verify/deploy to `stevedore` against the actual dirty worktree, not a hardcoded pipeline.
 - **Image generation** (Picasso, `agent/skills/generate-image/`) — needs a configured image-capable model; see the skill for its fallback chain.
-- **MCP servers** (`agent/mcp.json`) — optional, gitignored; a minimal example lives at [`agent/mcp.example.json`](agent/mcp.example.json). See [CONFIGURATION.md](CONFIGURATION.md#agentmcpjson-local-custom-mcp-servers).
+- **MCP servers** (`agent/mcp.json`) — optional, gitignored; a minimal example lives at [`agent/mcp.example.json`](agent/mcp.example.json). See [CONFIGURATION.md](CONFIGURATION.md#agentmcpjson-upstream-pi-mcp-servers).
 - **Web search** (`web_search`/`fetch_content`) — optional, needs an Exa API key via `web-search.json` or `EXA_API_KEY`; example at [`web-search.example.json`](web-search.example.json). `fetch_content` works without a key.
 - **Custom models/providers** (`agent/models.json`) — optional, gitignored; example at [`agent/models.example.json`](agent/models.example.json).
 - **LSP navigation** — uses language servers already on `PATH`; none of this is installed or required for basic use.
@@ -190,10 +190,10 @@ Start with a working Pi model provider; add these integrations only when you nee
 2. Install dependencies from the clone root:
 
    ```bash
-   npm install --legacy-peer-deps
+   npm install
    ```
 
-   The flag is required: the locked `pi-mcp-adapter@2.32.1` still declares a peer on `@earendil-works/pi-ai@^0.84.1`, which npm's caret range excludes against the locked `0.85.1` line. See [CONFIGURATION.md](CONFIGURATION.md) for the full peer-conflict note.
+   MCP is built into Pi (0.99.0+); no adapter package is required. See [CONFIGURATION.md](CONFIGURATION.md#agentmcpjson-upstream-pi-mcp-servers) for native server setup and validation.
 
 3. Launch the pinned binary from your target project directory, with `PI_CODING_AGENT_DIR` pointed at this clone's `agent/` folder. Replace the example paths with **absolute** paths. Use a dedicated terminal for the trial and close it afterward; the PowerShell environment assignment lasts for that terminal session.
 
@@ -240,10 +240,8 @@ Copying an example is a starting point, not a drop-in config: placeholders need 
 2. Install dependencies:
 
    ```bash
-   npm install --legacy-peer-deps
+   npm install
    ```
-
-   See [Setup](#setup) above (dependency install step) for why the flag is needed.
 
 3. Restore the ignored local configuration files from their tracked examples (see [CONFIGURATION.md](CONFIGURATION.md) for field details):
 

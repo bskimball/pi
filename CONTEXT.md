@@ -133,7 +133,7 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; kit receipt chrome on `browser_attach`; the kit Observatory engine launches featured pathways.
 - User profile: loader owned directly by `user-profile.ts`.
 - `@` path overlay: standalone `at-path-complete.ts`; lists on-disk children for scoped `@dir/` mentions so gitignored folders (for example `files/`) appear in autocomplete. Bare `@foo` stays with FFF/stock.
-- MCP adapter: standalone `mcp-adapter.ts`; kit receipt chrome on `mcp` / `mcpScript` (overrides adapter renderers). Direct and namespace MCP tools keep adapter chrome.
+- MCP: Pi built-in support reads `agent/mcp.json`; default codemode exposure and native rendering. The kit does not override MCP or codemode receipts. Local `mcp-scripting-recipes` documents native discovery and composition.
 - Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; kit receipt chrome on `worktree`.
 - Agent Catalog: `packages/ui-kit/internal/runtime/agent-discovery.ts`. Task spawn and Observatory listing are adapters over it.
 

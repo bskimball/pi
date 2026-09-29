@@ -7,7 +7,6 @@ import { installGraphifyReceipts } from "./internal/presentation/graphify-receip
 import { installIntercomReceipts } from "./internal/presentation/intercom-receipt.ts";
 import { installJevReceipts } from "./internal/presentation/jev-receipt.ts";
 import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
-import { installMcpReceipts } from "./internal/presentation/mcp-receipt.ts";
 import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
 import { installPowerShellReceipts } from "./internal/presentation/powershell-receipt.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
@@ -42,7 +41,6 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
   installWebSearchReceipts();
   installWorktreeReceipts();
   installBrowserAttachReceipts();
-  installMcpReceipts();
   installBgProcessReceipts(pi);
 }
 
