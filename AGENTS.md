@@ -45,7 +45,6 @@ agent/extensions/
 ├── web-search.ts                          Exa search + fetch_content
 ├── jev/                     → index.ts              Advisory Jev Choice/Score/Noul classifier (single tool)
 ├── at-path-complete.ts                    scoped @ listing for gitignored paths
-├── claude-bridge-sonnet-5-5.ts            TEMPORARY: adds claude-sonnet-5-5 to claude-bridge; delete once pi-ai ships it (it notifies)
 └── test/                                  cross-extension tests
 ```
 
