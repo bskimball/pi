@@ -752,7 +752,7 @@ export default function (pi: ExtensionAPI) {
   const apexAgentCatalog = apexAgentList(agents);
   const orchestrateAgentCatalog = orchestrateAgentList(agents);
   const sidekickDef = agents.get("sidekick");
-  const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Prefer the synchronous \`task\` tool for a single bounded result in-line.
+  const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Use synchronous \`task\` for one blocking result, such as a final verification gate or review verdict, when no specific independent lead work is ready and the engagement needs no follow-up. Use task_start when specific independent work is ready or the engagement needs steering or follow-up. If a worker is already started and no independent work is ready, call task_wait as the very next action; do not invent work to fill the wait.
 
 Available agents:
 ${apexAgentCatalog}
@@ -2023,8 +2023,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
       "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
-      "Use the synchronous task tool when you need one final report before continuing.",
-      "After task_start, do useful independent work, then one task_wait. Default wait is 600s, 900s for machinist/artisan, 1200s for oracle/stevedore/inspector. A timeout heartbeat is not a poll cue: do independent work before waiting the same generation again.",
+      "Use synchronous task for one blocking result, such as a final verification gate or review verdict, when no specific independent lead work is ready and the engagement needs no follow-up.",
+      "After task_start, do specific independent work already ready, then one task_wait. If no independent work is ready, call task_wait as the very next action; do not invent work to fill the wait. Default wait is 600s, 900s for machinist/artisan, 1200s for oracle/stevedore/inspector. A timeout heartbeat is not a poll cue: do independent work before waiting the same generation again.",
       "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
