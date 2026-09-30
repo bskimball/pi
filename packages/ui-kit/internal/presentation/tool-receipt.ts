@@ -322,6 +322,13 @@ export interface ToolSpec<TArgs> {
   stats?: (result: any, args: TArgs, theme: ReceiptTheme) => string;
   /** 2-4 rail-indented collapsed preview lines. */
   preview?: (output: string, result: any, args: TArgs) => string[];
+  /**
+   * Collapsed lines shown while the tool is still running
+   * (isPartial && !isError). Same rail-indented treatment as preview.
+   * Preview hooks cannot color (their lines pass through cleanInline),
+   * so use plain-text status words here, never ANSI.
+   */
+  partialPreview?: (result: any, args: TArgs) => string[];
   /** Expanded (ctrl+o) body lines. Defaults to the bounded raw output. */
   body?: (
     output: string,
@@ -528,7 +535,29 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
         return elapsed ? fitLine(left, elapsed, width) : left;
       };
 
-      if (runningNow) return stableText(header);
+      const indent = (line: string) => `  ${theme.fg("dim", TREE.rail)} ${line}`;
+
+      if (runningNow) {
+        let partialLines: string[];
+        try {
+          partialLines = spec.partialPreview?.(result, context.args) ?? [];
+        } catch (error) {
+          reportRenderFailure(`${surface}-partial`, error);
+          partialLines = [];
+        }
+        const partial = partialLines
+          .slice(0, previewLimit)
+          .map((line) => safeTruncateToWidth(line, 400))
+          .map((line) => cleanInline(line, 400))
+          .filter(Boolean);
+        if (!partial.length) return stableText(header);
+        const rendered = partial.map((line) =>
+          indent(theme.fg("toolOutput", line)),
+        );
+        return stableText(
+          (width: number) => `${header(width)}\n${rendered.join("\n")}`,
+        );
+      }
       if (!hasBody && !expandExtra) return stableText(header);
 
       if (options.expanded) {
@@ -566,7 +595,6 @@ export function toolRenderers<TArgs>(spec: ToolSpec<TArgs>) {
 
       if (!hasBody && !spec.preview) return stableText(header);
 
-      const indent = (line: string) => `  ${theme.fg("dim", TREE.rail)} ${line}`;
       let previewLines: string[];
       try {
         if (context.isError && hasBody) {

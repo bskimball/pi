@@ -133,7 +133,8 @@ Noninteractive tests prove type/runtime contracts, not sustained Windows Termina
 - Browser/deploy pathways: `prompt-commands.ts` plus `prompt-commands/featured-commands.ts`; kit receipt chrome on `browser_attach`; the kit Observatory engine launches featured pathways.
 - User profile: loader owned directly by `user-profile.ts`.
 - `@` path overlay: standalone `at-path-complete.ts`; lists on-disk children for scoped `@dir/` mentions so gitignored folders (for example `files/`) appear in autocomplete. Bare `@foo` stays with FFF/stock.
-- MCP: Pi built-in support reads `agent/mcp.json`; default codemode exposure and native rendering. The kit does not override MCP or codemode receipts. Local `mcp-scripting-recipes` documents native discovery and composition.
+- MCP: Pi built-in support reads `agent/mcp.json`; default codemode exposure. The kit attaches receipt chrome on `mcp__<server>__<tool>` proxies (compact `server/tool key=value` headers, replacing owner chrome), `list_mcp_resources` / `list_mcp_resource_templates` (counts plus `name uri` lines, parsed from the JSON text), and `read_mcp_resource`. Local `mcp-scripting-recipes` documents native discovery and composition.
+- Codemode + tool discovery: kit receipt chrome on `codemode` (nested tool names in the header, per-call status lines, script header stripped; replaces owner chrome) and `tool_search` (query plus `N loaded`).
 - Git worktrees: standalone `worktree.ts` plus `worktree/internal/`; kit receipt chrome on `worktree`.
 - Agent Catalog: `packages/ui-kit/internal/runtime/agent-discovery.ts`. Task spawn and Observatory listing are adapters over it.
 
