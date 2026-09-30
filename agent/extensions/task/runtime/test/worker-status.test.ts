@@ -5,6 +5,7 @@ import {
   formatCompactWorkerStatus,
   formatSettledResult,
   formatWaitHeartbeat,
+  deadWorkerConnectionMessage,
   type WorkerStatusSnapshot,
 } from "../worker-status.ts";
 
@@ -108,6 +109,42 @@ describe("formatWaitHeartbeat", () => {
 });
 
 describe("formatSettledResult", () => {
+  it("marks killed empty reports with eight bounded unverified activities", () => {
+    const state = snapshot({ lifecycle: "failed", latestAssistantText: "", killReason: "exceeded 60 turns",
+      recent: Array.from({ length: 10 }, (_, index) => ({ tool: `tool_${index}`, summary: "argument".repeat(100) })) });
+    const result = formatSettledResult("", state);
+    assert.match(result.text, /^INCOMPLETE: exceeded 60 turns\. No final report\. Recent activity \(unverified\):/);
+    assert.equal(result.text.split("\n").length, 9);
+    assert.doesNotMatch(result.text, /tool_0:|tool_1:|\(empty\)/);
+    assert.match(result.text, /tool_9:/);
+    assert.ok(result.text.length <= SETTLED_RESULT_CHARS);
+    assert.match(formatCompactWorkerStatus(state), /INCOMPLETE:/);
+  });
+
+  it("preserves the incomplete heading when a partial report is truncated", () => {
+    const result = formatSettledResult("line\n".repeat(500), { killReason: "idle for 300s", recent: [] });
+    assert.match(result.text, /^INCOMPLETE: idle for 300s\./);
+    assert.ok(result.text.length <= SETTLED_RESULT_CHARS);
+    assert.ok(result.text.split("\n").length <= 120);
+    assert.equal(result.truncated, true);
+  });
+
+  it("leaves settled successful reports unchanged even with a rebind reason", () => {
+    const text = formatCompactWorkerStatus(snapshot({ lifecycle: "settled", killReason: "rebound after parent exit", latestResult: "PASS" }));
+    assert.match(text, /--- result \(full\) ---\nPASS$/);
+    assert.doesNotMatch(text, /INCOMPLETE:/);
+  });
+
+  it("explains dead connections and preserves recovery instructions", () => {
+    for (const worker of [
+      { id: "task_1", exitCode: 3, killReason: undefined },
+      { id: "task_1", exitCode: null, killReason: "exceeded 60 turns" },
+    ]) {
+      const text = deadWorkerConnectionMessage(worker);
+      assert.ok(text.includes(`(${worker.killReason ?? "process exited code=3"})`));
+      assert.match(text, /Its last report remains available via task_wait; start a new unit with task_start and pass that report as evidence\./);
+    }
+  });
   it("keeps the tail of a long specialist report", () => {
     const bound = formatSettledResult(`${"keep\n".repeat(200)}conclusion`);
     assert.equal(bound.truncated, true);

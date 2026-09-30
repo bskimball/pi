@@ -110,7 +110,8 @@ function liveBody(snapshot: WorkerStatusSnapshot): string[] {
 
 function settledBody(snapshot: WorkerStatusSnapshot): string[] {
   const bound = boundText(
-    snapshot.latestResult || snapshot.latestAssistantText,
+    formatSettledResult(snapshot.latestResult || snapshot.latestAssistantText,
+      snapshot.lifecycle === "failed" ? snapshot : undefined).text,
     RESULT_PREVIEW_CHARS,
     RESULT_PREVIEW_LINES,
   );
@@ -149,9 +150,29 @@ export function formatWaitHeartbeat(
 }
 
 /** Bounded specialist report attached once, when a generation settles. */
-export function formatSettledResult(value: unknown): {
-  text: string;
-  truncated: boolean;
-} {
-  return boundText(value, SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES);
+export function formatSettledResult(
+  value: unknown,
+  incomplete?: { killReason?: string; recent: WorkerStatusActivity[] },
+): { text: string; truncated: boolean } {
+  if (!incomplete?.killReason) {
+    return boundText(value, SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES);
+  }
+  const heading = `INCOMPLETE: ${cleanOneLine(incomplete.killReason, 200)}.`;
+  if (typeof value !== "string" || !value.trim()) {
+    return boundText([
+      `${heading} No final report. Recent activity (unverified):`,
+      ...incomplete.recent.slice(-8).map((activity) =>
+        `- ${cleanOneLine(activity.tool, 40)}: ${cleanOneLine(activity.summary, ACTIVITY_CAP)}`),
+      ...(incomplete.recent.length ? [] : ["- (none recorded)"]),
+    ].join("\n"), SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES);
+  }
+  const result = boundText(value, SETTLED_RESULT_CHARS - heading.length - 1, SETTLED_RESULT_LINES - 1);
+  return { text: `${heading}\n${result.text}`, truncated: result.truncated };
+}
+
+export function deadWorkerConnectionMessage(
+  worker: { id: string; killReason?: string; exitCode: number | null },
+): string {
+  const reason = cleanOneLine(worker.killReason ?? `process exited code=${worker.exitCode ?? "null"}`, 200);
+  return `${worker.id} has no live RPC connection (${reason}). Its last report remains available via task_wait; start a new unit with task_start and pass that report as evidence.`;
 }

@@ -48,6 +48,8 @@ export interface RpcResponse {
 export class RpcClient {
   readonly child: ChildProcessWithoutNullStreams;
   readonly pid: number | undefined;
+  /** Any stdout, including incomplete/invalid records, makes replay unsafe. */
+  receivedOutput = false;
   private nextReq = 1;
   private pending = new Map<string, PendingRequest>();
   private stderrText = "";
@@ -71,6 +73,9 @@ export class RpcClient {
     this.pid = this.child.pid;
     writeLastPhase(`rpc:spawned pid=${String(this.pid ?? "none")}`);
 
+    this.child.stdout.on("data", (chunk: Buffer) => {
+      if (chunk.length) this.receivedOutput = true;
+    });
     this.stdoutReader = attachJsonlReader(this.child.stdout, (line) => {
       this.handleStdoutLine(line);
     });

@@ -164,6 +164,7 @@ import {
   SETTLED_RESULT_CHARS,
   formatCompactWorkerStatus,
   formatSettledResult,
+  deadWorkerConnectionMessage,
   formatWaitHeartbeat,
   type WorkerStatusSnapshot,
 } from "./runtime/worker-status.ts";
@@ -1486,6 +1487,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       fusion?: boolean;
       fusionParentSessionId?: string;
       resumeSessionFile?: string;
+      startupRetried?: boolean;
     },
   ): Promise<{ worker?: Worker; error?: string; fusionObserved?: FusionObservedIdentity; priorContextTokens?: number }> => {
     const identity = params.rebind
@@ -1539,6 +1541,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       turns: 0,
       maxTurns,
       timeoutMs,
+      hardTimeoutMs: params.fusion ? undefined : timeoutMs,
       sessionDir,
       pendingSteer: 0,
       pendingFollowUp: 0,
@@ -1772,7 +1775,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         PROMPT_ACCEPT_TIMEOUT_MS,
       );
       if (!response.success) {
-        const message = response.error ?? "prompt rejected";
+        const stderr = cleanOneLine(stderrDiagnostic(client.stderr.text) ?? client.stderr.text, 600);
+        const message = `${response.error ?? "prompt rejected"}${stderr ? `; stderr: ${stderr}` : ""}`;
         worker.modelError = message;
         pushError(worker, message);
         if (params.fusion) {
@@ -1802,7 +1806,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const transportError = error instanceof Error ? error.message : String(error);
+      const stderr = cleanOneLine(stderrDiagnostic(client.stderr.text) ?? client.stderr.text, 600);
+      const message = `${transportError}${stderr ? `; stderr: ${stderr}` : ""}`;
       worker.modelError = message;
       pushError(worker, message);
       if (params.fusion) {
@@ -1810,6 +1816,17 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         // Close it before releasing the lead's single-writer gate.
         closeWorker(worker, `Fusion prompt acceptance unknown: ${message}`, "sync");
         return { worker, error: `${id} failed to accept prompt: ${message}` };
+      }
+      if (!params.startupRetried && client.isClosed && !client.receivedOutput &&
+          transportError.startsWith("RPC process exited (code=")) {
+        // A silent exit is the only startup transport failure we replay.
+        // Use a fresh registry identity/session; never attach to dead pipes.
+        closeWorker(worker, `startup process exited: ${message}`, "sync");
+        workers.delete(instanceId);
+        client.dispose();
+        const retry = await spawnWorker(def, { ...params, startupRetried: true });
+        if (retry.error) retry.error += " (retried once)";
+        return retry;
       }
       const fallbackResult = await retryModelFallback(worker);
       if (fallbackResult !== "retried") {
@@ -2435,7 +2452,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         digest.push(
           `step ${i + 1} ${ok ? "ok" : "failed"} ${step.agent} · ${elapsed} · ${reportLine}`,
         );
-        const bound = formatSettledResult(snapshot.resultText);
+        const bound = formatSettledResult(snapshot.resultText,
+          worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
         lastReport = bound.text;
         prevText = boundText(bound.text, SETTLED_RESULT_CHARS, Number.POSITIVE_INFINITY).text;
         closeWorker(worker, "task_chain step complete", "sync");
@@ -2781,7 +2799,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
       if (!worker.client || worker.client.isClosed) {
         return textResult(
-          `${id} has no live RPC connection.`,
+          deadWorkerConnectionMessage(worker),
           true,
           sendDetails("rejected", "no live RPC connection"),
         );
@@ -3049,6 +3067,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       if (alreadySettled) {
         const bound = formatSettledResult(
           worker.latestResult || worker.latestAssistantText,
+          worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined,
         );
         return textResult(
           [
@@ -3197,7 +3216,8 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         };
       }
 
-      const bound = formatSettledResult(snapshot.resultText);
+      const bound = formatSettledResult(snapshot.resultText,
+        worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
       return textResult(
         [
           `${id} settled (generation ${snapshot.generation}).`,
@@ -3706,7 +3726,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       }
       if (worker.closed || !worker.client || worker.client.isClosed) {
         return textResult(
-          `${id} has no live RPC connection.`,
+          deadWorkerConnectionMessage(worker),
           true,
           replyDetails("rejected", "no live RPC connection"),
         );

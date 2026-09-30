@@ -105,6 +105,8 @@ export interface RuntimeWorker extends CapWorker {
   lastEventAt?: number;
   idleTimer?: NodeJS.Timeout;
   hardTimer?: NodeJS.Timeout;
+  /** Per-generation budget; unset for persistent Fusion workers. */
+  hardTimeoutMs?: number;
   abortTimer?: NodeJS.Timeout;
   /**
    * Persistent workers (Fusion sidekick) track phase but never arm an idle
@@ -430,6 +432,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
     this.clearIdle(worker);
+    this.clearHard(worker);
     this.clearAbort(worker);
     this.closeActivities(
       worker,
@@ -513,6 +516,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     worker.exitCode = null;
     worker.lifecycle = "running";
     this.touch(worker);
+    if (worker.hardTimeoutMs != null) this.armHard(worker, worker.hardTimeoutMs);
     this.armIdle(worker);
   }
 

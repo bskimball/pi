@@ -342,6 +342,34 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearIdle(normal);
   });
 
+  it("clears the generation hard budget on settlement and re-arms prompt/follow-up generations", (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker({ hardTimeoutMs: 50 });
+    const kills: string[] = [];
+    runtime.forceKill = (_item, reason) => { kills.push(reason); };
+    runtime.armHard(item, item.hardTimeoutMs!);
+    runtime.settleGeneration(item, "settled", {}, hooks());
+    assert.equal(item.hardTimer, undefined);
+    assert.equal(item.countsTowardCap, true);
+    t.mock.timers.tick(100);
+    assert.deepEqual(kills, []);
+    runtime.startGeneration(item); // task_send mode=prompt uses this entry point
+    assert.notEqual(item.hardTimer, undefined);
+    t.mock.timers.tick(50);
+    assert.deepEqual(kills, ["exceeded 0.05s time limit"]);
+    runtime.settleGeneration(item, "failed", { killReason: kills[0] }, hooks());
+    assert.equal(item.hardTimer, undefined);
+    runtime.handleEvent(item, { type: "agent_start" }, hooks()); // queued follow_up
+    assert.notEqual(item.hardTimer, undefined);
+    t.mock.timers.tick(50);
+    assert.equal(kills.length, 2);
+    runtime.clearTimers(item);
+    const fusion = worker({ disableIdleTimeout: true });
+    runtime.startGeneration(fusion);
+    assert.equal(fusion.hardTimer, undefined);
+  });
+
   it("derives idle phase from the activity ledger", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker();
