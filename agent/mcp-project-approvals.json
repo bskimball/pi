@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "approvals": [
+    {
+      "projectRoot": "C:\\Users\\bskim\\Work",
+      "serverName": "hal",
+      "definitionHash": "14c054bc735017f4a704098f903072b8848fa7d242c98e70a0653cf8685f34b9",
+      "approvedAt": "2026-09-28T18:58:32.629Z"
+    },
+    {
+      "projectRoot": "C:\\Users\\bskim\\Work",
+      "serverName": "BLI400A",
+      "definitionHash": "b696d58e351192e2550c140ebbd58daa43f11db26b50683d085eba3a71f78a28",
+      "approvedAt": "2026-09-28T18:58:34.969Z"
+    },
+    {
+      "projectRoot": "C:\\Users\\bskim\\Work",
+      "serverName": "BLI400C",
+      "definitionHash": "3aec47bcfab74b9a7178ec4c7972adf00041303f6bdaa8eb970d8739cb34fa01",
+      "approvedAt": "2026-09-28T18:58:35.781Z"
+    },
+    {
+      "projectRoot": "C:\\Users\\bskim\\Dev\\bdkinc-website",
+      "serverName": "shadcn",
+      "definitionHash": "8a84be5f526ee7b67e6ab60d201b8d7f1beaccf25725fe5eb268b09dc496d166",
+      "approvedAt": "2026-09-28T20:32:14.446Z"
+    }
+  ]
+}

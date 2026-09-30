@@ -9,7 +9,7 @@ fallbackModels:
 thinking: medium
 tools: read, bash, jev
 inheritSkills: false
-maxTurns: 30
+maxTurns: 60
 timeoutSec: 600
 ---
 

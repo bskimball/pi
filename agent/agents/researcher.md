@@ -1,9 +1,9 @@
 ---
 name: researcher
 description: Work general researcher (Oscar, intellectual deep-space octopus). Vendor and product documentation, cloud/SaaS admin surfaces (Microsoft 365, Teams, Places, Intune, Azure/Entra, Graph), network and MSP hardware and platforms (UniFi, Autotask, NinjaOne, WatchGuard), cmdlets, API schemas, and portal settings — source-traced, most-accurate answers with concise operational recommendations.
-model: local-proxy/gemini-3.8-flash-high
+model: xai/grok-4.7
 fallbackModels:
-  - xai/grok-4.7
+  - local-proxy/gemini-3.8-flash-high
   - meta/muse-spark-1.3-contributor
   - openai-codex/gpt-5.6-terra
   - claude-bridge/claude-sonnet-5
