@@ -7,7 +7,7 @@ fallbackModels:
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: medium
-tools: read, bash, jev
+tools: read, bash, jev, browser_attach, codemode, tool_search, mcp__chrome_devtools__click, mcp__chrome_devtools__close_page, mcp__chrome_devtools__drag, mcp__chrome_devtools__emulate, mcp__chrome_devtools__evaluate_script, mcp__chrome_devtools__fill, mcp__chrome_devtools__fill_form, mcp__chrome_devtools__get_console_message, mcp__chrome_devtools__get_network_request, mcp__chrome_devtools__handle_dialog, mcp__chrome_devtools__hover, mcp__chrome_devtools__lighthouse_audit, mcp__chrome_devtools__list_console_messages, mcp__chrome_devtools__list_network_requests, mcp__chrome_devtools__list_pages, mcp__chrome_devtools__navigate_page, mcp__chrome_devtools__new_page, mcp__chrome_devtools__performance_analyze_insight, mcp__chrome_devtools__performance_start_trace, mcp__chrome_devtools__performance_stop_trace, mcp__chrome_devtools__press_key, mcp__chrome_devtools__resize_page, mcp__chrome_devtools__select_page, mcp__chrome_devtools__take_heapsnapshot, mcp__chrome_devtools__take_screenshot, mcp__chrome_devtools__take_snapshot, mcp__chrome_devtools__type_text, mcp__chrome_devtools__upload_file, mcp__chrome_devtools__wait_for
 inheritSkills: false
 maxTurns: 60
 timeoutSec: 600
@@ -30,7 +30,11 @@ node "$BROWSER_CONNECT" status | tabs | open <url>
 agent-browser --cdp 29300 snapshot -i
 ```
 
-Never run plain `agent-browser` without `--cdp <port>` — that can spawn a ghost unauthenticated browser. Never autoConnect or port 29242. Never start/stop a chrome-devtools CLI daemon. Never close the dedicated Chrome. If the chosen endpoint is down or logged out, stop and report — only the user can complete a login.
+Never run plain `agent-browser` without `--cdp <port>` — that can spawn a ghost unauthenticated browser. Never autoConnect or port 29242. Never start/stop a chrome-devtools CLI daemon. Never close the dedicated Chrome.
+
+**Pinned tab.** Pi sets a unique `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PIN_TAB=1`; keep them and pass no `--session`. Each session opens its own fresh tab on connect, so concurrent agents share auth but not tabs. Work only in that tab; never adopt user or other-agent tabs. When done, run `agent-browser --cdp <port> tab close` with no numeric id (never `agent-browser close`); on `tab_gone` do not retry or close neighbors. For another task afterward, run `agent-browser --cdp <port> tab new`. The chrome-devtools MCP fallback is not pinned: `list_pages` and `select_page` the intended page before acting.
+
+If the chosen endpoint is down or logged out, stop and report — only the user can complete a login.
 
 Verify only the routes, states, interactions, and viewport sizes named in the brief. Prefer DOM or accessibility snapshots and focused browser measurements for structure and behavior; take screenshots only when visual judgment or failure evidence requires them. Store temporary screenshots outside the repository unless the parent explicitly requests an artifact path. Do not perform destructive, irreversible, externally visible, or account-changing browser actions. Stop before a final confirmation unless the brief explicitly authorizes the mutation and provides approved test data.
 

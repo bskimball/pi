@@ -7,7 +7,7 @@ fallbackModels:
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low
-tools: read, ffgrep, fffind, ls, bash, edit, write
+tools: read, ffgrep, fffind, ls, bash, edit, write, codemode
 inheritSkills: false
 maxTurns: 45
 ---

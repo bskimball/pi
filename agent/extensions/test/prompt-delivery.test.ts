@@ -57,6 +57,22 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
       build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: import.meta.resolve("@earendil-works/pi-coding-agent"), external: true }));
     } }] });
     const { PromptCaptures, projectPromptCapture } = await import(pathToFileURL(bridgeBundle).href);
+    const transcriptBundle = join(dir, "transcript.mjs");
+    await build({ entryPoints: [join(bridgePackage, "src/transcript.ts")], outfile: transcriptBundle, bundle: true, format: "esm", platform: "node", plugins: [{ name: "pi-runtime", setup(build) {
+      build.onResolve({ filter: /^@earendil-works\/pi-ai$/ }, () => ({ path: import.meta.resolve("@earendil-works/pi-ai"), external: true }));
+    } }] });
+    const { toBridgeContext } = await import(pathToFileURL(transcriptBundle).href);
+    const sections = { preamble: "Base", addendum: "Instructions", project_context: "Project", skills: "Skills", cwd: "Directory", mcp_servers: "MCP servers" };
+    const canonical = Object.values(sections).join("\n\n");
+    const replayed = toBridgeContext({ messages: [
+      { role: "system", content: "", sections, timestamp: 0 },
+      { role: "system", content: "", sections: { addendum: null, mcp_servers: null }, timestamp: 1 },
+      { role: "system", content: "", sections: { addendum: sections.addendum, mcp_servers: sections.mcp_servers }, timestamp: 2 },
+    ] });
+    assert.equal(replayed.systemPrompt, canonical, "restored sections retain canonical order");
+    const replayCaptures = new PromptCaptures();
+    replayCaptures.record(canonical, { custom: "Base", append: "Instructions", contextFiles: [], skills: [] });
+    assert.ok(replayCaptures.resolve(replayed.systemPrompt), "restored prompt resolves its original capture");
     writeFileSync(join(dir, "USER_PROFILE.local.md"), "Profile delivery token");
     writeFileSync(join(dir, "jev.json"), JSON.stringify({ apiKey: "test-only", routingAdvisory: { enabled: true } }));
     globalThis.fetch = async (_url, init) => {

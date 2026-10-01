@@ -2,6 +2,7 @@
 // strict-orchestrator mode. Browser/deploy implementation is neutral shared
 // runtime so Apex Observatory can launch it without importing this extension.
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,6 +194,9 @@ export const FUSION_SYSTEM_BLOCK = `\n\n${readFileSync(join(dirname(fileURLToPat
 export const WORK_SYSTEM_PROMPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "work.md"), "utf8").trim();
 
 export default function (pi: ExtensionAPI): void {
+  // Replace inherited ownership so RPC children never reuse their parent's tab.
+  process.env.AGENT_BROWSER_SESSION = `pi-${process.pid}-${randomUUID()}`;
+  process.env.AGENT_BROWSER_PIN_TAB = "1";
   registerBrowserAttachTool(pi);
   registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK);
 

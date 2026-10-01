@@ -28,6 +28,21 @@ Use `node "$BROWSER_CONNECT" open <url>` when a URL needs to be opened before in
 
 Expected mode is `classic` on port `29300`. If classic HTTP discovery is unavailable, stop and report the blocker. Do not attach to another browser or retry through a different mechanism.
 
+## Pinned tab
+
+Concurrent agents share this Chrome, so each works in its own pinned tab. Pi startup sets a unique `AGENT_BROWSER_SESSION` (`pi-<pid>-<uuid>`) and `AGENT_BROWSER_PIN_TAB=1`; `agent-browser` (pinning since 0.34.0, installed 0.38.1) and helper subprocesses, including RPC worker Pi processes, inherit both. A pinned session opens a fresh tab on connect and ignores tabs opened by others. This isolates tabs, not cookies: authentication stays shared.
+
+- Keep the inherited `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PIN_TAB`; pass no `--session` and leave pinning on.
+- Work only in your pinned tab. Tabs from the user or other agents are off limits; do not switch to or adopt them.
+- When finished, run `agent-browser --cdp 29300 tab close` with no numeric id; it closes only your pinned tab. On `tab_gone` the tab is already closed: do not retry or close a neighbor.
+- For another task after closing, run `agent-browser --cdp 29300 tab new` to bind a fresh pinned tab.
+- Outside Pi (plain shell or standalone helper), set isolation before the first command:
+  ```bash
+  export AGENT_BROWSER_SESSION="agent-$$-$(node -e 'console.log(crypto.randomUUID())')"
+  export AGENT_BROWSER_PIN_TAB=1
+  ```
+- The chrome-devtools MCP fallback is not pinned: call `list_pages` and `select_page` for the intended page before acting; never assume the active page.
+
 ## Hard rules
 
 - Every CLI invocation MUST include `--cdp 29300`:
@@ -40,7 +55,7 @@ Expected mode is `classic` on port `29300`. If classic HTTP discovery is unavail
 - Never run plain `agent-browser`. It can launch a ghost unauthenticated browser.
 - Never use `--auto-connect`, `--profile`, `--session-name`, `--state`, `profiles`, or an auth vault. Authentication already lives in the dedicated profile.
 - Never run `agent-browser open <url>` without `--cdp 29300`; prefer the helper's `open` command.
-- Never run `agent-browser close` or stop the dedicated Chrome. If the user wants it closed, ask them to close the dedicated window manually. Never stop daily Chrome.
+- Never run `agent-browser close` (it closes the whole browser; use `tab close`) or stop the dedicated Chrome. If the user wants it closed, ask them to close the dedicated window manually. Never stop daily Chrome.
 - Never use daily Chrome UI debugging, autoConnect, or port `29242`. That path causes repeated **Allow** dialogs.
 - Never start, stop, or reuse a chrome-devtools CLI daemon. The configured chrome-devtools MCP already targets port `29300` and is fallback-only for console, network, performance, or accessibility work that the CLI cannot cover.
 - If Google or Microsoft is logged out during initial profile setup, run `node "$BROWSER_CONNECT" login` and ask the user to complete the one-time sign-in in the dedicated Chrome window. For any other logged-out site, stop and ask the user to authenticate in that window. Do not copy or extract authentication state.
