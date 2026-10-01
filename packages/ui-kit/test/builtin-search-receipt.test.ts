@@ -6,8 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
 import {
+  BUILTIN_FIND_TOOL,
   BUILTIN_GREP_TOOL,
   BUILTIN_LS_TOOL,
+  builtinFindReceiptArg,
+  builtinFindReceiptRenderers,
   builtinGrepReceiptArg,
   builtinGrepReceiptRenderers,
   builtinLsReceiptArg,
@@ -108,6 +111,80 @@ describe("apex builtin grep/ls receipts", () => {
     assert.equal(builtinLsReceiptArg({}, 80), ".");
     assert.equal(builtinLsReceiptArg({ path: "" }, 80), ".");
     assert.equal(builtinLsReceiptArg({ limit: 10 }, 80), ". limit 10");
+  });
+
+  it("formats compact find header arguments", () => {
+    assert.equal(builtinFindReceiptArg({ pattern: "*.ts" }, 80), "*.ts .");
+    assert.equal(
+      builtinFindReceiptArg({ pattern: "*.ts", path: "src/" }, 80),
+      "*.ts src/",
+    );
+    assert.equal(
+      builtinFindReceiptArg({ pattern: "**/*.spec.ts", path: "src", limit: 50 }, 80),
+      "**/*.spec.ts src limit 50",
+    );
+    assert.equal(builtinFindReceiptArg({ limit: 10 }, 80), "find . limit 10");
+    assert.equal(builtinFindReceiptArg(undefined, 80), "find .");
+    assert.equal(
+      builtinFindReceiptArg({ pattern: "*.ts", path: "agent\\extensions" }, 80),
+      "*.ts agent/extensions",
+    );
+  });
+
+  it("renders find stats only when details are present", () => {
+    const args = { pattern: "*.ts", path: "src" };
+    const plain = builtinFindReceiptRenderers
+      .renderResult(
+        { content: [{ type: "text", text: "a.ts\nb.ts" }] },
+        { expanded: false, isPartial: false },
+        theme,
+        context(args),
+      )
+      .render(80)
+      .join("\n");
+    assert.match(plain, /find/);
+    assert.doesNotMatch(plain, /limit/);
+
+    const limited = builtinFindReceiptRenderers
+      .renderResult(
+        {
+          content: [{ type: "text", text: "a.ts\nb.ts" }],
+          details: { resultLimitReached: 100 },
+        },
+        { expanded: false, isPartial: false },
+        theme,
+        context(args),
+      )
+      .render(80)
+      .join("\n");
+    assert.match(limited, /limit 100/);
+
+    const truncated = builtinFindReceiptRenderers
+      .renderResult(
+        {
+          content: [{ type: "text", text: "a.ts\nb.ts" }],
+          details: {
+            truncation: { truncated: true, truncatedBy: "lines", totalLines: 2500 },
+          },
+        },
+        { expanded: false, isPartial: false },
+        theme,
+        context(args),
+      )
+      .render(80)
+      .join("\n");
+    assert.match(truncated, /truncated 2500 lines/);
+
+    const empty = builtinFindReceiptRenderers
+      .renderResult(
+        { content: [{ type: "text", text: "No files found matching pattern" }] },
+        { expanded: false, isPartial: false },
+        theme,
+        context(args),
+      )
+      .render(80)
+      .join("\n");
+    assert.match(empty, /No files found/);
   });
 
   it("renders grep stats only when details are present", () => {
@@ -275,6 +352,18 @@ describe("apex builtin grep/ls receipts", () => {
     assert.match(ordered, /limit 50 · truncated 60000 bytes/);
   });
 
+  it("renders find receipts without boxes or JSON dumps", () => {
+    const findCtx = context({ pattern: "*.ts", path: "src" });
+    const findCall = builtinFindReceiptRenderers
+      .renderCall({ pattern: "*.ts", path: "src" }, theme, findCtx)
+      .render(80)
+      .join("\n");
+    assert.match(findCall, /find/);
+    assert.match(findCall, /\*\.ts src/);
+    assert.doesNotMatch(findCall, /┌|┐|└|┘/);
+    assert.doesNotMatch(findCall, /"pattern"/);
+  });
+
   it("renders grep and ls receipts without boxes or JSON dumps", () => {
     const grepCtx = context({ pattern: "toolRenderers", path: "agent/extensions" });
     const grepCall = builtinGrepReceiptRenderers
@@ -383,6 +472,38 @@ describe("apex builtin grep/ls receipts", () => {
       assert.equal(proto.getCallRenderer.call(lsComp), builtinLsReceiptRenderers.renderCall);
       assert.equal(proto.getRenderShell.call(lsComp), "self");
     });
+
+    const ownFindCall = () => ({ render: () => ["OWN-FIND-CALL"], invalidate() {} });
+    const ownFindResult = () => ({ render: () => ["OWN-FIND-RESULT"], invalidate() {} });
+    const findComp = {
+      toolName: BUILTIN_FIND_TOOL,
+      toolDefinition: {
+        name: BUILTIN_FIND_TOOL,
+        renderCall: ownFindCall,
+        renderResult: ownFindResult,
+      },
+    };
+
+    withApexUi("1", () => {
+      assert.equal(proto.getCallRenderer.call(findComp), builtinFindReceiptRenderers.renderCall);
+      assert.equal(
+        proto.getResultRenderer.call(findComp),
+        builtinFindReceiptRenderers.renderResult,
+      );
+      assert.equal(proto.getRenderShell.call(findComp), "self");
+      assert.equal(proto.hasRendererDefinition.call(findComp), true);
+    });
+
+    withApexUi("0", () => {
+      assert.equal(proto.getCallRenderer.call(findComp), ownFindCall);
+      assert.equal(proto.getResultRenderer.call(findComp), ownFindResult);
+      assert.equal(proto.getRenderShell.call(findComp), "default");
+    });
+
+    withApexUi("1", () => {
+      assert.equal(proto.getCallRenderer.call(findComp), builtinFindReceiptRenderers.renderCall);
+      assert.equal(proto.getRenderShell.call(findComp), "self");
+    });
   });
 
   it("renders real grep/ls ToolExecutionComponents as Apex receipts", () => {
@@ -433,6 +554,53 @@ describe("apex builtin grep/ls receipts", () => {
       assert.match(lsText, /a\.ts/);
       assert.doesNotMatch(lsText, /┌|┐|└|┘/);
       assert.ok(lsLines.every((line) => safeVisibleWidth(line) <= 80));
+    });
+  });
+
+  it("renders real find ToolExecutionComponents as Apex receipts", () => {
+    initTheme("dark");
+    withApexUi("1", () => {
+      installBuiltinReceipts();
+
+      const find = new ToolExecutionComponent(
+        "find",
+        "call-find-1",
+        { pattern: "*.ts", path: "src" },
+        { showImages: false },
+        { name: "find", renderCall: () => {}, renderResult: () => {} } as any,
+        stubUi() as any,
+        process.cwd(),
+      );
+      find.markExecutionStarted();
+      find.updateResult({
+        content: [{ type: "text", text: "src/a.ts\nsrc/b.ts" }],
+        isError: false,
+      });
+      const findLines = find.render(80);
+      const findText = findLines.join("\n");
+      assert.match(findText, /find/);
+      assert.match(findText, /\*\.ts src/);
+      assert.match(findText, /src\/a\.ts/);
+      assert.doesNotMatch(findText, /┌|┐|└|┘/);
+      assert.ok(findLines.every((line) => safeVisibleWidth(line) <= 80));
+
+      const empty = new ToolExecutionComponent(
+        "find",
+        "call-find-empty",
+        { pattern: "*.zzz", path: "src" },
+        { showImages: false },
+        { name: "find", renderCall: () => {}, renderResult: () => {} } as any,
+        stubUi() as any,
+        process.cwd(),
+      );
+      empty.markExecutionStarted();
+      empty.updateResult({
+        content: [{ type: "text", text: "No files found matching pattern" }],
+        isError: false,
+      });
+      const emptyText = empty.render(80).join("\n");
+      assert.match(emptyText, /find/);
+      assert.match(emptyText, /No files found/);
     });
   });
 

@@ -3,6 +3,8 @@
 
 const FLEET_BUS_KEY = "__piTaskFleetBus";
 const WORKSPACE_OPEN_KEY = "__piAgentWorkspaceOpen";
+/** Same key as task/runtime/fleet-bus.ts FLEET_CONTROL_KEY; no cross-extension import. */
+const FLEET_CONTROL_KEY = "__piTaskFleetControl";
 const ITEM_CAP = 8;
 
 type WorkspaceRoot = typeof globalThis & {
@@ -160,6 +162,43 @@ export function publishDockAgents(items: readonly DockAgentItem[]): void {
       // Same isolation as subscribe.
     }
   }
+}
+
+/** task_send modes the peek/command control channel supports. */
+export type FleetControlMode = "steer" | "follow_up" | "prompt";
+
+/** Bounded outcome of one control call; message is sanitized to ~200 chars. */
+export interface FleetControlResult {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Peek/command control channel installed by the task extension. Mirror of
+ * task/runtime/fleet-bus.ts FleetControl; resolved through the shared global.
+ */
+export interface FleetControl {
+  send(id: string, mode: FleetControlMode, text: string): Promise<FleetControlResult>;
+  abort(id: string): Promise<FleetControlResult>;
+  close(id: string): Promise<FleetControlResult>;
+}
+
+/** The installed task control, or undefined when the extension is not loaded. */
+export function fleetControl(): FleetControl | undefined {
+  const root = globalThis as typeof globalThis & {
+    [FLEET_CONTROL_KEY]?: unknown;
+  };
+  const control = root[FLEET_CONTROL_KEY];
+  if (!control || typeof control !== "object") return undefined;
+  const candidate = control as Partial<FleetControl>;
+  if (
+    typeof candidate.send !== "function" ||
+    typeof candidate.abort !== "function" ||
+    typeof candidate.close !== "function"
+  ) {
+    return undefined;
+  }
+  return candidate as FleetControl;
 }
 
 export function resetDockAgents(): void {

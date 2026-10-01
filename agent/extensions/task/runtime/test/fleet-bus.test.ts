@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+  boundControlMessage,
   currentFleetSnapshot,
   fleetSnapshotKey,
+  FLEET_CONTROL_KEY,
+  installFleetControl,
   isAgentWorkspaceOpen,
   publishFleetSnapshot,
+  removeFleetControl,
   resetFleetBus,
   subscribeFleetSnapshot,
   WORKSPACE_OPEN_KEY,
+  type FleetControl,
 } from "../fleet-bus.ts";
+import { sendModeAllowed } from "../../async-task.ts";
 
 beforeEach(() => {
   resetFleetBus();
@@ -270,6 +276,111 @@ describe("fleet bus", () => {
     stop();
     publishFleetSnapshot([]);
     assert.deepEqual(seen, [0, 1]);
+  });
+
+  it("bounds control messages to a single short line", () => {
+    assert.equal(boundControlMessage("task_1 steer queued."), "task_1 steer queued.");
+    assert.equal(boundControlMessage("line one\nline two"), "line one line two");
+    assert.equal(boundControlMessage(""), "");
+    const long = boundControlMessage("x".repeat(500));
+    assert.ok(long.length <= 200, `bounded, got ${long.length}`);
+    assert.match(long, /\.\.\.$/);
+  });
+
+});
+
+describe("fleet control channel", () => {
+  type ControlRoot = typeof globalThis & {
+    [FLEET_CONTROL_KEY]?: FleetControl;
+  };
+
+  afterEach(() => {
+    delete (globalThis as ControlRoot)[FLEET_CONTROL_KEY];
+  });
+
+  function stubControl(): FleetControl {
+    return {
+      send: async () => ({ ok: true, message: "sent" }),
+      abort: async () => ({ ok: true, message: "aborted" }),
+      close: async () => ({ ok: true, message: "closed" }),
+    };
+  }
+
+  it("installs and only removes its own control object", () => {
+    const ours = stubControl();
+    installFleetControl(ours);
+    assert.equal((globalThis as ControlRoot)[FLEET_CONTROL_KEY], ours);
+    removeFleetControl(stubControl());
+    assert.equal(
+      (globalThis as ControlRoot)[FLEET_CONTROL_KEY],
+      ours,
+      "a foreign object must not uninstall the channel",
+    );
+    removeFleetControl(ours);
+    assert.equal((globalThis as ControlRoot)[FLEET_CONTROL_KEY], undefined);
+  });
+
+  it("pins the send-mode lifecycle matrix", () => {
+    for (const lifecycle of ["starting", "running", "retrying", "compacting", "aborting"] as const) {
+      assert.equal(sendModeAllowed(lifecycle, "steer"), true, `${lifecycle} accepts steer`);
+      assert.equal(sendModeAllowed(lifecycle, "prompt"), false, `${lifecycle} refuses prompt`);
+      assert.equal(sendModeAllowed(lifecycle, "follow_up"), true, `${lifecycle} accepts follow_up`);
+    }
+    for (const lifecycle of ["settled", "failed"] as const) {
+      assert.equal(sendModeAllowed(lifecycle, "steer"), false, `${lifecycle} refuses steer`);
+      assert.equal(sendModeAllowed(lifecycle, "prompt"), true, `${lifecycle} accepts prompt`);
+      assert.equal(sendModeAllowed(lifecycle, "follow_up"), true, `${lifecycle} accepts follow_up`);
+    }
+    assert.equal(sendModeAllowed("closed", "steer"), false, "closed refuses steer");
+    assert.equal(sendModeAllowed("closed", "prompt"), false, "closed refuses prompt");
+  });
+
+  it("routes the installed control through the shared tool functions", async () => {
+    // Load the real extension on a mock pi: installFleetControl runs at load,
+    // so the global object below is the one wired to executeTaskSend/Abort/Close.
+    const previousTaskUi = process.env.PI_TASK_UI;
+    process.env.PI_TASK_UI = "0";
+    try {
+      const mockPi = {
+        registerTool() {},
+        registerCommand() {},
+        registerMessageRenderer() {},
+        events: { on() {} },
+        on() {},
+        sendMessage() {},
+        appendEntry() {},
+        getThinkingLevel() {},
+      };
+      const mod = await import("../../async-task.ts");
+      (mod.default as (pi: unknown) => void)(mockPi);
+    } finally {
+      if (previousTaskUi === undefined) delete process.env.PI_TASK_UI;
+      else process.env.PI_TASK_UI = previousTaskUi;
+    }
+    const control = (globalThis as ControlRoot)[FLEET_CONTROL_KEY];
+    assert.ok(control, "extension load installs the control");
+    // No worker records exist in this process: every refusal below comes out
+    // of the same shared functions the tools execute, with identical text.
+    assert.deepEqual(await control.send("task_999", "steer", "hello"), {
+      ok: false,
+      message: 'Unknown worker "task_999".',
+    });
+    assert.deepEqual(await control.send("", "steer", "hello"), {
+      ok: false,
+      message: "id is required.",
+    });
+    assert.deepEqual(await control.send("task_999", "steer", "   "), {
+      ok: false,
+      message: "message is required.",
+    });
+    assert.deepEqual(await control.abort("task_999"), {
+      ok: false,
+      message: 'Unknown worker "task_999".',
+    });
+    assert.deepEqual(await control.close("task_999"), {
+      ok: false,
+      message: 'Unknown worker "task_999".',
+    });
   });
 
   it("exposes the Agents workspace-open flag Fusion Escape abort reads", () => {

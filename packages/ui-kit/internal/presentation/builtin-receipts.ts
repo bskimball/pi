@@ -28,6 +28,7 @@ export const BUILTIN_READ_TOOL = "read";
 export const BUILTIN_EDIT_TOOL = "edit";
 export const BUILTIN_GREP_TOOL = "grep";
 export const BUILTIN_LS_TOOL = "ls";
+export const BUILTIN_FIND_TOOL = "find";
 
 type PathArgs = {
   path?: string | null;
@@ -51,6 +52,12 @@ type LsArgs = {
   limit?: number;
 };
 
+type FindArgs = {
+  pattern?: string;
+  path?: string | null;
+  limit?: number;
+};
+
 type ReceiptTheme = {
   fg: (key: any, text: string) => string;
   bg: (key: any, text: string) => string;
@@ -58,7 +65,7 @@ type ReceiptTheme = {
 };
 
 const READ_NOTICE_RE =
-  /^(?:\[Showing lines \d+-\d+ of \d+.*\]|\[\d+ more lines in file\. Use offset=\d+ to continue\.\]|\[Line \d+ is .*exceeds .*limit\..*\]|\[Image(?::| converted| omitted).*\]|\[Current model does not support images.*\]|Read image file \[.*\]|\.\.\. \d+ more lines|\.\.\. output truncated at \d+ characters)$/;
+  /^(?:\[Showing lines \d+-\d+ of \d+.*\]|\[\d+ more lines in file\. Use offset=\d+ to continue\.\]|\[Line \d+ is .*exceeds .*limit\..*\]|\[Image(?::| converted| omitted).*\]|\[Current model does not support images.*\]|Read image file \[.*\]|\.\.\. \d+ more lines?|\.\.\. output truncated at \d+ characters)$/;
 
 function shortenPath(value: string, max: number): string {
   let display = value.replace(/\\/g, "/");
@@ -281,6 +288,22 @@ export const builtinGrepReceiptRenderers = toolRenderers<GrepArgs>({
   },
 });
 
+/** Compact header for glob file searches: `pattern [path] [limit N]`. */
+export function builtinFindReceiptArg(
+  args: FindArgs | undefined,
+  budget: number,
+): string {
+  const pattern = cleanInline(args?.pattern ?? "", 80);
+  const rawPath =
+    typeof args?.path === "string" ? cleanInline(args.path, 80).replace(/\\/g, "/") : "";
+  const path = rawPath || ".";
+  const limit = finiteInt(args?.limit);
+  const parts = [pattern || "find", path, limit !== undefined ? `limit ${limit}` : ""].filter(
+    Boolean,
+  );
+  return cleanInline(parts.join(" "), Math.max(8, budget));
+}
+
 export const builtinLsReceiptRenderers = toolRenderers<LsArgs>({
   surface: BUILTIN_LS_TOOL,
   title: BUILTIN_LS_TOOL,
@@ -290,6 +313,27 @@ export const builtinLsReceiptRenderers = toolRenderers<LsArgs>({
     const parts: string[] = [];
     const entryLimit = finiteInt(details.entryLimitReached);
     if (entryLimit !== undefined) parts.push(`limit ${entryLimit}`);
+    const signal = truncationToken(details.truncation);
+    if (signal && !parts.includes(signal)) parts.push(signal);
+    return parts.join(" · ");
+  },
+  preview(output) {
+    return output ? boundedOutput(output, 3, 1200) : [];
+  },
+  body(output) {
+    return output ? boundedOutput(output, 80) : [];
+  },
+});
+
+export const builtinFindReceiptRenderers = toolRenderers<FindArgs>({
+  surface: BUILTIN_FIND_TOOL,
+  title: BUILTIN_FIND_TOOL,
+  arg: builtinFindReceiptArg,
+  stats(result) {
+    const details = resultDetails(result);
+    const parts: string[] = [];
+    const resultLimit = finiteInt(details.resultLimitReached);
+    if (resultLimit !== undefined) parts.push(`limit ${resultLimit}`);
     const signal = truncationToken(details.truncation);
     if (signal && !parts.includes(signal)) parts.push(signal);
     return parts.join(" · ");
@@ -313,6 +357,9 @@ export function installBuiltinReceipts(): void {
     overrideOwned: true,
   });
   registerHeadlessReceipt(BUILTIN_LS_TOOL, builtinLsReceiptRenderers, {
+    overrideOwned: true,
+  });
+  registerHeadlessReceipt(BUILTIN_FIND_TOOL, builtinFindReceiptRenderers, {
     overrideOwned: true,
   });
   installHeadlessReceipts();

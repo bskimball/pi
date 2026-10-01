@@ -3,6 +3,8 @@
 
 export const FLEET_BUS_KEY = "__piTaskFleetBus";
 export const WORKSPACE_OPEN_KEY = "__piAgentWorkspaceOpen";
+/** Process-global key for the peek/command control channel (kit duplicates this string). */
+export const FLEET_CONTROL_KEY = "__piTaskFleetControl";
 
 type WorkspaceRoot = typeof globalThis & {
   [WORKSPACE_OPEN_KEY]?: boolean;
@@ -173,6 +175,53 @@ export function subscribeFleetSnapshot(listener: FleetListener): () => void {
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+/** task_send modes the peek/command control channel supports. */
+export type FleetControlMode = "steer" | "follow_up" | "prompt";
+
+/** Bounded outcome of one control call; message is sanitized to ~200 chars. */
+export interface FleetControlResult {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Peek/command control channel. The task extension installs one object under
+ * FLEET_CONTROL_KEY; the kit calls it without importing this module. Every
+ * method routes through the same shared functions the task_send / task_abort
+ * / task_close tools use, so all lifecycle guards apply unchanged.
+ */
+export interface FleetControl {
+  send(id: string, mode: FleetControlMode, text: string): Promise<FleetControlResult>;
+  abort(id: string): Promise<FleetControlResult>;
+  close(id: string): Promise<FleetControlResult>;
+}
+
+type ControlRoot = typeof globalThis & {
+  [FLEET_CONTROL_KEY]?: FleetControl;
+};
+
+/** Bound a control result message so peek footers and notifies stay one line. */
+export function boundControlMessage(value: unknown): string {
+  const text = String(value ?? "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= 200) return text;
+  return `${text.slice(0, 197)}...`;
+}
+
+export function installFleetControl(control: FleetControl): void {
+  (globalThis as ControlRoot)[FLEET_CONTROL_KEY] = control;
+}
+
+/** Delete the installed control, but only when it is still ours. */
+export function removeFleetControl(control: FleetControl): void {
+  const root = globalThis as ControlRoot;
+  if (root[FLEET_CONTROL_KEY] === control) {
+    delete root[FLEET_CONTROL_KEY];
+  }
 }
 
 /** Test helper: drop listeners and items so cases do not leak across files. */

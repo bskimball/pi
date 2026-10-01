@@ -10,59 +10,17 @@ import {
   type ExtensionAPI,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { padStartToWidth, safeTruncateToWidth } from "./internal/presentation/safe-text-layout.ts";
-import {
-  boundedOutput,
-  toolRenderers,
-  type ToolRenderState,
-} from "./internal/presentation/tool-receipt.ts";
+import { type ToolRenderState } from "./internal/presentation/tool-receipt.ts";
 import { withApexPresentation } from "./internal/presentation/presentation.ts";
+import { generateDiffString, normalizeToLF } from "./internal/presentation/edit-diff.ts";
+import { type ToolRenderContext } from "./internal/presentation/ui-common.ts";
 import {
-  formatDiffStats,
-  generateDiffString,
-  normalizeToLF,
-  renderDiffLines,
-  resultDiff,
-} from "./internal/presentation/edit-diff.ts";
-import { cleanInline, type ToolRenderContext } from "./internal/presentation/ui-common.ts";
+  createBuiltinToolRenderers,
+  type BuiltinName,
+} from "./internal/presentation/builtin-tool-renderers.ts";
 import { installTodoTools } from "./internal/todo/todo-tools.ts";
 
-type BuiltinName = "read" | "bash" | "write";
 type BuiltinRenderState = ToolRenderState;
-
-function primaryArg(name: BuiltinName, args: any): string {
-  if (name === "bash") return cleanInline(args?.command, 120);
-  const filePath = cleanInline(args?.path, 120);
-  if (name === "read" && args?.offset) {
-    return `${filePath}:${args.offset}${args?.limit ? `+${args.limit}` : ""}`;
-  }
-  return filePath;
-}
-
-const READ_NOTICE_RE =
-  /^(?:\[Showing lines \d+-\d+ of \d+.*\]|\[\d+ more lines in file\. Use offset=\d+ to continue\.\]|\[Line \d+ is .*exceeds .*limit\..*\]|\.\.\. \d+ more lines|\.\.\. output truncated at \d+ characters)$/;
-
-function numberReadLines(
-  lines: string[],
-  offset: unknown,
-  theme: { fg: (key: any, text: string) => string } | undefined,
-  innerWidth: number,
-): string[] {
-  const dim = (text: string) => theme?.fg("dim", text) ?? text;
-  const body = (text: string) => theme?.fg("toolOutput", text) ?? text;
-  const start = Number.isFinite(Number(offset))
-    ? Math.max(1, Math.floor(Number(offset)))
-    : 1;
-  const gutter = Math.max(2, String(start + lines.length - 1).length);
-  if (innerWidth <= gutter + 4) return lines;
-  let lineNumber = start;
-  return lines.map((line) => {
-    if (READ_NOTICE_RE.test(line)) return dim(line);
-    const numbered = `${padStartToWidth(String(lineNumber), gutter)} `;
-    lineNumber++;
-    return `${dim(numbered)}${body(safeTruncateToWidth(line, innerWidth - gutter - 1))}`;
-  });
-}
 
 function resolveToolPath(filePath: string, cwd: string): string {
   const normalized = filePath
@@ -92,17 +50,6 @@ async function readPriorContent(
   }
 }
 
-function shortenPath(value: string, max: number): string {
-  if (value.length <= max) return value;
-  const segments = value.split(/[\\/]+/).filter(Boolean);
-  for (let start = 1; start < segments.length; start++) {
-    const tail = `…/${segments.slice(start).join("/")}`;
-    if (tail.length <= max) return tail;
-  }
-  const last = segments[segments.length - 1] ?? value;
-  return last.length <= max ? last : `…${last.slice(-Math.max(1, max - 1))}`;
-}
-
 function registerBuiltin(
   pi: ExtensionAPI,
   name: BuiltinName,
@@ -118,47 +65,7 @@ function registerBuiltin(
     return definition;
   };
   const base = get(process.cwd());
-  const isMutation = name === "write";
-  let lastTheme:
-    | { fg: (key: any, text: string) => string; inverse?: (text: string) => string }
-    | undefined;
-  const ui = toolRenderers<any>({
-    surface: name,
-    title: name,
-    expandVerb: isMutation ? "diff" : "expand",
-    expandWhen: (result, _args, isError) =>
-      isMutation && !isError && !!resultDiff(result),
-    arg(args, budget) {
-      const rawArg = primaryArg(name, args);
-      return name === "bash"
-        ? safeTruncateToWidth(rawArg, budget)
-        : shortenPath(rawArg, budget);
-    },
-    stats(result, _args, theme) {
-      return isMutation ? formatDiffStats(theme, resultDiff(result)) : "";
-    },
-    preview(output) {
-      return name === "bash" && output ? boundedOutput(output, 3, 1200) : [];
-    },
-    body(output, result, args, innerWidth) {
-      if (isMutation) {
-        const diff = resultDiff(result);
-        return diff
-          ? renderDiffLines(
-              diff,
-              lastTheme ?? { fg: (_key, text) => text },
-              80,
-              innerWidth,
-            )
-          : [];
-      }
-      if (!output) return [];
-      const lines = boundedOutput(output, 80);
-      return name === "read"
-        ? numberReadLines(lines, args?.offset, lastTheme, innerWidth)
-        : lines;
-    },
-  });
+  const ui = createBuiltinToolRenderers(name);
 
   // Renderer slots snapshot at registration, so re-register on every live
   // presentation switch. The execute closure, cwd cache, and theme capture
@@ -223,7 +130,6 @@ function registerBuiltin(
         theme: any,
         context: ToolRenderContext<BuiltinRenderState, any>,
       ) {
-        lastTheme = theme;
         return ui.renderResult(result, options, theme, context);
       },
     }),

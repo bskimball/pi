@@ -24,7 +24,7 @@ export const HEADLESS_STATE_KEY = Symbol.for("pi.apex.headlessReceipts.state");
 export const RECEIPTS_KEY = Symbol.for("pi.apex.headlessReceipts.registry");
 const LEGACY_INSTALL_KEY = Symbol.for("pi.apex.headlessReceipts.installed");
 
-export const HEADLESS_WRAPPER_VERSION = 3;
+export const HEADLESS_WRAPPER_VERSION = 4;
 
 export type HeadlessReceiptOptions = {
   overrideOwned?: boolean;
@@ -83,6 +83,12 @@ export type HeadlessReceiptState = {
   protoOriginals: Map<object, HeadlessOriginals>;
   /** Outcome of the attempt to wrap the bundled live copy. */
   liveBundle: LiveBundleState;
+  /**
+   * Tool definitions the main thread has rendered, keyed by tool name. Pi
+   * exposes no tool-definition lookup to extensions, so the Agents peek reuses
+   * these to render sub-agent calls of the same tools with their own renderers.
+   */
+  seenDefinitions: Map<string, HeadlessPresentation>;
   shouldAttach?: (component: HeadlessComponent) => RegisteredReceipt | undefined;
 };
 
@@ -115,6 +121,7 @@ export function getHeadlessReceiptState(): HeadlessReceiptState {
       originals: {},
       protoOriginals: new Map(),
       liveBundle: "pending",
+      seenDefinitions: new Map(),
     };
     g[HEADLESS_STATE_KEY] = state;
     g[RECEIPTS_KEY] = state.registry;
@@ -124,7 +131,25 @@ export function getHeadlessReceiptState(): HeadlessReceiptState {
   if (!state.prefixes) state.prefixes = [];
   if (!state.protoOriginals) state.protoOriginals = new Map();
   if (!state.liveBundle) state.liveBundle = "pending";
+  if (!state.seenDefinitions) state.seenDefinitions = new Map();
   return state;
+}
+
+const SEEN_DEFINITIONS_CAP = 256;
+
+function rememberDefinition(state: HeadlessReceiptState, component: HeadlessComponent): void {
+  const name = component.toolName;
+  const definition = component.toolDefinition;
+  if (typeof name !== "string" || !definitionOwnsPresentation(definition)) return;
+  const seen = state.seenDefinitions;
+  if (seen.get(name) === definition) return;
+  if (!seen.has(name) && seen.size >= SEEN_DEFINITIONS_CAP) return;
+  seen.set(name, definition!);
+}
+
+/** The definition the main thread last rendered for `name`, if any. */
+export function rememberedToolDefinition(name: string): HeadlessPresentation | undefined {
+  return getHeadlessReceiptState().seenDefinitions.get(name);
 }
 
 export function findOwnMethod(
@@ -335,6 +360,7 @@ export function wrapToolExecutionPrototype(
     this: HeadlessComponent,
   ) {
     const s = getHeadlessReceiptState();
+    rememberDefinition(s, this);
     const existing = callOriginal(s, this, originals.getCallRenderer);
     if (shouldSuppressOwnedPresentation(this)) return undefined;
     const decision = s.shouldAttach

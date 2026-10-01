@@ -47,8 +47,6 @@ const MORE_GLYPH = "\u22ee"; // ⋮
 const PEEK_MISSION_LINES = 3;
 /** Directive stays one labeled line so it can yield before the transcript. */
 const PEEK_DIRECTIVE_LINES = 1;
-/** Wrap cap per transcript entry so one hostile line cannot fill the pane. */
-const PEEK_ENTRY_WRAP = 6;
 /** Hard ceiling on the full-pane view; the live height comes from the terminal. */
 const PEEK_MAX_LINES = 80;
 /** The fleet bus hard cap; every retained worker must remain selectable. */
@@ -578,19 +576,43 @@ export function workerStateText(item: DockAgentItem): string {
   return label;
 }
 
-/** Footer hints for the full-pane session view. */
+/**
+ * Footer hints for the full-pane session view. Hints are whole units: when the
+ * row is too narrow, the lowest-priority hints drop out instead of the row
+ * being cut mid-word. Management keys are contextual to the lifecycle.
+ */
 export function peekControlsText(
   item: DockAgentItem,
-  options: { canOpenHere?: boolean } = {},
+  options: { canOpenHere?: boolean; width?: number } = {},
 ): string {
-  const back = "esc: back to lead";
-  if (canSwitchToSession(item.lifecycle)) {
-    const open = options.canOpenHere
-      ? "o: open session (ends lead)"
-      : "o: prepare /agents open (ends lead)";
-    return `${open} · ${back}`;
+  const settled = canSwitchToSession(item.lifecycle);
+  // [text, priority]: lower numbers survive longer; esc always stays.
+  const hints: Array<[string, number]> = [["esc back", 0]];
+  if (settled) {
+    hints.push([options.canOpenHere ? "o open (ends lead)" : "o stage /agents open", 1]);
+    hints.push(["f prompt", 1], ["c close", 2]);
+  } else {
+    hints.push(["s steer", 1], ["f follow", 1], ["x abort", 1], ["c close", 2]);
   }
-  return metaText([back, "session still writing"]);
+  hints.push(
+    ["j/k scroll", 3],
+    ["space/b page", 7],
+    ["^o expand", 4],
+    ["t think", 6],
+    ["[ ] agent", 5],
+  );
+  const join = (list: Array<[string, number]>) => list.map(([text]) => text).join(" · ");
+  const width = options.width;
+  if (width === undefined) return join(hints);
+  const kept = [...hints];
+  while (kept.length > 1 && safeVisibleWidth(join(kept)) > width) {
+    let drop = 1;
+    for (let index = 2; index < kept.length; index++) {
+      if (kept[index]![1] >= kept[drop]![1]) drop = index;
+    }
+    kept.splice(drop, 1);
+  }
+  return join(kept);
 }
 
 /**
@@ -678,27 +700,6 @@ function layoutPeekChrome(
   };
 }
 
-function peekTranscriptTone(line: string): "warning" | "text" | "muted" | "error" | "accent" {
-  if (line.includes(" \u00d7") || line.endsWith("\u00d7")) return "error";
-  if (line.startsWith("lead:")) return "warning";
-  // Mirror the main session: assistant prose reads as primary text while
-  // bare tool lines stay muted, so the overlay scans like the transcript.
-  if (line.startsWith("worker: tool ")) return "muted";
-  if (line.startsWith("worker:")) return "text";
-  if (line.startsWith("tool ")) return "accent";
-  return "muted";
-}
-
-function wrapTranscriptEntry(
-  theme: StatusTheme,
-  width: number,
-  line: string,
-): string[] {
-  const wrapped = wrapPlainText(line, width, { hangingIndent: 2, maxLines: PEEK_ENTRY_WRAP });
-  const tone = peekTranscriptTone(line);
-  return wrapped.map((row) => safeTruncateToWidth(theme.fg(tone, row), width));
-}
-
 /** Transcript rows that fit under header + mission + directive + rules + footer. */
 export function peekTranscriptBudget(
   width: number,
@@ -716,20 +717,6 @@ export function peekTranscriptBudget(
     0,
     capped - (vPad * 2 + 1 + chrome.missionRows.length + chrome.directiveRows.length + rules + 1),
   );
-}
-
-/** Flatten a bounded transcript into wrapped, themed rows. */
-export function layoutPeekTranscript(
-  theme: StatusTheme,
-  width: number,
-  transcript: readonly string[],
-): string[] {
-  if (width <= 0) return [];
-  const rows: string[] = [];
-  for (const line of transcript) {
-    rows.push(...wrapTranscriptEntry(theme, width, line));
-  }
-  return rows;
 }
 
 /**
@@ -768,8 +755,9 @@ export function clampPeekScroll(
  * Opaque full-pane workspace for one worker: header, wrapped mission,
  * optional directive, transcript window, footer. Always returns exactly
  * `maxLines` background-filled rows so overlay compositing cannot leak the
- * parent transcript. Never opens a SessionManager; the transcript tail is
- * injected by the caller (bounded read + tolerant parse live in todo-tools).
+ * parent transcript. The body arrives pre-rendered from Pi components (see
+ * peek-transcript.ts); the caller reads the session file outside render and
+ * only windows the rows here.
  */
 export function renderPeekBody(
   theme: StatusTheme | undefined,
@@ -777,10 +765,19 @@ export function renderPeekBody(
   item: DockAgentItem,
   options: {
     now?: number;
-    transcript?: string[];
+    /** Pre-rendered transcript rows (Pi components at inner width). */
+    bodyLines?: string[];
+    /** True when older entries were trimmed; shows the omitted note on top. */
+    bodyOmitted?: boolean;
     canOpenHere?: boolean;
     maxLines?: number;
     scrollOffset?: number;
+    /** Single-line input row (pre-rendered `prompt + value`) replacing the footer. */
+    inputLine?: string;
+    /** Confirm prompt (`abort task_1? y/n`) replacing the footer. */
+    confirmLine?: string;
+    /** One-line action result shown in the footer until the next key. */
+    statusLine?: string;
   } = {},
 ): string[] {
   if (width <= 0) return [];
@@ -798,8 +795,15 @@ export function renderPeekBody(
     surface.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
     innerWidth,
   );
+  // Input beats confirm beats result beats hints: exactly one footer row, and
+  // the result survives only until the next key (the caller clears it there).
+  const footerRaw =
+    options.inputLine ??
+    options.confirmLine ??
+    options.statusLine ??
+    peekControlsText(item, { canOpenHere: options.canOpenHere, width: innerWidth });
   const controls = pad + safeTruncateToWidth(
-    surface.fg("dim", peekControlsText(item, { canOpenHere: options.canOpenHere })),
+    surface.fg("dim", footerRaw),
     innerWidth,
   );
   const chrome = layoutPeekChrome(item, innerWidth, maxLines);
@@ -833,13 +837,24 @@ export function renderPeekBody(
     return padded.map((row) => paintPeekRow(surface, width, row));
   }
   lines.push(topRule);
-  const rawTranscript = options.transcript ?? [];
+  const rawBody = options.bodyLines ?? [];
+  const bodyRows = options.bodyOmitted && rawBody.length
+    ? [
+        safeTruncateToWidth(
+          surface.fg(
+            "dim",
+            `earlier transcript omitted · /agents open ${safeText(item.id, 40)} for full session (settled only)`,
+          ),
+          innerWidth,
+        ),
+        ...rawBody,
+      ]
+    : rawBody;
   if (bodyBudget > 0) {
-    if (!rawTranscript.length) {
+    if (!bodyRows.length) {
       lines.push(pad + safeTruncateToWidth(surface.fg("dim", "transcript unavailable"), innerWidth));
     } else {
-      const wrapped = layoutPeekTranscript(surface, innerWidth, rawTranscript);
-      const windowed = peekTranscriptWindow(wrapped, bodyBudget, options.scrollOffset);
+      const windowed = peekTranscriptWindow(bodyRows, bodyBudget, options.scrollOffset);
       if (windowed.lines.length) {
         for (const row of windowed.lines) {
           lines.push(pad + row);

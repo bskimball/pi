@@ -54,6 +54,7 @@ import {
   deleteWorkerSidecar,
   isPidAlive,
   listWorkerSidecars,
+  rebindFusion,
   writeWorkerSidecar,
   type WorkerSidecar,
 } from "./runtime/worker-sidecar.ts";
@@ -84,9 +85,14 @@ import {
   renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
 import {
+  boundControlMessage,
   fleetSnapshotKey,
+  installFleetControl,
   isAgentWorkspaceOpen,
   publishFleetSnapshot,
+  removeFleetControl,
+  type FleetControl,
+  type FleetControlResult,
   type FleetSnapshotItem,
 } from "./runtime/fleet-bus.ts";
 import { safeTruncateToWidth } from "./presentation/safe-text-layout.ts";
@@ -281,6 +287,22 @@ const EXCLUDED_CHILD_TOOLS = [
 ].join(",");
 
 export type { WorkerLifecycle } from "./runtime/worker-runtime.ts";
+
+/**
+ * Lifecycle matrix for task_send modes, shared by the tool and the fleet
+ * control channel. Steer rides the next model-call boundary (live workers
+ * only); follow_up queues for the next generation (any worker with a live
+ * connection); prompt starts a new generation (settled/failed only).
+ * Pure so tests can pin the matrix without spawning a worker.
+ */
+export function sendModeAllowed(
+  lifecycle: WorkerLifecycle,
+  mode: "steer" | "follow_up" | "prompt",
+): boolean {
+  if (mode === "steer") return isLiveLifecycle(lifecycle);
+  if (mode === "prompt") return lifecycle === "settled" || lifecycle === "failed";
+  return true;
+}
 type IdlePhase = WorkerPhase;
 
 interface PendingUiRequest extends RuntimePendingUiRequest {
@@ -939,6 +961,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         lifecycle: worker.lifecycle,
         generation: worker.generation,
         closed: false,
+        fusion: worker.fusion,
+        fusionParentSessionId: worker.fusionParentSessionId,
       });
       worker.lastPersistedSidecar = snapshot;
     } catch {
@@ -1499,17 +1523,22 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     );
     const sessionDir = params.rebind?.sessionDir ?? ensureSessionDir(instanceId);
     const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
-    const maxTurns = params.fusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
-    const forcedFusionModel = params.fusion ? fusionModel() : undefined;
-    const thinking = params.fusion
+    // A rebound sidekick keeps its Fusion identity while the pair is still
+    // configured; otherwise it resumes as an ordinary worker. Explicit
+    // params.fusion (task_start/task_chain) always wins; `false` stays false.
+    const rebindFusionState = rebindFusion(params.rebind, fusionModel() !== undefined);
+    const isFusion = params.fusion ?? rebindFusionState.fusion;
+    const maxTurns = isFusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
+    const forcedFusionModel = isFusion ? fusionModel() : undefined;
+    const thinking = isFusion
       ? fusionLifecycle.configured?.sidekick.thinking
       : params.rebind?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
-    const attempts = params.fusion
+    const attempts = isFusion
       ? [forcedFusionModel]
       : modelAttempts(def, params.rebind?.model ?? params.modelOverride);
     // Fusion has exactly one configured model and deliberately bypasses the
     // circuit/fallback chain; preserving its transcript matters more than retry.
-    const initial = params.fusion
+    const initial = isFusion
       ? { index: 0, model: forcedFusionModel, skipped: [], failSafe: false }
       : getSharedModelCircuitBreaker().selectAttempt(attempts, 0);
     const model = initial.model;
@@ -1541,7 +1570,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       turns: 0,
       maxTurns,
       timeoutMs,
-      hardTimeoutMs: params.fusion ? undefined : timeoutMs,
+      hardTimeoutMs: isFusion ? undefined : timeoutMs,
       sessionDir,
       pendingSteer: 0,
       pendingFollowUp: 0,
@@ -1563,14 +1592,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         : params.reportSchema?.trim()
           ? "missing"
           : "none-requested",
-      fusion: params.fusion,
-      fusionParentSessionId: params.fusionParentSessionId,
+      fusion: isFusion,
+      fusionParentSessionId: isFusion
+        ? (params.fusionParentSessionId ?? params.rebind?.fusionParentSessionId)
+        : undefined,
       // A fresh spawn starts a new chain: this initial prompt is prompt 1.
-      fusionChainPrompts: params.fusion ? 1 : undefined,
+      fusionChainPrompts: isFusion ? 1 : undefined,
       // Persistent sidekicks track phase but never arm an idle kill timer;
       // the runtime honors this on every armIdle path (startGeneration,
       // handleEvent, steering), so no local wrapper can be bypassed.
-      disableIdleTimeout: params.fusion ? true : undefined,
+      disableIdleTimeout: isFusion ? true : undefined,
     };
 
     workers.set(instanceId, worker);
@@ -1589,7 +1620,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "--session-dir",
       sessionDir,
       "--exclude-tools",
-      params.fusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS,
+      isFusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS,
       "--name",
       `async-${def.name}-${id}`,
     ];
@@ -1623,7 +1654,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
     // Async workers support steering/follow-ups and UI requests; load mode-
     // correct shared norms rather than the fire-and-forget sync preamble.
-    const shared = params.fusion ? {} : composeSpecialistSharedPrompts("async");
+    const shared = isFusion ? {} : composeSpecialistSharedPrompts("async");
     const systemPrompt = [shared.systemPreamble, def.body]
       .filter(Boolean)
       .join("\n\n");
@@ -1650,7 +1681,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           PI_ASYNC_RPC: "1",
           PI_SUBAGENT_AGENT: def.name,
           PI_SUBAGENT_MODEL: modelLabel,
-          ...(params.fusion ? { PI_FUSION_SIDEKICK: "1" } : {}),
+          ...(isFusion ? { PI_FUSION_SIDEKICK: "1" } : {}),
         },
         onEvent: (event) => handleRpcEvent(worker, event),
         onUiRequest: (req) => handleUiRequest(worker, req),
@@ -1708,7 +1739,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     // Fusion pre-prompt setup runs inside one guarded section: a transport
     // throw must close the registered worker here, never leak it to the
     // caller as an unhandled rejection with a live handle in the registry.
-    if (params.fusion) {
+    if (isFusion) {
       try {
         if (params.resumeSessionFile && !fs.existsSync(params.resumeSessionFile)) {
           throw new Error(`Saved Fusion transcript is missing: ${params.resumeSessionFile}. Restore it or start a new parent session; context was not reset.`);
@@ -1779,7 +1810,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         const message = `${response.error ?? "prompt rejected"}${stderr ? `; stderr: ${stderr}` : ""}`;
         worker.modelError = message;
         pushError(worker, message);
-        if (params.fusion) {
+        if (isFusion) {
           settleGeneration(worker, "failed", { error: message });
           return { worker, error: `${id} prompt rejected: ${message}` };
         }
@@ -1811,7 +1842,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const message = `${transportError}${stderr ? `; stderr: ${stderr}` : ""}`;
       worker.modelError = message;
       pushError(worker, message);
-      if (params.fusion) {
+      if (isFusion) {
         // Acceptance may have reached the child before the transport failed.
         // Close it before releasing the lead's single-writer gate.
         closeWorker(worker, `Fusion prompt acceptance unknown: ${message}`, "sync");
@@ -2736,36 +2767,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }),
   });
 
-  pi.registerTool({
-    name: "task_send",
-    label: "Task Send",
-    description: `Send a message to an existing async RPC worker.
+  /** task_send modes shared by the tool and the fleet control channel. */
+  type SendMode = "steer" | "follow_up" | "prompt";
 
-Modes:
-- steer: Queued until the next model-call boundary. Cannot interrupt current inference or in-flight tools; delivered after the current assistant turn finishes its tool calls, before the next LLM call.
-- follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
-- prompt: Only allowed when the worker is settled; starts a new generation.
-
-Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
-    promptSnippet:
-      "Send steer/follow_up (or settled prompt) to an async RPC worker.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Worker id from task_start." }),
-      message: Type.String({ description: "Message to send to the worker." }),
-      mode: Type.Union(
-        [
-          Type.Literal("steer"),
-          Type.Literal("follow_up"),
-          Type.Literal("prompt"),
-        ],
-        {
-          description:
-            "steer = queue until next model-call boundary; follow_up = after settle; prompt = new generation only when settled.",
-        },
-      ),
-    }),
-    executionMode: "parallel",
-    async execute(_toolCallId, params) {
+  const executeTaskSend = async (params: { id?: string; message?: string; mode?: SendMode }) => {
       const id = params.id?.trim();
       const message = params.message?.trim();
       const mode = params.mode;
@@ -2805,6 +2810,17 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         );
       }
 
+      // Steer rides the next model-call boundary, so it needs a live worker.
+      // Settled/failed generations take follow_up (queued) or prompt (new
+      // generation) instead; the peek and /agents steer paths share this refusal.
+      if (mode === "steer" && !sendModeAllowed(worker.lifecycle, "steer")) {
+        return textResult(
+          `${id} is ${worker.lifecycle}; steer needs a live worker. Use follow_up to queue for the next generation, or prompt to start one.`,
+          true,
+          sendDetails("rejected", `worker is ${worker.lifecycle}; steer needs live`),
+        );
+      }
+
       if (mode === "prompt") {
         if (worker.fusion) {
           const chainBlock = fusionLifecycle.chainPromptBlock(worker);
@@ -2816,7 +2832,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
             );
           }
         }
-        if (worker.lifecycle !== "settled" && worker.lifecycle !== "failed") {
+        if (!sendModeAllowed(worker.lifecycle, "prompt")) {
           return textResult(
             `${id} is ${worker.lifecycle}; prompt mode is only allowed when settled/failed. Use steer or follow_up while running, or wait first.`,
             true,
@@ -2964,6 +2980,39 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         const msg = error instanceof Error ? error.message : String(error);
         return textResult(`${id} follow_up failed: ${msg}`, true, sendDetails("failed", msg));
       }
+  };
+
+  pi.registerTool({
+    name: "task_send",
+    label: "Task Send",
+    description: `Send a message to an existing async RPC worker.
+
+Modes:
+- steer: Queued until the next model-call boundary. Cannot interrupt current inference or in-flight tools; delivered after the current assistant turn finishes its tool calls, before the next LLM call.
+- follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
+- prompt: Only allowed when the worker is settled; starts a new generation.
+
+Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
+    promptSnippet:
+      "Send steer/follow_up (or settled prompt) to an async RPC worker.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Worker id from task_start." }),
+      message: Type.String({ description: "Message to send to the worker." }),
+      mode: Type.Union(
+        [
+          Type.Literal("steer"),
+          Type.Literal("follow_up"),
+          Type.Literal("prompt"),
+        ],
+        {
+          description:
+            "steer = queue until next model-call boundary; follow_up = after settle; prompt = new generation only when settled.",
+        },
+      ),
+    }),
+    executionMode: "parallel",
+    async execute(_toolCallId, params) {
+      return executeTaskSend(params);
     },
     ...controlRenderers("task_send", (result, theme, width, expanded) => {
       const send = detailRecord(detailRecord(result?.details)?.send);
@@ -3355,18 +3404,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }),
   });
 
-  pi.registerTool({
-    name: "task_abort",
-    label: "Task Abort",
-    description:
-      "Cooperatively abort the worker's current inference/tool run via RPC abort. Waits a short grace period (~5s) for agent_settled; if unresponsive, escalates to Windows taskkill /F /T (or POSIX kill). Preserves the worker/session when cooperative abort succeeds so you can send a new prompt later.",
-    promptSnippet:
-      "Cooperatively abort current async worker run; force-kill only if unresponsive.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Worker id from task_start." }),
-    }),
-    executionMode: "parallel",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+  const executeTaskAbort = async (params: { id?: string }, ctx?: ExtensionContext) => {
       syncFleetWidget(ctx);
       const id = params.id?.trim();
       const abortDetails = (
@@ -3455,6 +3493,21 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           ),
         },
       );
+  };
+
+  pi.registerTool({
+    name: "task_abort",
+    label: "Task Abort",
+    description:
+      "Cooperatively abort the worker's current inference/tool run via RPC abort. Waits a short grace period (~5s) for agent_settled; if unresponsive, escalates to Windows taskkill /F /T (or POSIX kill). Preserves the worker/session when cooperative abort succeeds so you can send a new prompt later.",
+    promptSnippet:
+      "Cooperatively abort current async worker run; force-kill only if unresponsive.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Worker id from task_start." }),
+    }),
+    executionMode: "parallel",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      return executeTaskAbort(params, ctx);
     },
     ...controlRenderers("task_abort", (result, theme, width, expanded) => {
       const abort = detailRecord(detailRecord(result?.details)?.abort);
@@ -3494,17 +3547,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     }),
   });
 
-  pi.registerTool({
-    name: "task_close",
-    label: "Task Close",
-    description:
-      "Close and reap a persistent async RPC worker and its process tree. Frees the concurrency slot. Bounded settled metadata may be retained briefly for status.",
-    promptSnippet: "Close/reap an async RPC worker and free its capacity slot.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Worker id from task_start." }),
-    }),
-    executionMode: "parallel",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+  const executeTaskClose = async (params: { id?: string }, ctx?: ExtensionContext) => {
       syncFleetWidget(ctx);
       const id = params.id?.trim();
       if (!id) return textResult("id is required.", true);
@@ -3535,6 +3578,20 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
           },
         },
       );
+  };
+
+  pi.registerTool({
+    name: "task_close",
+    label: "Task Close",
+    description:
+      "Close and reap a persistent async RPC worker and its process tree. Frees the concurrency slot. Bounded settled metadata may be retained briefly for status.",
+    promptSnippet: "Close/reap an async RPC worker and free its capacity slot.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Worker id from task_start." }),
+    }),
+    executionMode: "parallel",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      return executeTaskClose(params, ctx);
     },
     ...withTaskPresentation({
       renderShell: "self" as const,
@@ -3819,6 +3876,29 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     }),
   });
 
+  // ------------------------------------------------- fleet control channel
+
+  //
+  // Peek/command management without the lead model: the kit calls this object
+  // over the process-global control key (no cross-extension import). Every
+  // method routes through the same shared functions the tools above use, so
+  // lifecycle checks, Fusion correction limits, queueing semantics, slot
+  // accounting, and fleet republish apply unchanged.
+  const toControlResult = (result: {
+    content?: unknown;
+    isError?: boolean;
+  }): FleetControlResult => ({
+    ok: !result.isError,
+    message: boundControlMessage(textContent(result)) || "no result text",
+  });
+  const fleetControl: FleetControl = {
+    send: async (id, mode, text) =>
+      toControlResult(await executeTaskSend({ id, mode, message: text })),
+    abort: async (id) => toControlResult(await executeTaskAbort({ id })),
+    close: async (id) => toControlResult(await executeTaskClose({ id })),
+  };
+  installFleetControl(fleetControl);
+
   // ---------------------------------------------------- settlement notice
 
   // Without this the settlement message renders as a raw `[async-task-settled]`
@@ -4011,6 +4091,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     uiPromptDepth = Math.max(0, uiPromptDepth - 1);
   });
   pi.on("session_start", (_event, ctx) => {
+    installFleetControl(fleetControl);
     removeFusionInputListener?.();
     try {
       lastBranchSnapshot = ctx?.sessionManager?.getBranch?.() ?? [];
@@ -4033,6 +4114,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
+    removeFleetControl(fleetControl);
     removeFusionInputListener?.();
     uiPromptDepth = 0;
     shuttingDown = true;

@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 const { dockClickResult, installTodoTools } = await import("@pi/ui-kit/internal/todo/todo-tools.ts");
-const { formatTranscriptTail } = await import("@pi/ui-kit/internal/todo/peek-tool-format.ts");
+const { PeekTranscript, parsePeekText } = await import("@pi/ui-kit/internal/todo/peek-transcript.ts");
 const { isAgentWorkspaceOpen, publishDockAgents, resetDockAgents } = await import(
   "@pi/ui-kit/internal/todo/fleet-listen.ts"
 );
@@ -24,7 +24,6 @@ const {
   buildTodoList,
   canSwitchToSession,
   clampPeekScroll,
-  layoutPeekTranscript,
   peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
@@ -32,6 +31,12 @@ const {
   renderTodoList,
   turnCountText,
 } = await import("@pi/ui-kit/internal/todo/todo-view.ts");
+
+// Pi message/tool components render through the global theme singleton.
+// The live TUI initializes it at startup; tests stand it up explicitly.
+// initTheme() with no args resolves the system theme without a watcher.
+const { initTheme } = await import("@earendil-works/pi-coding-agent");
+initTheme();
 
 function createMockPi(apexUi = "1") {
   const previousApexUi = process.env.PI_APEX_UI;
@@ -106,6 +111,11 @@ const theme = {
   fg: (_key: string, text: string) => text,
   bg: (_key: string, text: string) => text,
 };
+
+/** Pi components style themselves with the global theme; strip ANSI to assert text. */
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
 
 // Pin the apex skin for every test in this file: the live shell may export
 // PI_UI_SKIN=claude, but these assertions target apex chrome (●/○). Glyphs
@@ -1991,7 +2001,7 @@ describe("agents tab in all modes with selection and peek", () => {
       await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
       dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
       await Promise.resolve();
-      assert.match(dock.overlay().render(80).join("\n"), /prepare \/agents open \(ends lead\)/);
+      assert.match(dock.overlay().render(80).join("\n"), /o stage \/agents open/);
       dock.overlay().handleInput("o");
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(dock.editorText(), "/agents open task_done");
@@ -2125,13 +2135,13 @@ describe("agents tab in all modes with selection and peek", () => {
         { tool: "bash", status: "running" },
       ],
     }), {
-      transcript,
+      bodyLines: transcript,
       canOpenHere: true,
       maxLines: 5,
     });
     assert.equal(lines.length, 5);
     assert.ok(lines.every((line: string) => safeVisibleWidth(line) === 60));
-    assert.match(lines.at(-1) ?? "", /esc: back to lead/);
+    assert.match(lines.at(-1) ?? "", /esc back/);
     assert.match(lines.join("\n"), /worker: newest/);
     assert.doesNotMatch(lines.join("\n"), /worker: old/);
   });
@@ -2140,14 +2150,15 @@ describe("agents tab in all modes with selection and peek", () => {
     const transcript = Array.from({ length: 30 }, (_, index) => `worker: progress ${index}`);
     for (const maxLines of [5, 8, 12]) {
       const lines = renderPeekBody(theme, 60, worker({ lifecycle: "settled" }), {
-        transcript,
+        bodyLines: transcript,
         canOpenHere: true,
         maxLines,
       });
       assert.equal(lines.length, maxLines, `height ${maxLines}`);
       assert.ok(lines.every((line: string) => safeVisibleWidth(line) === 60), `opaque width ${maxLines}`);
       assert.match(lines.join("\n"), /mission: Steer the dock/);
-      assert.match(lines.join("\n"), /o: open session \(ends lead\) · esc: back to lead/);
+      assert.match(lines.join("\n"), /o open \(ends lead\)/);
+      assert.match(lines.join("\n"), /esc back/);
       if (maxLines >= 5) {
         assert.match(lines.join("\n"), /worker: progress 29/, "newest progress retained");
         assert.doesNotMatch(lines.join("\n"), /worker: progress 0/, "oldest progress dropped first");
@@ -2174,7 +2185,7 @@ describe("agents tab in all modes with selection and peek", () => {
       "tool read",
       "worker: done",
     ];
-    const live = renderPeekBody(theme, 80, worker({ lifecycle: "running" }), { transcript });
+    const live = renderPeekBody(theme, 80, worker({ lifecycle: "running" }), { bodyLines: transcript });
     assert.match(live.join("\n"), /sidekick/);
     assert.match(live.join("\n"), /mission: Steer the dock/);
     assert.match(live.join("\n"), /gen 3/);
@@ -2182,15 +2193,15 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.match(live.join("\n"), /7\/40 turns/);
     assert.match(live.join("\n"), /read/);
     assert.match(live.join("\n"), /worker: reading the config/);
-    assert.match(live.join("\n"), /session still writing/);
-    assert.match(live.join("\n"), /esc: back to lead/);
-    assert.doesNotMatch(live.join("\n"), /o: open session/);
+    assert.match(live.join("\n"), /s steer/);
+    assert.match(live.join("\n"), /esc back/);
+    assert.doesNotMatch(live.join("\n"), /o open/);
     assert.equal(live.length, TODO_LIST_MAX_LINES);
     assert.ok(live.every((line: string) => safeVisibleWidth(line) === 80));
 
-    const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { transcript, canOpenHere: true });
-    assert.match(settled.join("\n"), /o: open session \(ends lead\)/);
-    assert.match(settled.join("\n"), /esc: back to lead/);
+    const settled = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), { bodyLines: transcript, canOpenHere: true });
+    assert.match(settled.join("\n"), /o open \(ends lead\)/);
+    assert.match(settled.join("\n"), /esc back/);
 
     const torn = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {});
     assert.match(torn.join("\n"), /transcript unavailable/);
@@ -2200,13 +2211,13 @@ describe("agents tab in all modes with selection and peek", () => {
       lifecycle: "running",
       directive: { queued: true, text: "Stop and summarize" },
     });
-    const directedBody = renderPeekBody(theme, 80, directed, { transcript });
+    const directedBody = renderPeekBody(theme, 80, directed, { bodyLines: transcript });
     assert.match(directedBody.join("\n"), /mission: Steer the dock/);
     assert.match(directedBody.join("\n"), /queued: Stop and summarize/);
     const deliveredBody = renderPeekBody(theme, 80, worker({
       lifecycle: "running",
       directive: { queued: false, text: "Stop and summarize" },
-    }), { transcript });
+    }), { bodyLines: transcript });
     assert.match(deliveredBody.join("\n"), /directive: Stop and summarize/);
     assert.doesNotMatch(deliveredBody.join("\n"), /queued:/);
 
@@ -2220,20 +2231,20 @@ describe("agents tab in all modes with selection and peek", () => {
     const directedBudget = peekTranscriptBudget(80, withDirective, maxLines);
     const plainBudget = peekTranscriptBudget(80, without, maxLines);
     assert.equal(directedBudget, plainBudget - 1, "directive occupies one chrome row");
-    const wrapped = layoutPeekTranscript(theme, 80, longTranscript);
+    const wrapped = longTranscript;
     const page = Math.max(1, directedBudget);
     const offset = clampPeekScroll(wrapped.length, directedBudget, undefined, -page);
     const scrolled = renderPeekBody(theme, 80, withDirective, {
-      transcript: longTranscript,
+      bodyLines: longTranscript,
       maxLines,
       scrollOffset: offset,
     });
     assert.equal(scrolled.length, maxLines);
     assert.match(scrolled.join("\n"), /queued: Stop and summarize/);
-    assert.match(scrolled.at(-1) ?? "", /esc: back to lead/);
+    assert.match(scrolled.at(-1) ?? "", /esc back/);
     assert.doesNotMatch(scrolled.join("\n"), /worker: progress 19/);
     const tightPeek = renderPeekBody(theme, 80, withDirective, {
-      transcript: longTranscript,
+      bodyLines: longTranscript,
       maxLines: 5,
     });
     assert.equal(tightPeek.length, 5);
@@ -2241,12 +2252,12 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.doesNotMatch(tightPeek.join("\n"), /queued:/, "directive yields before the transcript vanishes");
     assert.match(tightPeek.join("\n"), /worker: progress 19/);
     const tiny = renderPeekBody(theme, 20, withDirective, {
-      transcript: longTranscript,
+      bodyLines: longTranscript,
       maxLines: 3,
     });
     assert.equal(tiny.length, 3);
     assert.ok(tiny.every((line: string) => safeVisibleWidth(line) === 20));
-    assert.match(tiny.at(-1) ?? "", /esc: back to lead/);
+    assert.match(tiny.at(-1) ?? "", /esc back/);
     assert.doesNotMatch(tiny.join("\n"), /queued:/);
   });
 
@@ -2278,26 +2289,64 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.match(labeled.join("\n"), /local-proxy\/grok-4\.5/);
   });
 
-  it("tones peek transcript rows like the main session", () => {
-    const transcript = [
-      "lead: please audit the proxy",
-      "worker: reading the config",
-      "worker: tool read src/index.ts",
-      "tool read src/index.ts",
-    ];
-    const ansiTheme = {
-      fg: (key: string, text: string) => `<${key}>${text}</>`,
-      bg: (_key: string, text: string) => text,
-    };
-    const lines = renderPeekBody(ansiTheme, 80, worker({ lifecycle: "running" }), {
-      transcript,
-      maxLines: 12,
+  it("renders the peek transcript through Pi components like the main thread", () => {
+    const stubTui = { requestRender() {} };
+    const doc = new PeekTranscript({ tui: stubTui, cwd: process.cwd(), expandedAll: false, hideThinking: false });
+    doc.appendText(
+      [
+        JSON.stringify({ type: "message", message: { role: "user", content: "please audit the proxy" } }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "check the config first" },
+              { type: "text", text: "reading the **config** now" },
+              { type: "toolCall", id: "call_1", name: "read", arguments: { path: "src/index.ts" } },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            isError: false,
+            content: [{ type: "text", text: "file contents here" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      false,
+    );
+    const { lines } = doc.renderBody(80);
+    const text = stripAnsi(lines.join("\n"));
+    assert.match(text, /please audit the proxy/, "lead prompt renders as a user message");
+    assert.match(text, /reading the/, "assistant prose renders as Markdown text");
+    assert.match(text, /config/, "assistant Markdown content survives");
+    assert.match(text, /check the config first/, "thinking block renders when visible");
+    assert.match(text, /src\/index\.ts/, "tool call renders its arguments");
+    assert.match(text, /file contents here/, "tool result resolves into the tool component");
+    doc.setHideThinking(true);
+    const hidden = stripAnsi(doc.renderBody(80).lines.join("\n"));
+    assert.doesNotMatch(hidden, /check the config first/, "thinking hides on toggle");
+    assert.match(hidden, /Thinking/, "hidden thinking keeps Pi's collapsed label");
+  });
+
+  it("lists every peek key hint in a wide settled footer", () => {
+    const lines = renderPeekBody(theme, 150, worker({ lifecycle: "settled" }), {
+      bodyLines: ["row"],
+      canOpenHere: true,
+      maxLines: 10,
     });
-    const text = lines.join("\n");
-    assert.match(text, /<warning>lead:/, "lead steer reads as warning");
-    assert.match(text, /<text>worker: reading/, "assistant prose reads as primary text");
-    assert.match(text, /<muted>worker: tool read/, "worker tool lines stay muted");
-    assert.match(text, /<accent>tool read/, "bare tool lines read as accent");
+    const footer = lines.at(-1) ?? "";
+    assert.match(footer, /esc back/);
+    assert.match(footer, /o open \(ends lead\)/);
+    assert.match(footer, /j\/k/);
+    assert.match(footer, /space\/b/);
+    assert.match(footer, /\^o expand/);
+    assert.match(footer, /t think/);
+    assert.match(footer, /\[ \] agent/);
   });
 
   it("renders and identifies all eight retained workers", () => {
@@ -2466,7 +2515,7 @@ describe("agents tab in all modes with selection and peek", () => {
       "tool read",
     ];
     for (const width of [20, 40, 80]) {
-      const body = renderPeekBody(theme, width, item, { transcript });
+      const body = renderPeekBody(theme, width, item, { bodyLines: transcript });
       assert.equal(body.length, TODO_LIST_MAX_LINES, `width ${width}: fills default pane`);
       for (const row of body) {
         assert.equal(row.includes("\n"), false, `width ${width}: single row each`);
@@ -2474,7 +2523,7 @@ describe("agents tab in all modes with selection and peek", () => {
       }
       assert.doesNotMatch(body.join("\n"), /9007199254740991/, "no raw MAX_SAFE_INTEGER in the overlay");
     }
-    const wide = renderPeekBody(theme, 80, item, { transcript });
+    const wide = renderPeekBody(theme, 80, item, { bodyLines: transcript });
     assert.match(wide.join("\n"), /38 turns/, "unbounded fusion cap renders as N turns");
     assert.deepEqual(renderPeekBody(theme, 0, item), []);
     const capped = renderPeekBody(theme, 80, worker({
@@ -2486,13 +2535,13 @@ describe("agents tab in all modes with selection and peek", () => {
         { tool: "extra", status: "completed" },
       ],
     }), {
-      transcript: [...transcript, `worker: ${"word ".repeat(80)}end`],
+      bodyLines: [...transcript, `worker: ${"word ".repeat(80)}end`],
       maxLines: 12,
     });
     assert.ok(capped.every((line: string) => safeVisibleWidth(line) === 80));
     assert.equal(capped.length, 12);
-    assert.match(capped.at(-1) ?? "", /esc: back to lead/);
-    assert.match(capped.join("\n"), /session still writing/);
+    assert.match(capped.at(-1) ?? "", /esc back/);
+    assert.match(capped.join("\n"), /s steer/);
     const missing = renderPeekBody(theme, 80, item, {});
     assert.match(missing.join("\n"), /transcript unavailable/);
   });
@@ -2500,7 +2549,7 @@ describe("agents tab in all modes with selection and peek", () => {
   it("does not throw when peek theme is missing, method-bound, or lacks bgColors", () => {
     const item = worker({ lifecycle: "running" });
     const transcript = ["lead: hi"];
-    const none = renderPeekBody(undefined, 40, item, { transcript, maxLines: 8 });
+    const none = renderPeekBody(undefined, 40, item, { bodyLines: transcript, maxLines: 8 });
     assert.equal(none.length, 8);
     assert.ok(none.every((row) => safeVisibleWidth(row) === 40));
 
@@ -2514,7 +2563,7 @@ describe("agents tab in all modes with selection and peek", () => {
       },
       bgColors: { customMessageBg: "#111" },
     };
-    const painted = renderPeekBody(methodTheme, 40, item, { transcript, maxLines: 8 });
+    const painted = renderPeekBody(methodTheme, 40, item, { bodyLines: transcript, maxLines: 8 });
     assert.equal(painted.length, 8);
     assert.ok(painted.every((row) => safeVisibleWidth(row) === 40));
 
@@ -2522,7 +2571,7 @@ describe("agents tab in all modes with selection and peek", () => {
       fg: (_token: string, text: string) => text,
       bg: methodTheme.bg,
     };
-    const fallback = renderPeekBody(extractedBg, 40, item, { transcript, maxLines: 8 });
+    const fallback = renderPeekBody(extractedBg, 40, item, { bodyLines: transcript, maxLines: 8 });
     assert.equal(fallback.length, 8);
     assert.ok(fallback.every((row) => safeVisibleWidth(row) === 40));
   });
@@ -2534,7 +2583,7 @@ describe("agents tab in all modes with selection and peek", () => {
       bg: (key: string, text: string) => (key === "customMessageBg" ? `\x1b[48;5;53m${text}\x1b[49m` : text),
     };
     for (const width of [20, 40, 80]) {
-      const lines = renderPeekBody(bgTheme, width, item, { transcript: ["worker: active"], maxLines: 10 });
+      const lines = renderPeekBody(bgTheme, width, item, { bodyLines: ["worker: active"], maxLines: 10 });
       assert.equal(lines.length, 10);
       assert.ok(lines.every((row: string) => safeVisibleWidth(row) === width), `width ${width}`);
       assert.ok(lines.every((row: string) => !row.includes("\x1b[48;5;53m")), "no background escape sequence");
@@ -2545,7 +2594,7 @@ describe("agents tab in all modes with selection and peek", () => {
     const item = worker({ lifecycle: "running" });
     for (const width of [40, 80]) {
       const lines = renderPeekBody(theme, width, item, {
-        transcript: ["worker: reading file", "worker: editing file"],
+        bodyLines: ["worker: reading file", "worker: editing file"],
         maxLines: 12,
       });
       for (const line of lines) {
@@ -2556,7 +2605,8 @@ describe("agents tab in all modes with selection and peek", () => {
     }
   });
 
-  it("formats transcript tail with tool arguments and outcome details", () => {
+  it("builds tool components with arguments and resolved results", () => {
+    const stubTui = { requestRender() {} };
     const jsonl = [
       JSON.stringify({
         type: "message",
@@ -2608,13 +2658,15 @@ describe("agents tab in all modes with selection and peek", () => {
       }),
     ].join("\n") + "\n";
 
-    const tail = formatTranscriptTail(jsonl);
-    assert.equal(tail.length, 2);
-    assert.match(tail[0]!, /worker: tool read src\/index\.ts:10\+40 · 2\.4k chars/);
-    assert.match(tail[1]!, /worker: tool bash npm test · exit 0/);
+    const doc = new PeekTranscript({ tui: stubTui, cwd: process.cwd(), expandedAll: false, hideThinking: false });
+    doc.appendText(jsonl, false);
+    const text = stripAnsi(doc.renderBody(80).lines.join("\n"));
+    assert.match(text, /src\/index\.ts/, "read call renders its path argument");
+    assert.match(text, /npm test/, "bash call renders its command");
   });
 
-  it("distinctly marks and styles errored tool results", () => {
+  it("resolves errored tool results into the tool component", () => {
+    const stubTui = { requestRender() {} };
     const jsonl = [
       JSON.stringify({
         type: "message",
@@ -2642,19 +2694,309 @@ describe("agents tab in all modes with selection and peek", () => {
       }),
     ].join("\n") + "\n";
 
-    const tail = formatTranscriptTail(jsonl);
-    assert.equal(tail.length, 1);
-    assert.match(tail[0]!, /tool bash npm run test:broken · FAIL: syntax error in test ×/);
+    const doc = new PeekTranscript({ tui: stubTui, cwd: process.cwd(), expandedAll: true, hideThinking: false });
+    doc.appendText(jsonl, false);
+    const text = stripAnsi(doc.renderBody(80).lines.join("\n"));
+    assert.match(text, /npm run test:broken/, "failed call keeps its command");
+    assert.match(text, /FAIL: syntax error in test/, "error result resolves into the tool component");
+  });
 
-    const ansiTheme = {
-      fg: (key: string, text: string) => (key === "error" ? `\x1b[31m${text}\x1b[39m` : text),
-      bg: (_key: string, text: string) => text,
-    };
-    const rendered = renderPeekBody(ansiTheme, 80, worker({ lifecycle: "running" }), {
-      transcript: tail,
-      maxLines: 8,
+  it("drops the trailing partial line a live worker is still writing", () => {
+    const full = JSON.stringify({ type: "message", message: { role: "user", content: "done" } }) + "\n";
+    const partial = JSON.stringify({ type: "message", message: { role: "user", content: "half" } });
+    assert.equal(parsePeekText(full + partial, true).length, 1, "partial tail dropped");
+    assert.equal(parsePeekText(full + partial + "\n", false).length, 2, "completed lines kept");
+    assert.equal(parsePeekText("not json\n" + full, false).length, 1, "garbage skipped");
+  });
+
+  it("bounds the component transcript and flags omitted history", () => {
+    const stubTui = { requestRender() {} };
+    const doc = new PeekTranscript({ tui: stubTui, cwd: process.cwd(), expandedAll: false, hideThinking: false });
+    const entries = Array.from({ length: 210 }, (_, index) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `prompt ${index}` } }),
+    );
+    doc.appendText(entries.join("\n") + "\n", false);
+    assert.equal(doc.entryCount, 200, "keeps the last 200 message entries");
+    assert.equal(doc.isTrimmed, true, "trimming is reported");
+    const bodyLines = stripAnsi(doc.renderBody(78).lines.join("\n")).split("\n");
+    const top = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {
+      bodyLines,
+      bodyOmitted: doc.isTrimmed,
+      maxLines: 12,
+      scrollOffset: 0,
     });
-    assert.match(rendered.join("\n"), /\x1b\[31m.*syntax error.*×.*\x1b\[39m/);
+    assert.match(top.join("\n"), /earlier transcript omitted/, "trim note sits at the top of the body");
+    const pinned = renderPeekBody(theme, 80, worker({ lifecycle: "settled" }), {
+      bodyLines,
+      bodyOmitted: doc.isTrimmed,
+      maxLines: 12,
+    });
+    assert.match(pinned.join("\n"), /prompt 209/, "pinned view still shows the newest entry");
+  });
+
+  describe("peek worker management", () => {
+    const CONTROL_KEY = "__piTaskFleetControl";
+
+    interface ControlCall {
+      op: string;
+      id: string;
+      mode?: string;
+      text?: string;
+    }
+
+    function installFakeControl(calls: ControlCall[], refuse?: RegExp) {
+      (globalThis as Record<string, unknown>)[CONTROL_KEY] = {
+        send: async (id: string, mode: string, text: string) => {
+          calls.push({ op: "send", id, mode, text });
+          if (refuse?.test(`${mode}:${id}`)) {
+            return { ok: false, message: `${id} is settled; steer needs a live worker.` };
+          }
+          return { ok: true, message: `${id} ${mode} queued.` };
+        },
+        abort: async (id: string) => {
+          calls.push({ op: "abort", id });
+          return { ok: true, message: `${id} abort completed cooperatively.` };
+        },
+        close: async (id: string) => {
+          calls.push({ op: "close", id });
+          return { ok: true, message: `${id} closed (task_close).` };
+        },
+      };
+    }
+
+    function uninstallControl() {
+      delete (globalThis as Record<string, unknown>)[CONTROL_KEY];
+    }
+
+    async function openLivePeek(dock: ReturnType<typeof mountPlan>, id = "task_1") {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({ id, agent: "scout", fusion: false })]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      assert.ok(dock.overlay(), "click opens the peek overlay");
+    }
+
+    function footerText(dock: ReturnType<typeof mountPlan>, width = 80): string {
+      return stripAnsi(dock.overlay().render(width).join("\n"));
+    }
+
+    it("steers a live worker from the peek and shows the bounded result", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await openLivePeek(dock);
+        dock.overlay().handleInput("s");
+        assert.match(footerText(dock), /steer task_1>/, "s opens the footer input");
+        for (const ch of "slow down") dock.overlay().handleInput(ch);
+        assert.match(footerText(dock), /steer task_1> slow down/);
+        dock.overlay().handleInput("\r");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(calls, [{ op: "send", id: "task_1", mode: "steer", text: "slow down" }]);
+        assert.match(footerText(dock), /task_1 steer queued/, "result shows until the next key");
+        assert.ok(dock.overlay(), "peek stays open after the action");
+        dock.overlay().handleInput("j");
+        assert.doesNotMatch(footerText(dock), /task_1 steer queued/);
+        assert.match(footerText(dock), /s steer/, "hints return after the next key");
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("cancels the footer input on Esc without sending", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await openLivePeek(dock);
+        dock.overlay().handleInput("s");
+        dock.overlay().handleInput("x");
+        assert.match(footerText(dock), /steer task_1> x/, "printable keys type while input is active");
+        dock.overlay().handleInput("\u001b");
+        assert.deepEqual(calls, [], "Esc cancels without sending");
+        assert.ok(dock.overlay(), "Esc cancels input without closing peek");
+        assert.match(footerText(dock), /esc back/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("confirms abort: n cancels, y executes", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await openLivePeek(dock);
+        dock.overlay().handleInput("x");
+        assert.match(footerText(dock), /abort task_1\? y\/n/);
+        dock.overlay().handleInput("n");
+        assert.deepEqual(calls, [], "n cancels the confirm");
+        assert.ok(dock.overlay());
+        assert.match(footerText(dock), /s steer/, "hints return after cancel");
+        dock.overlay().handleInput("x");
+        dock.overlay().handleInput("y");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(calls, [{ op: "abort", id: "task_1" }]);
+        assert.match(footerText(dock), /abort completed cooperatively/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("hides steer/abort on settled workers and maps follow-up to prompt", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await writePlan(dock.mock, dock.tuiCtx);
+        publishDockAgents([worker({ id: "task_done", lifecycle: "settled", fusion: false })]);
+        await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+        dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+        await Promise.resolve();
+        const footer = footerText(dock, 100);
+        assert.match(footer, /f prompt/);
+        assert.match(footer, /c close/);
+        assert.doesNotMatch(footer, /s steer/);
+        assert.doesNotMatch(footer, /x abort/);
+        dock.overlay().handleInput("s");
+        assert.deepEqual(calls, [], "s is inert on a settled worker");
+        assert.doesNotMatch(footerText(dock), /steer task_done>/);
+        dock.overlay().handleInput("x");
+        assert.deepEqual(calls, [], "x is inert on a settled worker");
+        dock.overlay().handleInput("f");
+        assert.match(footerText(dock), /prompt task_done>/, "settled follow-up opens a prompt input");
+        for (const ch of "again") dock.overlay().handleInput(ch);
+        dock.overlay().handleInput("\r");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(calls, [{ op: "send", id: "task_done", mode: "prompt", text: "again" }]);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("closes a settled worker from the peek confirm", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await writePlan(dock.mock, dock.tuiCtx);
+        publishDockAgents([worker({ id: "task_done", lifecycle: "settled", fusion: false })]);
+        await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+        dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+        await Promise.resolve();
+        dock.overlay().handleInput("c");
+        assert.match(footerText(dock), /close task_done\? y\/n/);
+        dock.overlay().handleInput("y");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(calls, [{ op: "close", id: "task_done" }]);
+        assert.match(footerText(dock), /task_done closed/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("reports a missing task extension instead of sending", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      try {
+        await openLivePeek(dock);
+        dock.overlay().handleInput("s");
+        for (const ch of "hi") dock.overlay().handleInput(ch);
+        dock.overlay().handleInput("\r");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(calls, []);
+        assert.match(footerText(dock), /task extension not loaded/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("runs steer/follow/abort/close from /agents commands", async () => {
+      const dock = mountPlan("1");
+      const calls: ControlCall[] = [];
+      installFakeControl(calls);
+      try {
+        await writePlan(dock.mock, dock.tuiCtx);
+        publishDockAgents([
+          worker({ id: "task_1", agent: "scout", fusion: false }),
+          worker({ id: "task_done", lifecycle: "settled", fusion: false }),
+        ]);
+        const agents = dock.mock.commands.get("agents").handler;
+        await agents("steer task_1 slow down", dock.tuiCtx);
+        await agents("follow task_1 keep going", dock.tuiCtx);
+        await agents("follow task_done try again", dock.tuiCtx);
+        await agents("abort task_1", dock.tuiCtx);
+        await agents("close task_done", dock.tuiCtx);
+        assert.deepEqual(calls, [
+          { op: "send", id: "task_1", mode: "steer", text: "slow down" },
+          { op: "send", id: "task_1", mode: "follow_up", text: "keep going" },
+          { op: "send", id: "task_done", mode: "prompt", text: "try again" },
+          { op: "abort", id: "task_1" },
+          { op: "close", id: "task_done" },
+        ]);
+        assert.match(dock.notifications.at(-1) ?? "", /task_done closed/);
+        await agents("steer task_1", dock.tuiCtx);
+        assert.match(dock.notifications.at(-1) ?? "", /Usage: \/agents steer <id> <text>/);
+        await agents("bogus task_1", dock.tuiCtx);
+        assert.match(dock.notifications.at(-1) ?? "", /Unknown \/agents subcommand/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("notifies when the task extension is not loaded for commands", async () => {
+      const dock = mountPlan("1");
+      try {
+        await writePlan(dock.mock, dock.tuiCtx);
+        await dock.mock.commands.get("agents").handler("abort task_1", dock.tuiCtx);
+        assert.match(dock.notifications.at(-1) ?? "", /task extension not loaded/);
+      } finally {
+        uninstallControl();
+        dock.shutdown();
+      }
+    });
+
+    it("renders the managed footer states bounded at width 100", () => {
+      const live = worker({ id: "task_3", lifecycle: "running" });
+      const idle = stripAnsi(
+        renderPeekBody(theme, 100, live, { bodyLines: ["worker: ok"], maxLines: 24 }).join("\n"),
+      );
+      // Every hint except the lowest-priority page alias fits at width 100.
+      assert.match(idle, /esc back · s steer · f follow · x abort · c close · j\/k scroll · \^o expand · t think · \[ \] agent/);
+      assert.doesNotMatch(idle, /space\/b/);
+      const input = stripAnsi(
+        renderPeekBody(theme, 100, live, { inputLine: "steer task_3> hold on" }).join("\n"),
+      );
+      assert.match(input, /steer task_3> hold on/);
+      assert.doesNotMatch(input, /s steer/);
+      const confirm = stripAnsi(
+        renderPeekBody(theme, 100, live, { confirmLine: "abort task_3? y/n" }).join("\n"),
+      );
+      assert.match(confirm, /abort task_3\? y\/n/);
+      const status = stripAnsi(
+        renderPeekBody(theme, 100, live, { statusLine: "task_3 steer queued." }).join("\n"),
+      );
+      assert.match(status, /task_3 steer queued/);
+      for (const [name, lines] of [["idle", idle], ["input", input], ["confirm", confirm], ["status", status]] as const) {
+        for (const line of lines.split("\n")) {
+          assert.equal(safeVisibleWidth(line), 100, `${name} footer row stays opaque at 100`);
+        }
+      }
+      const settledIdle = stripAnsi(
+        renderPeekBody(theme, 100, worker({ id: "task_3", lifecycle: "settled" }), {}).join("\n"),
+      );
+      assert.match(settledIdle, /f prompt.*c close/);
+      assert.doesNotMatch(settledIdle, /s steer/);
+      assert.doesNotMatch(settledIdle, /x abort/);
+    });
   });
 });
 

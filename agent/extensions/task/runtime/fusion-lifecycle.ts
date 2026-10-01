@@ -338,10 +338,28 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     return found;
   }
 
-  /** Whether `id` names a non-closed Fusion sidekick. */
+  /**
+   * Lookup by handle across live and parked sidekicks. Parking preserves
+   * identity: a parked transcript is still the lead's sidekick, and
+   * reap/inspect tools must stay reachable so they report truthful lifecycle
+   * state instead of a scope error.
+   */
+  byId(id: string | undefined): TWorker | undefined {
+    if (!id) return undefined;
+    for (const worker of this.deps.listWorkers()) {
+      if (worker.id === id) return worker;
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether `id` names a Fusion sidekick, parked or not. Parking (reuse,
+   * isolation, mode leave, and abort paths all park via closeWorker) must
+   * never un-own the lead's own sidekick: task_close on a parked worker
+   * reports "already closed" from the tool, not a scope rejection.
+   */
   owns(id: string | undefined): boolean {
-    if (!id) return false;
-    return this.findAll().some((worker) => worker.id === id);
+    return this.byId(id)?.fusion === true;
   }
 
   /** Sidekicks whose current generation is still live. */
@@ -709,7 +727,12 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       toolName !== "task_start" &&
       toolName !== "task_list"
     ) {
-      if (!this.owns(inputId)) {
+      const worker = this.byId(inputId);
+      // Unknown ids fall through: the worker is gone (registry cleared on
+      // session resume, or settled metadata pruned), so the tool itself
+      // reports "Unknown worker" truthfully. Only a known non-sidekick
+      // stays rejected here.
+      if (worker && !worker.fusion) {
         return "Fusion task operations are scoped to its sidekicks.";
       }
     }

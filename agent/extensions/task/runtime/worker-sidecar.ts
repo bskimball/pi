@@ -18,6 +18,13 @@ export interface WorkerSidecar {
   cwd: string;
   model?: string;
   thinking?: string;
+  /**
+   * Fusion ownership. Set for persistent sidekicks so a post-crash/resume
+   * rebind resumes as a sidekick instead of silently losing the lead's
+   * task_* scope (which previously surfaced as "scoped to its sidekicks").
+   */
+  fusion?: boolean;
+  fusionParentSessionId?: string;
   sessionDir: string;
   pid?: number;
   parentPid: number;
@@ -114,6 +121,26 @@ export function deleteWorkerSidecar(sessionDir: string): void {
 }
 
 export type RebindClassification = "skip" | "orphan" | "rebind";
+
+/**
+ * Fusion ownership across a parent crash/resume. A rebound sidekick keeps
+ * its Fusion identity only while the pair is still configured; otherwise it
+ * resumes as an ordinary worker under its recorded model. Pure so the guard
+ * tests can pin the matrix without spawning workers.
+ */
+export function rebindFusion(
+  sidecar: Pick<WorkerSidecar, "fusion" | "fusionParentSessionId"> | undefined,
+  pairConfigured: boolean,
+): { fusion: boolean; fusionParentSessionId?: string } {
+  if (sidecar?.fusion === true && pairConfigured) {
+    const restored: { fusion: boolean; fusionParentSessionId?: string } = { fusion: true };
+    if (sidecar.fusionParentSessionId !== undefined) {
+      restored.fusionParentSessionId = sidecar.fusionParentSessionId;
+    }
+    return restored;
+  }
+  return { fusion: false };
+}
 
 export function classifyWorkerSidecar(
   sidecar: WorkerSidecar,

@@ -39,6 +39,14 @@ describe("worker sidecar", () => {
     assert.equal(readWorkerSidecar(first.sessionDir), undefined);
   });
 
+  it("round-trips Fusion ownership for post-crash sidekick rebind", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sidecar-"));
+    roots.push(root);
+    const fusion = { ...fixture(root), fusion: true, fusionParentSessionId: "parent-1" };
+    writeWorkerSidecar(fusion);
+    assert.deepEqual(readWorkerSidecar(fusion.sessionDir), fusion);
+  });
+
   it("scans past empty session directories before applying the list cap", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sidecar-"));
     roots.push(root);

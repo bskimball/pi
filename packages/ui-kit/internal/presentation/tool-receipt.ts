@@ -160,6 +160,17 @@ function isStrippedControl(code: number): boolean {
   );
 }
 
+/** Count lines from `start` to the end, treating CRLF as one break and ignoring a trailing break. */
+function countLinesFrom(text: string, start: number): number {
+  let lines = 1;
+  for (let index = start; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code === 13 && text.charCodeAt(index + 1) === 10) index++;
+    if ((code === 10 || code === 13) && index < text.length - 1) lines++;
+  }
+  return lines;
+}
+
 /** Clip text to a hard line and character budget, reporting what was dropped. */
 export function boundedOutput(
   text: string,
@@ -169,13 +180,14 @@ export function boundedOutput(
   const shown: string[] = [];
   let current = "";
   let used = 0;
+  let lineStart = 0;
   let hiddenLines = 0;
   let truncatedByChars = false;
   let stopped = false;
 
   const commit = (): boolean => {
     if (shown.length >= maxLines) {
-      hiddenLines++;
+      hiddenLines = countLinesFrom(text, lineStart);
       return false;
     }
     shown.push(current);
@@ -200,11 +212,12 @@ export function boundedOutput(
         break;
       }
       if (crlf) index++;
+      lineStart = index + 1;
       continue;
     }
 
     if (shown.length >= maxLines) {
-      hiddenLines++;
+      hiddenLines = countLinesFrom(text, lineStart);
       stopped = true;
       break;
     }
@@ -225,7 +238,7 @@ export function boundedOutput(
 
   if (hiddenLines === 0 && !truncatedByChars) return shown;
   const suffix = hiddenLines
-    ? `... ${hiddenLines}+ more lines`
+    ? `... ${hiddenLines} more ${hiddenLines === 1 ? "line" : "lines"}`
     : `... output truncated at ${maxChars} characters`;
   return [...shown, suffix];
 }

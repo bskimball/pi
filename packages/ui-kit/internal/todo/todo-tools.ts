@@ -16,22 +16,24 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type {
-  Component,
-  TuiMouseEvent,
-  TuiMouseEventResult,
+import {
+  CURSOR_MARKER,
+  Input,
+  type Component,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import {
-  TRANSCRIPT_TAIL_BYTES,
-  formatTranscriptTail,
-} from "./peek-tool-format.ts";
+  PeekTranscript,
+  readPeekIncremental,
+  readPeekSnapshot,
+} from "./peek-transcript.ts";
 import {
   CANONICAL_STATUSES,
   agentRowAtY,
   buildTodoList,
   canSwitchToSession,
   clampPeekScroll,
-  layoutPeekTranscript,
   peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
@@ -44,15 +46,16 @@ import {
 } from "./todo-view.ts";
 import {
   currentDockAgents,
+  fleetControl,
   setAgentWorkspaceOpen,
   subscribeDockAgents,
   type DockAgentItem,
+  type FleetControlMode,
 } from "./fleet-listen.ts";
 import {
   apexPresentationEnabled,
   withApexPresentation,
 } from "../presentation/presentation.ts";
-import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { renderLinesSafely, padStartToWidth, safeTruncateToWidth } from "../presentation/safe-text-layout.ts";
 import {
   DURATION_COLUMN,
@@ -483,38 +486,22 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
   }
 
-  function readTranscriptTail(path: string): string[] {
-    let handle: number | undefined;
+  /** Worker session file path from a fleet snapshot, if one was reported. */
+  function sessionFileOf(item: DockAgentItem): string | undefined {
     try {
-      const stat = statSync(path);
-      if (!stat.isFile()) return [];
-      const size = Math.max(0, Math.min(stat.size, TRANSCRIPT_TAIL_BYTES));
-      if (size <= 0) return [];
-      handle = openSync(path, "r");
-      const buffer = Buffer.alloc(size);
-      readSync(handle, buffer, 0, size, Math.max(0, stat.size - size));
-      return formatTranscriptTail(buffer.toString("utf8"));
+      const path = readProp(item, "sessionFile");
+      return typeof path === "string" && path ? path : undefined;
     } catch {
-      return [];
-    } finally {
-      if (handle !== undefined) {
-        try {
-          closeSync(handle);
-        } catch {
-          // Best effort; a failed close must not break the overlay.
-        }
-      }
+      return undefined;
     }
   }
-  function peekTranscript(item: DockAgentItem): string[] {
+
+  /** Lead's tool-output expansion state, mirrored into peek tool components. */
+  function readToolsExpanded(ctx: ExtensionContext): boolean {
     try {
-      const path = typeof readProp(item, "sessionFile") === "string"
-        ? (readProp(item, "sessionFile") as string)
-        : undefined;
-      if (!path) return [];
-      return readTranscriptTail(path);
+      return ctx.ui.getToolsExpanded() === true;
     } catch {
-      return [];
+      return false;
     }
   }
 
@@ -530,9 +517,22 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let peekOpen = false;
   let peekItemId: string | undefined;
   let peekSnapshot: DockAgentItem | undefined;
-  let peekTranscriptLines: string[] = [];
+  /** Component transcript for the open peek; built at overlay mount. */
+  let peekDoc: PeekTranscript | undefined;
+  /** Resume offset for the incremental session-file read. */
+  let peekOffset = 0;
+  /** True when the initial 1 MiB window did not cover the whole file. */
+  let peekWindowTrimmed = false;
+  let peekExpandedAll = false;
+  let peekHideThinking = false;
   let peekScrollOffset: number | undefined;
   let peekInvalidate: (() => void) | undefined;
+  /** Single-line steer/follow-up editor open in the peek footer. */
+  let peekInput: { mode: "steer" | "follow_up" | "prompt"; id: string; label: string; editor: Input } | undefined;
+  /** Pending destructive confirm (`abort task_1? y/n`). */
+  let peekConfirm: { action: "abort" | "close"; id: string } | undefined;
+  /** Bounded one-line action result shown until the next key. */
+  let peekStatus: string | undefined;
 
   function refreshOpenPeek(items: readonly DockAgentItem[]): void {
     if (!peekOpen || !peekItemId) return;
@@ -543,7 +543,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
     // file read never occurs in render and streaming heartbeat deltas do not
     // publish a new snapshot. Pinned views stay pinned so new tail lines
     // appear; an explicit scroll offset is left in place.
-    peekTranscriptLines = peekTranscript(next);
+    if (peekDoc) {
+      const path = sessionFileOf(next);
+      if (path) {
+        const inc = readPeekIncremental(path, peekOffset);
+        if (inc.reset) peekDoc.reset();
+        if (inc.entries.length) peekDoc.appendFileEntries(inc.entries);
+        peekOffset = inc.nextOffset;
+      }
+    }
     peekInvalidate?.();
   }
 
@@ -557,8 +565,16 @@ export function installTodoTools(pi: ExtensionAPI): void {
     setAgentWorkspaceOpen(true);
     peekItemId = item.id;
     peekSnapshot = item;
-    peekTranscriptLines = peekTranscript(item);
+    peekDoc = undefined;
+    peekOffset = 0;
+    peekWindowTrimmed = false;
+    peekExpandedAll = readToolsExpanded(ctx);
+    peekHideThinking = false;
     peekScrollOffset = undefined;
+    peekInput = undefined;
+    peekConfirm = undefined;
+    peekStatus = undefined;
+    const openerCwd = ctx.cwd;
     let result: { open: boolean } | undefined;
     try {
       let currentRows = () => 24;
@@ -566,6 +582,22 @@ export function installTodoTools(pi: ExtensionAPI): void {
       result = await ctx.ui.custom<{ open: boolean }>(
         (tui, theme, keys, done) => {
           currentRows = () => Math.max(3, Math.min(80, tui?.terminal?.rows ?? 24));
+          // Mount-time file read (never during render): the component
+          // transcript is built once here, then extended by refreshOpenPeek.
+          const doc = new PeekTranscript({
+            tui,
+            cwd: openerCwd,
+            expandedAll: peekExpandedAll,
+            hideThinking: peekHideThinking,
+          });
+          peekDoc = doc;
+          const initialPath = sessionFileOf(peekSnapshot ?? item);
+          if (initialPath) {
+            const snap = readPeekSnapshot(initialPath);
+            doc.appendFileEntries(snap.entries);
+            peekOffset = snap.nextOffset;
+            peekWindowTrimmed = snap.windowTrimmed;
+          }
           peekInvalidate = () => {
             requestHostRender();
             try {
@@ -574,26 +606,193 @@ export function installTodoTools(pi: ExtensionAPI): void {
               // Overlay paint is best-effort; the host path still runs.
             }
           };
+          /**
+           * Open the single-line footer editor. While it is active it owns
+           * every key; Esc cancels via the editor without closing the peek.
+           */
+          const openPeekInput = (mode: "steer" | "follow_up" | "prompt", id: string): void => {
+            const label = mode === "prompt" ? "prompt" : mode === "steer" ? "steer" : "follow-up";
+            const editor = new Input({ prompt: `${label} ${id}> ` });
+            editor.focused = true;
+            editor.onSubmit = (value: string) => {
+              void submitPeekInput(value);
+            };
+            editor.onEscape = () => {
+              peekInput = undefined;
+              peekInvalidate?.();
+            };
+            peekInput = { mode, id, label, editor };
+            peekConfirm = undefined;
+            peekStatus = undefined;
+            peekInvalidate?.();
+          };
+          const submitPeekInput = async (value: string): Promise<void> => {
+            const pending = peekInput;
+            peekInput = undefined;
+            if (!pending || !value.trim()) {
+              peekInvalidate?.();
+              return;
+            }
+            const control = fleetControl();
+            if (!control) {
+              peekStatus = "task extension not loaded";
+              peekInvalidate?.();
+              return;
+            }
+            peekStatus = `sending ${pending.label} to ${pending.id}...`;
+            peekInvalidate?.();
+            try {
+              const result = await control.send(pending.id, pending.mode, value.trim());
+              peekStatus = result.message || (result.ok ? "sent" : "failed");
+            } catch {
+              peekStatus = "control call failed";
+            }
+            peekInvalidate?.();
+          };
+          /** Run a confirmed abort/close through the shared control channel. */
+          const runPeekConfirm = async (): Promise<void> => {
+            const pending = peekConfirm;
+            peekConfirm = undefined;
+            if (!pending) return;
+            const control = fleetControl();
+            if (!control) {
+              peekStatus = "task extension not loaded";
+              peekInvalidate?.();
+              return;
+            }
+            peekStatus = `${pending.action === "abort" ? "aborting" : "closing"} ${pending.id}...`;
+            peekInvalidate?.();
+            try {
+              const result =
+                pending.action === "abort"
+                  ? await control.abort(pending.id)
+                  : await control.close(pending.id);
+              peekStatus = result.message || (result.ok ? `${pending.action} done` : "failed");
+            } catch {
+              peekStatus = "control call failed";
+            }
+            peekInvalidate?.();
+          };
+          /** Footer override for input / confirm / result states. */
+          const peekFooterOptions = (
+            innerWidth: number,
+          ): { inputLine?: string; confirmLine?: string; statusLine?: string } => {
+            if (peekInput) {
+              let line: string | undefined;
+              try {
+                line = peekInput.editor.render(Math.max(1, innerWidth))[0];
+              } catch {
+                line = undefined;
+              }
+              // The kit truncator cannot see pi-tui's cursor marker, so it
+              // would count `_pi:c` as visible text; strip it (cursor hidden).
+              const stripped =
+                typeof line === "string" ? line.split(CURSOR_MARKER).join("") : undefined;
+              return { inputLine: stripped ?? `${peekInput.label} ${peekInput.id}> ` };
+            }
+            if (peekConfirm) {
+              return { confirmLine: `${peekConfirm.action} ${peekConfirm.id}? y/n` };
+            }
+            if (peekStatus !== undefined) return { statusLine: peekStatus };
+            return {};
+          };
+          const innerWidthOf = (width: number): number => {
+            const gutter = width >= 20 ? 1 : 0;
+            return Math.max(1, width - gutter * 2);
+          };
+          /** Rendered body rows plus the omitted-note row todo-view prepends. */
+          const totalRows = (): number => {
+            if (!peekDoc) return 0;
+            const count = peekDoc.lineCount(innerWidthOf(currentWidth));
+            const trimmed = peekDoc.isTrimmed || peekWindowTrimmed;
+            return count + (trimmed && count > 0 ? 1 : 0);
+          };
           const scrollBy = (delta: number): void => {
             const current = peekSnapshot ?? item;
             const body = peekTranscriptBudget(currentWidth, current, currentRows());
-            const gutter = currentWidth >= 20 ? 1 : 0;
-            const innerWidth = Math.max(1, currentWidth - gutter * 2);
-            const rows = layoutPeekTranscript(theme, innerWidth, peekTranscriptLines);
-            peekScrollOffset = clampPeekScroll(rows.length, body, peekScrollOffset, delta);
+            peekScrollOffset = clampPeekScroll(totalRows(), body, peekScrollOffset, delta);
+            peekInvalidate?.();
+          };
+          /** Re-clamp an explicit offset after expand/thinking reflow. */
+          const clampOffset = (): void => {
+            if (peekScrollOffset === undefined) return;
+            const current = peekSnapshot ?? item;
+            const budget = peekTranscriptBudget(currentWidth, current, currentRows());
+            const maxOffset = Math.max(0, totalRows() - Math.max(0, budget));
+            peekScrollOffset = maxOffset <= 0 ? undefined : Math.min(peekScrollOffset, maxOffset);
+          };
+          /** Switch to the previous/next dock agent without closing. */
+          const switchPeek = (delta: number): void => {
+            if (liveAgents.length < 2 || !peekDoc) return;
+            const from = liveAgents.findIndex((entry) => entry.id === peekItemId);
+            const base = from === -1 ? selectedAgent : from;
+            const next = liveAgents[(base + delta + liveAgents.length) % liveAgents.length];
+            if (!next || next.id === peekItemId) return;
+            peekItemId = next.id;
+            peekSnapshot = next;
+            selectedAgent = liveAgents.indexOf(next);
+            const replacement = new PeekTranscript({
+              tui,
+              cwd: openerCwd,
+              expandedAll: peekExpandedAll,
+              hideThinking: peekHideThinking,
+            });
+            const path = sessionFileOf(next);
+            if (path) {
+              const snap = readPeekSnapshot(path);
+              replacement.appendFileEntries(snap.entries);
+              peekOffset = snap.nextOffset;
+              peekWindowTrimmed = snap.windowTrimmed;
+            } else {
+              peekOffset = 0;
+              peekWindowTrimmed = false;
+            }
+            peekDoc = replacement;
+            peekScrollOffset = undefined;
+            peekInput = undefined;
+            peekConfirm = undefined;
+            peekStatus = undefined;
+            if (currentCtx) renderPanel();
             peekInvalidate?.();
           };
           return {
             render(width: number): string[] {
               currentWidth = width;
+              const body = peekDoc?.renderBody(innerWidthOf(width)) ?? { lines: [], trimmed: false };
               return renderPeekBody(theme, width, peekSnapshot ?? item, {
-                transcript: peekTranscriptLines,
+                bodyLines: body.lines,
+                bodyOmitted: body.trimmed || peekWindowTrimmed,
                 canOpenHere,
                 maxLines: currentRows(),
                 scrollOffset: peekScrollOffset,
+                ...peekFooterOptions(innerWidthOf(width)),
               });
             },
             handleInput(data: string): void {
+              // While the single-line editor is active it owns every key;
+              // Esc cancels via the editor, never by closing the peek.
+              if (peekInput) {
+                try {
+                  peekInput.editor.handleInput(data);
+                } catch {
+                  // Editor input never breaks the overlay.
+                }
+                peekInvalidate?.();
+                return;
+              }
+              // A pending confirm owns the next key: y executes, anything else cancels.
+              if (peekConfirm) {
+                if (data === "y" || data === "Y") void runPeekConfirm();
+                else {
+                  peekConfirm = undefined;
+                  peekInvalidate?.();
+                }
+                return;
+              }
+              // The one-line result survives only until the next key; the key
+              // still acts, so clear first and repaint below when unclaimed.
+              const hadStatus = peekStatus !== undefined;
+              peekStatus = undefined;
               if (
                 keys.matches(data, "tui.select.cancel") ||
                 data === "\u0003" ||
@@ -603,11 +802,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 done({ open: false });
                 return;
               }
-              if (data === "\u001b[A" || data === "\u001bOA") {
+              if (data === "\u001b[A" || data === "\u001bOA" || data === "k") {
                 scrollBy(-1);
                 return;
               }
-              if (data === "\u001b[B" || data === "\u001bOB") {
+              if (data === "\u001b[B" || data === "\u001bOB" || data === "j") {
                 scrollBy(1);
                 return;
               }
@@ -617,10 +816,16 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 scrollBy(-Math.max(1, body));
                 return;
               }
-              if (data === "\u001b[6~") {
+              if (data === "\u001b[6~" || data === " ") {
                 const current = peekSnapshot ?? item;
                 const body = peekTranscriptBudget(currentWidth, current, currentRows());
                 scrollBy(Math.max(1, body));
+                return;
+              }
+              if (data === "b" || data === "B") {
+                const current = peekSnapshot ?? item;
+                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                scrollBy(-Math.max(1, body));
                 return;
               }
               if (data === "g" || data === "\u001b[H" || data === "\u001b[1~") {
@@ -633,6 +838,56 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 peekInvalidate?.();
                 return;
               }
+              if (data === "\u000f" || data === "e" || data === "E") {
+                peekExpandedAll = !peekExpandedAll;
+                peekDoc?.setExpandedAll(peekExpandedAll);
+                clampOffset();
+                peekInvalidate?.();
+                return;
+              }
+              if (data === "t" || data === "T") {
+                peekHideThinking = !peekHideThinking;
+                peekDoc?.setHideThinking(peekHideThinking);
+                clampOffset();
+                peekInvalidate?.();
+                return;
+              }
+              if (data === "[" || data === "\u001b[Z") {
+                switchPeek(-1);
+                return;
+              }
+              if (data === "]" || data === "\u0009") {
+                switchPeek(1);
+                return;
+              }
+              // Direct worker management over the fleet control channel.
+              // Keys are contextual: s/x need a live worker, f maps to a new
+              // prompt generation once settled, c works on any lifecycle.
+              if (data === "s" || data === "S") {
+                const current = peekSnapshot ?? item;
+                if (!canSwitchToSession(current.lifecycle)) openPeekInput("steer", current.id);
+                else peekInvalidate?.();
+                return;
+              }
+              if (data === "f" || data === "F") {
+                const current = peekSnapshot ?? item;
+                openPeekInput(canSwitchToSession(current.lifecycle) ? "prompt" : "follow_up", current.id);
+                return;
+              }
+              if (data === "x" || data === "X") {
+                const current = peekSnapshot ?? item;
+                if (!canSwitchToSession(current.lifecycle)) {
+                  peekConfirm = { action: "abort", id: current.id };
+                }
+                peekInvalidate?.();
+                return;
+              }
+              if (data === "c" || data === "C") {
+                const current = peekSnapshot ?? item;
+                peekConfirm = { action: "close", id: current.id };
+                peekInvalidate?.();
+                return;
+              }
               if (
                 data === "o" ||
                 data === "O" ||
@@ -640,7 +895,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
               ) {
                 const current = peekSnapshot ?? item;
                 if (canSwitchToSession(current.lifecycle)) done({ open: true });
+                else if (hadStatus) peekInvalidate?.();
+                return;
               }
+              if (hadStatus) peekInvalidate?.();
             },
             invalidate(): void {},
           };
@@ -660,8 +918,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
       setAgentWorkspaceOpen(false);
       peekItemId = undefined;
       peekSnapshot = undefined;
-      peekTranscriptLines = [];
+      peekDoc = undefined;
+      peekOffset = 0;
+      peekWindowTrimmed = false;
+      peekExpandedAll = false;
+      peekHideThinking = false;
       peekScrollOffset = undefined;
+      peekInput = undefined;
+      peekConfirm = undefined;
+      peekStatus = undefined;
       peekInvalidate = undefined;
     }
     return result ?? { open: false };
@@ -926,6 +1191,62 @@ export function installTodoTools(pi: ExtensionAPI): void {
     if (currentCtx) renderPanel();
   }
 
+  /**
+   * /agents steer|follow|abort|close: the same fleet control channel the peek
+   * uses, reporting the bounded result via notify. Deliberately ungated on
+   * presentation: like /agents itself these stay registered under
+   * PI_UI_CHROME=0 and work without the dock.
+   */
+  async function controlAgent(
+    ctx: ExtensionContext,
+    verb: "steer" | "follow" | "abort" | "close",
+    rest: string[],
+  ): Promise<void> {
+    currentCtx = ctx;
+    const control = fleetControl();
+    if (!control) {
+      ctx.ui.notify("task extension not loaded", "error");
+      return;
+    }
+    const [rawId, ...words] = rest;
+    const id = (rawId ?? "").trim();
+    if (!id) {
+      ctx.ui.notify(
+        verb === "steer" || verb === "follow"
+          ? `Usage: /agents ${verb} <id> <text>.`
+          : `Usage: /agents ${verb} <id>.`,
+        "info",
+      );
+      return;
+    }
+    try {
+      if (verb === "steer" || verb === "follow") {
+        const text = words.join(" ").trim();
+        if (!text) {
+          ctx.ui.notify(`Usage: /agents ${verb} <id> <text>.`, "info");
+          return;
+        }
+        let mode: FleetControlMode;
+        if (verb === "steer") {
+          mode = "steer";
+        } else {
+          // Live workers queue a follow_up; settled/failed workers start a
+          // new prompt generation (unknown ids default to follow_up and the
+          // runtime reports them unknown).
+          const target = liveAgents.find((entry) => entry.id === id);
+          mode = target && canSwitchToSession(target.lifecycle) ? "prompt" : "follow_up";
+        }
+        const result = await control.send(id, mode, text);
+        ctx.ui.notify(result.message || "sent", result.ok ? "info" : "error");
+        return;
+      }
+      const result = verb === "abort" ? await control.abort(id) : await control.close(id);
+      ctx.ui.notify(result.message || `${verb} done`, result.ok ? "info" : "error");
+    } catch {
+      ctx.ui.notify("control call failed", "error");
+    }
+  }
+
   // Always registered (no SDK unregister exists); togglePanel/switchPane
   // refuse while presentation is disabled, keeping the plain widget mounted.
   {
@@ -943,7 +1264,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       handler: async (_args, ctx) => togglePanel(ctx),
     });
     pi.registerCommand("agents", {
-      description: "Show live sub-agents in the todo dock; /agents peek [id] opens a read-only view, /agents open <id> switches to a settled worker's session",
+      description: "Show live sub-agents in the todo dock; /agents peek [id] opens a read-only view, /agents open <id> switches to a settled worker's session, /agents steer|follow <id> <text> messages a worker, /agents abort|close <id> stops or reaps one",
       handler: async (args, ctx) => {
         const [verb, ...rest] = args.trim().split(/\s+/).filter(Boolean);
         if (verb === "peek") {
@@ -954,8 +1275,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
           await openAgentSession(ctx, rest.join(" "));
           return;
         }
+        if (verb === "steer" || verb === "follow" || verb === "abort" || verb === "close") {
+          await controlAgent(ctx, verb, rest);
+          return;
+        }
         if (verb !== undefined) {
-          ctx.ui.notify(`Unknown /agents subcommand "${cleanInline(verb, 24)}". Use /agents, /agents peek [id], or /agents open <id>.`, "info");
+          ctx.ui.notify(`Unknown /agents subcommand "${cleanInline(verb, 24)}". Use /agents, /agents peek [id], /agents open <id>, /agents steer|follow <id> <text>, or /agents abort|close <id>.`, "info");
           return;
         }
         switchPane(ctx, "agents");

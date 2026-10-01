@@ -493,7 +493,7 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   assert.equal(h.lifecycle.gateSidekick("read"), undefined);
   assert.equal(h.lifecycle.gateLead("task", "task_2"), undefined);
   assert.equal(h.lifecycle.gateLead("task_chain", "task_2"), "Fusion permits only its sidekicks.");
-  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), "Fusion task operations are scoped to its sidekicks.");
+  assert.equal(h.lifecycle.gateLead("task_send", "task_9"), undefined, "unknown ids fall through so the tool reports Unknown worker truthfully");
   assert.equal(h.lifecycle.gateLead("task_send", "task_2"), undefined);
   assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed while worker is live");
   assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed while worker is live");
@@ -502,6 +502,35 @@ test("FusionLifecycle parks, isolates, restores transcripts, and gates through o
   foreign.lifecycle = "settled";
   assert.equal(h.lifecycle.gateLead("edit", undefined), undefined, "lead edit allowed after settle");
   assert.equal(h.lifecycle.gateLead("bash", undefined), undefined, "lead bash allowed after settle");
+});
+
+test("Fusion gate keeps parked sidekicks operable while non-sidekicks stay rejected", () => {
+  const h = fusionHarness();
+  const sidekick = h.fusionWorker({ id: "task_3", generation: 2 });
+  const ordinary = h.fusionWorker({ id: "task_4", fusion: false, fusionParentSessionId: undefined });
+  h.workers.push(sidekick, ordinary);
+  // Reuse parking (dead transport / oversized context), session isolation,
+  // and mode leave all park via closeWorker: the sidekick stays owned.
+  h.lifecycle.isolateSession("other-parent");
+  assert.equal(sidekick.closed, true, "sidekick parked by isolation");
+  assert.equal(ordinary.closed, false, "non-sidekick untouched by isolation");
+  assert.equal(h.lifecycle.owns("task_3"), true, "parking never un-owns the lead's sidekick");
+  assert.equal(h.lifecycle.owns("task_4"), false);
+  assert.equal(h.lifecycle.owns("task_9"), false);
+  for (const tool of ["task_close", "task_send", "task_wait", "task_abort", "task_status"]) {
+    assert.equal(h.lifecycle.gateLead(tool, "task_3"), undefined, `${tool} on a parked sidekick stays reachable so the tool reports truthful state`);
+    assert.equal(
+      h.lifecycle.gateLead(tool, "task_4"),
+      "Fusion task operations are scoped to its sidekicks.",
+      `${tool} on a known non-sidekick stays rejected`,
+    );
+    assert.equal(h.lifecycle.gateLead(tool, "task_9"), undefined, `${tool} on an unknown worker falls through to the tool's Unknown report`);
+    assert.equal(h.lifecycle.gateLead(tool, undefined), undefined, `${tool} without an id falls through to the tool's id-required report`);
+  }
+  assert.equal(h.lifecycle.gateLead("task_chain", "task_3"), "Fusion permits only its sidekicks.");
+  assert.equal(h.lifecycle.gateLead("task_rebind", "task_3"), "Fusion permits only its sidekicks.");
+  assert.equal(h.lifecycle.gateLead("task_start", undefined), undefined);
+  assert.equal(h.lifecycle.gateLead("task_list", undefined), undefined);
 });
 
 test("FusionLifecycle configure applies sequentially and rolls back through one path", async () => {
