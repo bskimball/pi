@@ -3,23 +3,25 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export const JEV_DEFAULT_MODEL = "jev-1.13.0";
-export const JEV_CF_MODEL = "typesafe/jev";
 export const JEV_CONFIG_FILE_NAME = "jev.json";
 export const JEV_ENV_VAR = "TYPESAFE_API_KEY";
 
-export type JevProvider = "typesafe" | "cloudflare-workers-ai";
+/** Pi classifier catalog IDs used when jev.json names no model. */
+const JEV_DEFAULT_MODEL = "jev-latest";
+const JEV_CF_DEFAULT_MODEL = "typesafe/jev";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SERIALIZED_CHARS = 64_000;
-const MAX_ERROR_BODY_CHARS = 500;
 const MAX_QUESTIONS = 16;
 const MAX_ID_CHARS = 80;
 const MAX_MODEL_CHARS = 128;
 const MAX_CHOICE_OPTIONS = 32;
 const MAX_SCORE_LEVELS = 10;
 const MIN_SCORE_LEVELS = 2;
+
+type ModelRegistry = ExtensionContext["modelRegistry"];
+type PiClassifierContext = Parameters<ModelRegistry["classify"]>[1];
+type PiClassifierResult = Awaited<ReturnType<ModelRegistry["classify"]>>;
 
 export type Criterion = string | Record<string, unknown> | unknown[];
 export type JevQuestion =
@@ -52,6 +54,10 @@ function redact(value: string, ...keys: Array<string | undefined>): string {
   return result;
 }
 
+function sanitizeDetail(value: string, key?: string): string {
+  return redact(value, key).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 700);
+}
+
 /** Config root, mirroring the Exa algorithm: env dir, XDG, then home. */
 export function getJevRoot(): string {
   return process.env.PI_CODING_AGENT_DIR?.trim()
@@ -72,15 +78,19 @@ function isCriterion(value: unknown): value is Criterion {
   return typeof value === "string" || isRecord(value) || Array.isArray(value);
 }
 
-/** Resolved Jev configuration. `key` is present only for the Typesafe provider. */
-interface JevResolvedConfig {
-  provider: JevProvider;
+/**
+ * Resolved Jev target. Auth belongs to Pi now (stored credentials, env, or
+ * models.json); `apiKey` here only forwards an explicit jev.json override,
+ * which Pi honors per-field over its own resolution.
+ */
+interface JevTarget {
+  provider: string;
   model: string;
-  key?: string;
+  apiKey?: string;
 }
 
-/** Resolve provider + model + key. Throws actionable, key-free errors. */
-function resolveJevConfig(): JevResolvedConfig {
+/** Resolve provider + model + optional explicit key. Throws actionable, key-free errors. */
+function resolveJevTarget(): JevTarget {
   const configPath = getJevConfigPath();
   let fileProvider: unknown;
   let fileApiKey: unknown;
@@ -96,41 +106,37 @@ function resolveJevConfig(): JevResolvedConfig {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT" || filePresent) {
       // JSON parse errors can quote the secret-bearing input. Never forward them.
-      throw new Error(`Jev config unreadable at ${configPath}. Expected a JSON object with optional provider, apiKey, and model; fix or remove the file before env-only usage via ${JEV_ENV_VAR}.`);
+      throw new Error(`Jev config unreadable at ${configPath}. Expected a JSON object with optional provider, apiKey, and model; fix or remove the file.`);
     }
   }
-  let provider: JevProvider = "typesafe";
+  let provider = "typesafe";
   if (fileProvider !== undefined) {
-    if (fileProvider !== "typesafe" && fileProvider !== "cloudflare-workers-ai") {
-      throw new Error(`Jev config provider at ${configPath} must be "typesafe" or "cloudflare-workers-ai".`);
+    if (typeof fileProvider !== "string" || !fileProvider.trim() || fileProvider.trim().length > MAX_MODEL_CHARS) {
+      throw new Error(`Jev config provider at ${configPath} must be a non-empty string of at most ${MAX_MODEL_CHARS} characters.`);
     }
-    provider = fileProvider;
+    provider = fileProvider.trim();
   }
   if (fileApiKey !== undefined && typeof fileApiKey !== "string") {
     throw new Error(`Jev config apiKey at ${configPath} must be a string.`);
   }
-  let model = provider === "cloudflare-workers-ai" ? JEV_CF_MODEL : JEV_DEFAULT_MODEL;
+  let model: string | undefined;
   if (fileModel !== undefined) {
     if (typeof fileModel !== "string" || !fileModel.trim() || fileModel.trim().length > MAX_MODEL_CHARS) {
       throw new Error(`Jev config model at ${configPath} must be a non-empty string of at most ${MAX_MODEL_CHARS} characters.`);
     }
     model = fileModel.trim();
   }
-  if (provider === "cloudflare-workers-ai") {
-    // Cloudflare auth resolves per call from Pi's configured Cloudflare
-    // credential via the injected model registry; nothing secret is stored here.
-    return { provider, model };
+  model ??= provider === "cloudflare-workers-ai" ? JEV_CF_DEFAULT_MODEL : provider === "typesafe" ? JEV_DEFAULT_MODEL : undefined;
+  if (!model) {
+    throw new Error(`Jev config model at ${configPath} is required when provider is "${provider}". Pick a Pi classifier model (e.g. "typesafe/jev" on cloudflare-workers-ai).`);
   }
-  const environment = process.env[JEV_ENV_VAR]?.trim();
-  if (environment) return { provider, model, key: environment };
-  if (typeof fileApiKey !== "string") {
-    throw new Error(`Jev API key is required. Set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${configPath} (never paste the key in chat).`);
-  }
-  const key = expandEnv(fileApiKey);
-  if (!key) {
-    throw new Error(`Jev API key is required. Set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${configPath} (never paste the key in chat).`);
-  }
-  return { provider, model, key };
+  // A non-empty TYPESAFE_API_KEY overrides file apiKey for the typesafe
+  // provider, as before. Pi reads the same env itself; passing it explicitly
+  // keeps file-vs-env precedence deterministic.
+  const environment = provider === "typesafe" ? process.env[JEV_ENV_VAR]?.trim() : undefined;
+  const fileKey = typeof fileApiKey === "string" ? expandEnv(fileApiKey) : "";
+  const apiKey = environment || fileKey || undefined;
+  return apiKey ? { provider, model, apiKey } : { provider, model };
 }
 
 function validateQuestion(id: string, question: JevQuestion): void {
@@ -197,28 +203,54 @@ function finite01(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
-function validateJevResponse(body: unknown, request: JevRequest): JevResponse {
-  if (!isRecord(body)) throw new Error("Jev response was not a JSON object; treating as malformed.");
-  if (typeof body.model !== "string" || !body.model.trim() || body.model.length > MAX_MODEL_CHARS) {
+function saneTokens(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * Locate the native answers object inside a captured raw response body.
+ * Typesafe returns it directly (`{answers, usage, model}`); gateway-style
+ * envelopes nest it under `result`, possibly inside a completed run record
+ * (`{result: {state: "Completed", result: <native>}}`).
+ */
+function rawAnswers(body: unknown): Record<string, unknown> | undefined {
+  if (isRecord(body) && isRecord(body.answers)) return body.answers as Record<string, unknown>;
+  if (isRecord(body) && "result" in body) {
+    const run = (body as Record<string, unknown>).result;
+    if (isRecord(run) && isRecord(run.answers)) return run.answers as Record<string, unknown>;
+    if (isRecord(run) && isRecord(run.result) && isRecord((run.result as Record<string, unknown>).answers)) {
+      return (run.result as Record<string, unknown>).answers as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+function rawModel(body: unknown): string | undefined {
+  if (isRecord(body) && typeof body.model === "string" && body.model.trim()) return body.model;
+  return undefined;
+}
+
+/**
+ * Validate Pi's parsed result against our request and recover the score
+ * extras (probabilities, legend) Pi's typed answers drop, from the captured
+ * raw body. Missing extras are malformed, never invented.
+ */
+function validateJevResponse(result: PiClassifierResult, rawBody: unknown, request: JevRequest): JevResponse {
+  const raw = rawAnswers(rawBody);
+  const model = rawModel(rawBody) ?? result.model;
+  if (!model || model.length > MAX_MODEL_CHARS) {
     throw new Error("Jev response model was missing or invalid; treating as malformed.");
   }
-  if (!isRecord(body.answers)) throw new Error("Jev response answers were missing; treating as malformed.");
-  if (!isRecord(body.usage)) throw new Error("Jev response usage was missing; treating as malformed.");
-  const inputTokens = body.usage.input_tokens;
-  const outputTokens = body.usage.output_tokens;
-  if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens) || inputTokens < 0
-    || typeof outputTokens !== "number" || !Number.isFinite(outputTokens) || outputTokens < 0) {
-    throw new Error("Jev response usage counts were invalid; treating as malformed.");
-  }
+  const usage = {
+    input_tokens: saneTokens(result.usage?.input),
+    output_tokens: saneTokens(result.usage?.output),
+  };
   const answers: Record<string, JevAnswer> = Object.create(null);
   for (const [id, question] of Object.entries(request.questions)) {
-    const answer = body.answers[id];
+    const answer = (result.answers as Record<string, unknown>)[id];
     if (!isRecord(answer)) throw new Error(`Jev response is missing the answer for question "${id}"; treating as malformed.`);
-    if (answer.type !== question.type) {
-      throw new Error(`Jev answer "${id}" came back as "${String(answer.type)}" for a "${question.type}" question; treating as malformed.`);
-    }
     if (question.type === "choice") {
-      if (typeof answer.choice !== "string" || !Object.hasOwn(question.criteria, answer.choice)) {
+      if (answer.type !== "choice" || typeof answer.choice !== "string" || !Object.hasOwn(question.criteria, answer.choice)) {
         throw new Error(`Jev Choice "${id}" selected an unoffered option; treating as malformed.`);
       }
       if (!finite01(answer.confidence) || !isRecord(answer.probabilities)
@@ -228,36 +260,40 @@ function validateJevResponse(body: unknown, request: JevRequest): JevResponse {
       answers[id] = { type: "choice", choice: answer.choice, confidence: answer.confidence, probabilities: answer.probabilities as Record<string, number> };
     } else if (question.type === "score") {
       const top = question.criteria.length - 1;
-      if (typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > top) {
+      if (answer.type !== "score" || typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > top) {
         throw new Error(`Jev Score "${id}" is outside [0, ${top}]; treating as malformed.`);
       }
-      if (!finite01(answer.confidence) || !isRecord(answer.probabilities)
-        || !Object.values(answer.probabilities).every(finite01) || !Object.hasOwn(answer, "legend")) {
+      if (!finite01(answer.confidence)) {
         throw new Error(`Jev Score "${id}" has invalid confidence/probabilities/legend; treating as malformed.`);
       }
-      answers[id] = { type: "score", score: answer.score, confidence: answer.confidence, legend: answer.legend, probabilities: answer.probabilities as Record<string, number> };
+      const rawAnswer = raw?.[id];
+      if (!isRecord(rawAnswer) || !isRecord(rawAnswer.probabilities)
+        || !Object.values(rawAnswer.probabilities).every(finite01) || !Object.hasOwn(rawAnswer, "legend")) {
+        throw new Error(`Jev Score "${id}" has invalid confidence/probabilities/legend; treating as malformed.`);
+      }
+      answers[id] = { type: "score", score: answer.score, confidence: answer.confidence, legend: rawAnswer.legend, probabilities: rawAnswer.probabilities as Record<string, number> };
     } else {
-      if (typeof answer.noul !== "number" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) {
+      // Our noul travels as Pi's bool and returns as {type: "bool", probability}.
+      if (answer.type !== "bool" || typeof answer.probability !== "number" || !Number.isFinite(answer.probability) || answer.probability < 0 || answer.probability > 1) {
         throw new Error(`Jev Noul "${id}" is outside [0, 1]; treating as malformed.`);
       }
-      answers[id] = { type: "noul", noul: answer.noul };
+      answers[id] = { type: "noul", noul: answer.probability };
     }
   }
-  return { model: body.model, answers, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
+  return { model, answers, usage };
 }
 
 /**
- * One advisory Jev evaluation. Typesafe posts {state, model, questions} to the
- * System One endpoint. Cloudflare posts {model, input: {state, questions}} to
- * the account's /ai/run route using the injected Pi model registry to resolve
- * the configured Cloudflare token + account ID transiently (no stored copy).
- * No retry: a retry may incur another charge. Throws bounded, redacted
- * Errors; never logs secrets.
+ * One advisory Jev evaluation via Pi's built-in classifier runtime
+ * (`modelRegistry.classify`). Pi owns transport and auth (stored credentials,
+ * env, models.json); an explicit jev.json apiKey is forwarded per-field.
+ * No retry: a retry may incur another charge (`maxRetries: 0`).
+ * Throws bounded, redacted Errors; never logs secrets.
  */
 export async function evaluateJev(
   request: JevRequest,
   signal?: AbortSignal,
-  modelRegistry?: ExtensionContext["modelRegistry"],
+  modelRegistry?: ModelRegistry,
 ): Promise<JevResponse> {
   if (signal?.aborted) throw new Error("Jev request aborted before dispatch; no request was sent.");
   validateJevRequest(request);
@@ -265,78 +301,83 @@ export async function evaluateJev(
   if (serialized.length > MAX_SERIALIZED_CHARS) {
     throw new Error(`Jev request is ${serialized.length} chars (limit ${MAX_SERIALIZED_CHARS}). Narrow the state or split the questions; input is never truncated automatically.`);
   }
-  const resolved = resolveJevConfig();
+  const target = resolveJevTarget();
   if (signal?.aborted) throw new Error("Jev request aborted before dispatch; no request was sent.");
-  let url: string;
-  let headers: Record<string, string>;
-  let body: string;
-  let redactKeys: Array<string | undefined>;
-  if (resolved.provider === "cloudflare-workers-ai") {
-    if (!modelRegistry) {
-      throw new Error("Jev Cloudflare mode needs Pi's configured Cloudflare credential (model registry unavailable). Configure Cloudflare auth in Pi; no direct Typesafe fallback is attempted.");
-    }
-    const carrier = modelRegistry.getAvailable().find((m) => m.provider === "cloudflare-workers-ai")
-      ?? modelRegistry.getAll().find((m) => m.provider === "cloudflare-workers-ai");
-    if (!carrier) {
-      throw new Error("Jev Cloudflare mode needs a configured cloudflare-workers-ai model in Pi; none is available. Configure Cloudflare auth; no direct Typesafe fallback is attempted.");
-    }
-    const cfAuth = await modelRegistry.getApiKeyAndHeaders(carrier).catch(() => undefined);
-    if (!cfAuth?.ok) {
-      throw new Error("Jev Cloudflare auth is unavailable; configure Cloudflare credentials in Pi. No direct Typesafe fallback is attempted.");
-    }
-    const accountId = cfAuth.env?.["CLOUDFLARE_ACCOUNT_ID"];
-    if (!cfAuth.apiKey || !accountId) {
-      throw new Error("Jev Cloudflare auth is missing the API token or account ID; configure Cloudflare auth in Pi (stored credential or CLOUDFLARE_API_KEY / CLOUDFLARE_ACCOUNT_ID). No direct Typesafe fallback is attempted.");
-    }
-    url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
-    headers = { "Authorization": `Bearer ${cfAuth.apiKey}`, "Content-Type": "application/json" };
-    body = JSON.stringify({ model: resolved.model, input: { state: request.state, questions: request.questions } });
-    redactKeys = [cfAuth.apiKey, accountId];
-  } else {
-    if (!resolved.key) {
-      throw new Error(`Jev API key is required. Set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${getJevConfigPath()} (never paste the key in chat).`);
-    }
-    url = JEV_ENDPOINT;
-    headers = { "Authorization": `Bearer ${resolved.key}`, "Content-Type": "application/json" };
-    body = JSON.stringify({ state: request.state, model: resolved.model, questions: request.questions });
-    redactKeys = [resolved.key];
+  if (!modelRegistry || typeof modelRegistry.getModelOfType !== "function" || typeof modelRegistry.classify !== "function") {
+    throw new Error("Jev needs Pi's classifier runtime (modelRegistry.getModelOfType/classify), which is unavailable here. Run inside Pi 0.99+ with a configured classifier provider.");
+  }
+  const model = modelRegistry.getModelOfType("classifier", target.provider, target.model);
+  if (!model) {
+    throw new Error(`Jev classifier "${target.provider}/${target.model}" is not in Pi's model catalog. List available classifiers with models.getAvailableOfType("classifier") (codemode) or check the provider is configured; no fallback provider is attempted.`);
+  }
+  if (!target.apiKey && typeof modelRegistry.hasConfiguredAuth === "function" && !modelRegistry.hasConfiguredAuth(model as unknown as Parameters<ModelRegistry["hasConfiguredAuth"]>[0])) {
+    throw new Error(`Jev classifier "${target.provider}/${target.model}" has no configured auth. For typesafe set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${getJevConfigPath()}; for other providers run /login or add models.json credentials (never paste the key in chat).`);
   }
   if (signal?.aborted) throw new Error("Jev request aborted before dispatch; no request was sent.");
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
+  // Pi types state as a JSON object, but its transports forward state
+  // opaquely and Jev natively accepts string state, so forward our string
+  // unchanged to keep the wire payload identical. Rich criteria likewise pass
+  // through, cast only to satisfy Pi's narrower string-only typings.
+  const piQuestions: PiClassifierContext["questions"] = Object.create(null);
+  for (const [id, question] of Object.entries(request.questions)) {
+    if (question.type === "choice") {
+      piQuestions[id] = { type: "choice", instructions: question.instructions, criteria: question.criteria as unknown as Record<string, string> };
+    } else if (question.type === "score") {
+      piQuestions[id] = { type: "score", instructions: question.instructions, criteria: question.criteria as unknown as string[] };
+    } else {
+      piQuestions[id] = {
+        type: "bool",
+        instructions: question.instructions,
+        criteria: question.criteria as { true: string; false: string },
+      };
+    }
+  }
+  const context = {
+    state: request.state as unknown as PiClassifierContext["state"],
+    questions: piQuestions,
+  };
+
+  // Pi's typed answers drop score probabilities/legend, which our tool and
+  // receipts display. Capture the raw JSON body via a wrapped fetch and
+  // recover them from it. Single attempt only.
+  let rawBody: unknown;
+  const capturingFetch = (async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+    const response = await globalThis.fetch(input, init);
+    try {
+      rawBody = await response.clone().json();
+    } catch {
+      // Non-JSON or unreadable bodies surface as Pi errors or malformed
+      // responses below; never throw from the capture path.
+    }
+    return response;
+  }) as typeof globalThis.fetch;
+
+  let result: PiClassifierResult;
   try {
-    const response = await fetch(url, { method: "POST", headers, body, signal: requestSignal });
-    if (!response.ok) {
-      const raw = await response.text().catch(() => "");
-      const bodyText = redact(raw, ...redactKeys).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, MAX_ERROR_BODY_CHARS);
-      const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
-      const retryNote = retryAfter
-        ? ` Retry after ${redact(retryAfter, ...redactKeys).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 64)}; not retried automatically.`
-        : "";
-      throw new Error(`HTTP ${response.status}: ${bodyText}.${retryNote}`);
-    }
-    const envelope: unknown = await response.json().catch(() => undefined);
-    if (resolved.provider === "cloudflare-workers-ai" && isRecord(envelope) && envelope.success === false) {
-      throw new Error(`Cloudflare reported an unsuccessful evaluation: ${JSON.stringify(envelope.errors ?? [])}`);
-    }
-    // Workers AI may nest a completed gateway result inside its API envelope.
-    // Typesafe returns the native Jev body directly.
-    let candidate: unknown = envelope;
-    if (resolved.provider === "cloudflare-workers-ai" && isRecord(envelope) && "result" in envelope) {
-      candidate = (envelope as Record<string, unknown>).result;
-    }
-    if (resolved.provider === "cloudflare-workers-ai" && isRecord(candidate) && "state" in candidate && "result" in candidate) {
-      if (candidate.state !== "Completed" || !isRecord(candidate.result)) {
-        const stateText = typeof candidate.state === "string" ? candidate.state : "unknown";
-        throw new Error(`Cloudflare Jev evaluation did not complete (state: ${stateText}); treating as failed with no retry.`);
-      }
-      candidate = candidate.result;
-    }
-    return validateJevResponse(candidate, request);
+    result = await modelRegistry.classify(model, context, {
+      signal,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxRetries: 0,
+      fetch: capturingFetch,
+      ...(target.apiKey ? { apiKey: target.apiKey } : {}),
+    });
   } catch (error) {
     if (signal?.aborted) throw new Error("Jev request aborted after dispatch; completion/billing is unknown.");
-    if (timeoutSignal.aborted) throw new Error("Jev request timed out after 30s; completion/billing is unknown.");
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Jev request failed: ${redact(message, ...redactKeys).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 700)}`);
+    throw new Error(`Jev request failed: ${sanitizeDetail(message, target.apiKey)}`);
+  }
+  if (result.stopReason !== "stop") {
+    if (signal?.aborted) throw new Error("Jev request aborted after dispatch; completion/billing is unknown.");
+    if (result.errorMessage && /timed out/i.test(result.errorMessage)) {
+      throw new Error("Jev request timed out after 30s; completion/billing is unknown.");
+    }
+    throw new Error(`Jev request failed: ${sanitizeDetail(result.errorMessage ?? result.stopReason, target.apiKey)}`);
+  }
+  try {
+    return validateJevResponse(result, rawBody, request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(sanitizeDetail(message, target.apiKey));
   }
 }

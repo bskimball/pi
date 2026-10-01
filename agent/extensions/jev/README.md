@@ -22,13 +22,15 @@ rotation or provider switching needs no restart.
 
 | Field | Type | Description |
 |---|---|---|
-| `provider` | `"typesafe"` \| `"cloudflare-workers-ai"` (optional) | Backend selector, default `"typesafe"`. No automatic fallback between providers. |
-| `apiKey` | string (Typesafe only) | TypeSafe key. Literal or single `$VAR`/`${VAR}` reference. |
-| `model` | string (optional) | Override. Defaults: `jev-1.13.0` direct, `typesafe/jev` on Cloudflare. Remove it when switching providers. |
+| `provider` | string (optional) | Pi classifier provider, default `"typesafe"`. No automatic fallback between providers. |
+| `apiKey` | string (optional) | Explicit key forwarded to Pi's classifier runtime (overrides Pi's own resolution for this call). Literal or single `$VAR`/`${VAR}` reference. |
+| `model` | string (optional) | Pi classifier model override. Defaults: `jev-latest` on typesafe, `typesafe/jev` on Cloudflare. Other providers require an explicit model. Remove it when switching providers. |
 
+Transport and auth belong to Pi's built-in classifier runtime
+(`modelRegistry.classify`): stored credentials, environment, or models.json.
 **Typesafe path:** a non-empty `TYPESAFE_API_KEY` overrides file `apiKey`.
 **Cloudflare path:** auth resolves per call from Pi's configured Cloudflare
-credential via the injected model registry (stored credential or
+credential (stored credential or
 `CLOUDFLARE_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`); `jev.json` holds no secrets
 in that mode. Unknown fields are ignored.
 
