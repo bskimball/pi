@@ -15,7 +15,7 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "hal-dark",
+  "theme": "claude-dark",
   "tuiMode": "fullscreen",
   "hideThinkingBlock": false
 }
