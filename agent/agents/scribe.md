@@ -5,6 +5,7 @@ model: claude-bridge/claude-sonnet-5-5
 fallbackModels:
   - 'local-proxy/gemini-3.8-flash-high'
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
+  - openai-codex/gpt-6.1-sol
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, edit, write
 inheritSkills: true

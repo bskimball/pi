@@ -552,7 +552,12 @@ export default function (pi: ExtensionAPI) {
     model: Type.Optional(
       Type.String({
         description:
-          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply.",
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; declared fallbacks apply unless allowFallback is false.",
+      }),
+    ),
+    allowFallback: Type.Optional(
+      Type.Boolean({
+        description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
       }),
     ),
   });
@@ -647,7 +652,7 @@ export default function (pi: ExtensionAPI) {
       const toolIdleMs = TOOL_IDLE_MS;
       const maxTurns = def.maxTurns ?? 30;
       const thinking = resolveAgentThinking(def, pi.getThinkingLevel());
-      const attempts = modelAttempts(def, params.model?.trim() || undefined);
+      const attempts = modelAttempts(def, params.model?.trim() || undefined, params.allowFallback);
 
       const ledger = new ActivityLedger({ maxActivities: 400 });
       const attemptedModels: string[] = [];

@@ -363,6 +363,7 @@ interface Worker extends RuntimeEventWorker {
   model?: string;
   thinking?: string;
   initialPrompt: string;
+  allowFallback?: boolean;
   modelAttempts: Array<string | undefined>;
   modelAttemptIndex: number;
   /** Attempt index whose qualifying failure was already persisted. */
@@ -953,6 +954,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         cwd: worker.cwd,
         model: worker.model,
         thinking: worker.thinking,
+        allowFallback: worker.allowFallback,
         sessionDir: worker.sessionDir,
         pid: worker.pid,
         parentPid: process.pid,
@@ -1505,6 +1507,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       cwd: string;
       rebind?: WorkerSidecar;
       modelOverride?: string;
+      allowFallback?: boolean;
       reportSchema?: string;
       forkSessionFile?: string;
       lastPhaseTag?: string;
@@ -1535,7 +1538,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       : params.rebind?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
     const attempts = isFusion
       ? [forcedFusionModel]
-      : modelAttempts(def, params.rebind?.model ?? params.modelOverride);
+      : modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
     // Fusion has exactly one configured model and deliberately bypasses the
     // circuit/fallback chain; preserving its transcript matters more than retry.
     const initial = isFusion
@@ -1553,6 +1556,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       model: modelLabel,
       thinking,
       initialPrompt: params.rebind ? "" : params.prompt,
+      allowFallback: params.rebind?.allowFallback ?? params.allowFallback,
       modelAttempts: attempts,
       modelAttemptIndex: initial.index,
       circuitFailureAttempt: undefined,
@@ -2047,7 +2051,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     model: Type.Optional(
       Type.String({
         description:
-          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary, declared fallbacks still apply.",
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; declared fallbacks apply unless allowFallback is false.",
+      }),
+    ),
+    allowFallback: Type.Optional(
+      Type.Boolean({
+        description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
       }),
     ),
     reportSchema: Type.Optional(
@@ -2189,6 +2198,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         prompt: params.prompt,
         cwd,
         modelOverride: params.model?.trim() || undefined,
+        allowFallback: params.allowFallback,
         reportSchema,
         forkSessionFile,
         fusion: sidekickMode !== undefined,

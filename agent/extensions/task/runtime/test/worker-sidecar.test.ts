@@ -39,6 +39,14 @@ describe("worker sidecar", () => {
     assert.equal(readWorkerSidecar(first.sessionDir), undefined);
   });
 
+  it("preserves an explicit no-fallback policy for post-crash rebind", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sidecar-"));
+    roots.push(root);
+    const worker = { ...fixture(root), model: "openai-codex/gpt-6.1-sol", allowFallback: false };
+    writeWorkerSidecar(worker);
+    assert.equal(readWorkerSidecar(worker.sessionDir)?.allowFallback, false);
+  });
+
   it("round-trips Fusion ownership for post-crash sidekick rebind", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sidecar-"));
     roots.push(root);

@@ -38,6 +38,17 @@ describe("modelAttempts", () => {
     ]);
   });
 
+  it("disables declared fallbacks only when explicitly requested", () => {
+    assert.deepEqual(modelAttempts(oracle, "openai-codex/gpt-6.1-sol", false), [
+      "openai-codex/gpt-6.1-sol",
+    ]);
+    assert.deepEqual(modelAttempts(oracle, undefined, false), [oracle.model]);
+    assert.deepEqual(modelAttempts(oracle, "openai-codex/gpt-6.1-sol"), [
+      "openai-codex/gpt-6.1-sol",
+      ...oracle.fallbackModels,
+    ]);
+  });
+
   it("ignores a lead model override when none is passed", () => {
     assert.deepEqual(
       modelAttempts(oracle, undefined),

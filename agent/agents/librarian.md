@@ -6,6 +6,7 @@ fallbackModels:
   - local-proxy/gemini-3.8-flash-high
   - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
+  - openai-codex/gpt-6.1-sol
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, web_search, fetch_content, get_search_content, jev, codemode, tool_search, mcp__context7__resolve_library_id, mcp__context7__query_docs
 inheritSkills: true

@@ -18,6 +18,7 @@ export interface WorkerSidecar {
   cwd: string;
   model?: string;
   thinking?: string;
+  allowFallback?: boolean;
   /**
    * Fusion ownership. Set for persistent sidekicks so a post-crash/resume
    * rebind resumes as a sidekick instead of silently losing the lead's
