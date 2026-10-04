@@ -2,6 +2,7 @@
 // strict-orchestrator mode. Browser/deploy implementation is neutral shared
 // runtime so Apex Observatory can launch it without importing this extension.
 
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -210,5 +211,26 @@ export default function (pi: ExtensionAPI): void {
     description:
       "Delegate lint, format, verify, and deploy to the stevedore subagent",
     handler: async (args, ctx) => runDeployCommand(pi, args, ctx),
+  });
+
+  pi.registerCommand("code", {
+    description: "Open VS Code in the current directory (or a given path)",
+    handler: async (args, ctx) => {
+      const target = args.trim() || ".";
+      // shell: true so Windows resolves the code.cmd launcher on PATH.
+      const child = spawn(`code "${target}"`, {
+        cwd: ctx.cwd,
+        detached: true,
+        stdio: "ignore",
+        shell: true,
+        windowsHide: true,
+      });
+      child.on("error", (err) => ctx.ui.notify(`Failed to launch VS Code: ${err.message}`, "error"));
+      child.on("exit", (code) => {
+        if (code) ctx.ui.notify(`VS Code launcher exited with code ${code}`, "error");
+      });
+      child.unref();
+      ctx.ui.notify(`Opening VS Code: ${target}`, "info");
+    },
   });
 }
