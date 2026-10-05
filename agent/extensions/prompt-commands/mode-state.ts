@@ -16,7 +16,7 @@ export function readPreferences(path: string): Preferences {
   try {
     const data = JSON.parse(readFileSync(path, "utf8"));
     if (!isMode(data.mode) || !data.models || !["pi", "apex", "claude", "hal"].includes(data.ui)) throw new Error("Invalid mode preferences");
-    return { ...initialPreferences(), ...data, themes: { ...initialPreferences().themes, ...data.themes } };
+    return { ...initialPreferences(), ...data, mode: data.mode === "apex-orchestrate" ? "apex" : data.mode, themes: { ...initialPreferences().themes, ...data.themes } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return initialPreferences();
     throw error;

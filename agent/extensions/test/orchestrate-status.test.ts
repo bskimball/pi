@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
-import { restoreMode, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
+import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
@@ -16,6 +16,16 @@ test("legacy modes restore without adopting a new global default", () => {
   assert.equal(restoreMode([], prefs, false).mode, "apex");
   assert.equal(restoreMode([], prefs, true).mode, "pi");
   assert.equal(restoreMode([{ type: "custom", customType: "orchestrate-mode", data: { enabled: true } }], prefs, false).mode, "apex-orchestrate");
+});
+test("stored orchestrate global default starts new sessions in Apex", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-orchestrate-default-"));
+  try {
+    const path = join(dir, "mode-settings.json");
+    writeFileSync(path, JSON.stringify({ ...initialPreferences(), mode: "apex-orchestrate" }));
+    const prefs = readPreferences(path);
+    assert.equal(restoreMode([], prefs, true).mode, "apex");
+    assert.equal(restoreMode([{ type: "custom", customType: "behavior-mode", data: { mode: "apex-orchestrate", models: {} } }], prefs, false).mode, "apex-orchestrate");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind from active tools", () => {
   const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_rebind", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
@@ -114,6 +124,19 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.match((await prompt()).systemPrompt, /Regular mode \(active\)/);
     await commands.orchestrate("on", ctx);
     assert.match((await prompt()).systemPrompt, /Strict orchestrator mode \(active\)/);
+    const globalPath = join(dir, "mode-settings.json");
+    assert.equal(JSON.parse(readFileSync(globalPath, "utf8")).mode, "apex", "orchestrate on leaves global default unchanged");
+    await emit("model_select", { source: "user", model: { provider: "session", id: "orchestrator" } });
+    assert.equal(JSON.parse(readFileSync(globalPath, "utf8")).models["apex-orchestrate"].modelId, "orchestrator", "orchestrate model preference still persists");
+    assert.equal(JSON.parse(readFileSync(globalPath, "utf8")).mode, "apex");
+    ctx.modelRegistry = { find: () => ({ provider: "session", id: "orchestrator" }) };
+    pi.setModel = async () => true;
+    await emit("session_start", { reason: "resume" });
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate", "session entry restores orchestrate");
+    await commands.orchestrate("off", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "apex");
+    await commands.mode("apex-orchestrate", ctx);
+    assert.equal(JSON.parse(readFileSync(globalPath, "utf8")).mode, "apex", "mode shortcut is also session-only");
     busy = true;
     await commands.mode("pi", ctx);
     assert.equal(process.env.PI_BEHAVIOR_MODE, "apex-orchestrate");

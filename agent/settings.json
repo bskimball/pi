@@ -11,17 +11,23 @@
       "source": "C:/Users/bskim/src/cursor-plugins/pstack",
       "extensions": [],
       "skills": [
-        "skills/blast-radius/SKILL.md",
-        "skills/correct/SKILL.md",
-        "skills/benchmark-checklist/SKILL.md",
-        "skills/figure-it-out/SKILL.md",
-        "skills/technical-writing/SKILL.md",
-        "skills/tdd/SKILL.md",
-        "skills/bro/SKILL.md"
+        "skills/blast-radius/SKILL.md"
       ],
       "prompts": [],
       "themes": []
-    }
+    },
+    "npm:pi-antigravity"
+  ],
+  "skills": [
+    "-skills/chrome-devtools-cli",
+    "-skills/troubleshooting",
+    "-skills/a11y-debugging",
+    "-skills/debug-optimize-lcp",
+    "-skills/memory-leak-debugging",
+    "-skills/grill-me",
+    "-skills/acquire-codebase-knowledge",
+    "-skills/codex",
+    "-skills/apex"
   ],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",

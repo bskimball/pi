@@ -3006,6 +3006,7 @@ describe("installUiHost once-owner across skins", () => {
     const shortcuts = new Map<string, unknown>();
     const commands = new Map<string, unknown>();
     const events = { on() {} };
+    const listeners = new Map<string, Array<(event: any, ctx: any) => void>>();
     const renderers: unknown[] = [];
     return {
       renderers,
@@ -3014,7 +3015,14 @@ describe("installUiHost once-owner across skins", () => {
       shortcuts,
       commands,
       events,
-      on() {},
+      on(name: string, handler: (event: any, ctx: any) => void) {
+        const handlers = listeners.get(name) ?? [];
+        handlers.push(handler);
+        listeners.set(name, handlers);
+      },
+      emit(name: string, event: any, ctx: any) {
+        for (const handler of listeners.get(name) ?? []) handler(event, ctx);
+      },
       registerTool(def: { name: string }) {
         tools.set(def.name, def);
       },
@@ -3041,6 +3049,40 @@ describe("installUiHost once-owner across skins", () => {
     invitation() { return ""; },
   };
   const noopIndicator = () => ({ frames: ["·"], intervalMs: 1000, message: "" });
+
+  it("builds the working indicator only in TUI, not RPC with hasUI", () => {
+    const previousChrome = process.env.PI_UI_CHROME;
+    process.env.PI_UI_CHROME = "1";
+    resetUiKitInstallForTests();
+    const pi = mockPi();
+    let builds = 0;
+    try {
+      installUiHost(pi as any, {
+        skin: "apex",
+        thinkingLabel: "· thinking",
+        buildWorkingIndicator() {
+          builds++;
+          return noopIndicator();
+        },
+      });
+      pi.emit("agent_start", {}, { mode: "rpc", hasUI: true, ui: {} });
+      assert.equal(builds, 0, "RPC never invokes the skin builder");
+      pi.emit("session_start", { reason: "resume" }, {
+        mode: "rpc", hasUI: true, ui: {},
+        sessionManager: { getEntries: () => [] },
+      });
+      assert.equal(builds, 0, "RPC layout never invokes the skin builder");
+      pi.emit("agent_start", {}, {
+        mode: "tui", hasUI: true,
+        ui: { setWorkingVisible() {}, setWorkingMessage() {}, setWorkingIndicator() {} },
+      });
+      assert.equal(builds, 1, "TUI still invokes the skin builder");
+    } finally {
+      resetUiKitInstallForTests();
+      if (previousChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = previousChrome;
+    }
+  });
 
   it("registers shared tools and shortcuts on only the first pi", async () => {
     const previousSkin = process.env.PI_UI_SKIN;

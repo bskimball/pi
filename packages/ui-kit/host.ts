@@ -73,7 +73,7 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
   // activeHost dynamically, so concurrent writes agree on one skin.
   pi.on("agent_start", (_event, ctx) => {
     const host = activeHost();
-    if (!host || !ctx.hasUI) return;
+    if (!host || !ctx.hasUI || ctx.mode !== "tui") return;
     try {
       const built = host.buildWorkingIndicator(ctx, pi);
       ctx.ui.setWorkingVisible(true);
@@ -325,7 +325,7 @@ export function installUiHost(pi: ExtensionAPI, options: UiHostOptions): void {
 
   function installLayout(piApi: ExtensionAPI, ctx: ExtensionContext) {
     const host = activeHost();
-    if (!ctx.hasUI || !host) return;
+    if (!ctx.hasUI || !host || ctx.mode !== "tui") return;
     // The thinking label lands before the indicator build, and the custom
     // editor installs after it unconditionally: a throwing indicator build
     // (e.g. skin/theme key mismatch) must never skip the editor, otherwise

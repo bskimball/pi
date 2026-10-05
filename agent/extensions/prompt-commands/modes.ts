@@ -52,7 +52,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     latest.models[state.mode] = state.models[state.mode];
     if (usesPersistentSidekick(state.mode)) latest.fusion = structuredClone(state.fusion);
     synchronizeFusionModel(latest);
-    if (setDefault) latest.mode = state.mode;
+    if (setDefault && state.mode !== "apex-orchestrate") latest.mode = state.mode;
     savePreferences(preferencePath, latest);
   };
   const announce = () => {
@@ -155,7 +155,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const identity = usesPersistentSidekick(mode) && state.fusion
         ? ` ${fusionPairLabel(state.fusion)}`
         : "";
-      ctx.ui.notify(`Mode: ${labels[mode]}. Default for new sessions updated.${identity}`, "info");
+      ctx.ui.notify(`Mode: ${labels[mode]}. ${mode === "apex-orchestrate" ? "Current session only." : "Default for new sessions updated."}${identity}`, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // Compensate in reverse order. Every step reports; none fail silently.
