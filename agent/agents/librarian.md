@@ -3,7 +3,7 @@ name: librarian
 description: Remote source-code researcher for external libraries, framework internals, reference implementations, and cross-repository investigation.
 model: xai/grok-4.7
 fallbackModels:
-  - local-proxy/gemini-3.8-flash-high
+  - antigravity/gemini-3.8-flash
   - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
   - openai-codex/gpt-6.1-sol

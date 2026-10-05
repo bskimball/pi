@@ -5,7 +5,7 @@ model: openai-codex/gpt-6.1-sol
 fallbackModels:
   - claude-bridge/claude-opus-5-5
   - xai/grok-4.7
-  - local-proxy/gemini-pro-agent
+  - antigravity/gemini-3.1-pro
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp, web_search, fetch_content, get_search_content, jev, codemode, tool_search, mcp__context7__resolve_library_id, mcp__context7__query_docs

@@ -3,7 +3,7 @@ name: clerk
 description: Work fast local recon and monotonous execution (Gomez, lightning gopher from another galaxy). Broad scans, bulk reads, small reversible scoped edits inside brief-owned paths.
 model: openai-codex/gpt-6-luna
 fallbackModels:
-  - local-proxy/gemini-3.8-flash-high
+  - antigravity/gemini-3.8-flash
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low

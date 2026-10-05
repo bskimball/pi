@@ -16,7 +16,7 @@ function snapshot(
     id: "task_1",
     lifecycle: "running",
     agent: "scout",
-    model: "local-proxy/gemini-3.8-flash-high",
+    model: "antigravity/gemini-3.8-flash",
     generation: 1,
     turns: 14,
     maxTurns: 45,

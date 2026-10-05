@@ -5,7 +5,7 @@ tools: read, ffgrep, fffind, ls, bash, edit, write, jev, codemode
 model: openai-codex/gpt-6-luna
 fallbackModels:
   - xai/grok-composer-2.5-fast
-  - local-proxy/gemini-3.8-flash-high
+  - antigravity/gemini-3.8-flash
 thinking: medium
 inheritSkills: true
 maxTurns: 50

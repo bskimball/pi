@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
-model: local-proxy/gemini-3.8-flash-high
+model: antigravity/gemini-3.8-flash
 fallbackModels:
   - openai-codex/gpt-6-luna
   - xai/grok-composer-2.5-fast

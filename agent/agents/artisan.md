@@ -5,7 +5,7 @@ model: meta/muse-spark-1.3-contributor
 fallbackModels: 
   - claude-bridge/claude-opus-5-5
   - openai-codex/gpt-6-astra
-  - local-proxy/gemini-3.8-flash-high
+  - antigravity/gemini-3.8-flash
   - github-copilot/kimi-k3
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high

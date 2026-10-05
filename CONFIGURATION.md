@@ -304,7 +304,7 @@ provider without a scope allowlist. Compaction is not overridden in this file; P
 The active default and all GPT agent routes use `openai-codex` (for example
 `openai-codex/gpt-6-sol`, `openai-codex/gpt-6-luna`, and
 `openai-codex/gpt-6-astra`). Non-GPT agent routes still use configured providers
-such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `local-proxy/gemini-3.8-flash-high`, xAI,
+such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `antigravity/gemini-3.8-flash`, xAI,
 OpenCode, and Cloudflare Workers AI fallbacks.
 
 ---
