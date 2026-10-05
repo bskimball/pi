@@ -8,7 +8,7 @@ Match one playbook, copy its steps into the todo list first, then execute under 
 
 ## Scope
 In scope: matching Investigation, Bug fix, Feature, Refactor, Prototype, or Unattended; writing those steps as the first todos; executing them until the playbook's done criterion or a user-owned gate.
-Out of scope: changing `/mode`; opening, pushing, or merging a PR unless the user asked in this goal; enumerating specialists in the user-facing reply; importing Cursor pstack skills (`how`, `architect`, `arena`, `swarm`).
+Out of scope: changing `/mode`; opening, pushing, or merging a PR unless the user asked in this goal; enumerating specialists in the user-facing reply; importing Cursor pstack skills (`architect`, `arena`, `swarm`).
 Arguments: the goal, plus any constraint that pins a playbook (`don't change any code yet`, `repro first`, `im stepping away`). Bare `do it` / `continue` / `keep going until done` continues the current playbook. `new task` (or an explicit subject change) re-matches instead of continuing.
 
 ## Route

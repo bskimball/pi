@@ -1,12 +1,27 @@
 {
-  "defaultModel": "gpt-6-sol",
+  "defaultModel": "gpt-6.1-sol",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "1.0.0",
+  "lastChangelogVersion": "1.0.3",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
-    "npm:pi-claude-bridge"
+    "npm:pi-claude-bridge",
+    {
+      "source": "C:/Users/bskim/src/cursor-plugins/pstack",
+      "extensions": [],
+      "skills": [
+        "skills/blast-radius/SKILL.md",
+        "skills/correct/SKILL.md",
+        "skills/benchmark-checklist/SKILL.md",
+        "skills/figure-it-out/SKILL.md",
+        "skills/technical-writing/SKILL.md",
+        "skills/tdd/SKILL.md",
+        "skills/bro/SKILL.md"
+      ],
+      "prompts": [],
+      "themes": []
+    }
   ],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
@@ -15,7 +30,7 @@
     "showTerminalProgress": false
   },
   "editorPaddingX": 2,
-  "theme": "hal-dark",
+  "theme": "claude-dark",
   "tuiMode": "fullscreen",
   "hideThinkingBlock": false
 }
