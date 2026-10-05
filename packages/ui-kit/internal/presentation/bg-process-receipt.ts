@@ -13,7 +13,6 @@ import { apexPresentationEnabled } from "./presentation.ts";
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 import {
@@ -254,7 +253,6 @@ export function installBgProcessReceipts(pi: ExtensionAPI): void {
   registerHeadlessReceipt("bg_status", bgStatusReceiptRenderers);
   registerHeadlessReceipt("bg_list", bgListReceiptRenderers);
   registerHeadlessReceipt("bg_kill", bgKillReceiptRenderers);
-  installHeadlessReceipts();
   pi.registerMessageRenderer<BgSettledDetails>(
     BG_PROCESS_SETTLED_TYPE,
     (message, options, theme) => {

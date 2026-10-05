@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -100,23 +101,22 @@ describe("apex graphify receipts", () => {
     assert.deepEqual(callComponent.render(80), []);
   });
 
-  it("wraps graphify ToolExecutionComponent getters and leaves others alone", () => {
+  it("resolves graphify tool renderers through the public API and leaves others alone", () => {
     withApexUi("1", () => {
       installGraphifyReceipts();
-    const proto = ToolExecutionComponent.prototype as any;
 
     const graphify = {
       toolName: GRAPHIFY_RECEIPT_TOOL,
       toolDefinition: { name: "graphify" },
     };
     assert.equal(graphifyOwnsPresentation(graphify), false);
-    assert.equal(proto.getCallRenderer.call(graphify), graphifyReceiptRenderers.renderCall);
+    assert.equal(resolveReceiptFor(graphify)?.renderCall, graphifyReceiptRenderers.renderCall);
     assert.equal(
-      proto.getResultRenderer.call(graphify),
+      resolveReceiptFor(graphify)?.renderResult,
       graphifyReceiptRenderers.renderResult,
     );
-    assert.equal(proto.getRenderShell.call(graphify), "self");
-    assert.equal(proto.hasRendererDefinition.call(graphify), true);
+    assert.equal(resolveReceiptFor(graphify)?.renderShell ?? "default", "self");
+    assert.equal(Boolean(resolveReceiptFor(graphify)), true);
 
     const ownCall = () => ({ render: () => ["OWN-CALL"], invalidate() {} });
     const ownResult = () => ({ render: () => ["OWN-RESULT"], invalidate() {} });
@@ -128,24 +128,24 @@ describe("apex graphify receipts", () => {
         renderResult: ownResult,
       },
     };
-    assert.equal(proto.getCallRenderer.call(ownedBoth), ownCall);
-    assert.equal(proto.getResultRenderer.call(ownedBoth), ownResult);
-    assert.equal(proto.getRenderShell.call(ownedBoth), "default");
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderCall, ownCall);
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderResult, ownResult);
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderShell ?? "default", "default");
 
     const ownedCallOnly = {
       toolName: GRAPHIFY_RECEIPT_TOOL,
       toolDefinition: { name: "graphify", renderCall: ownCall },
     };
-    assert.equal(proto.getCallRenderer.call(ownedCallOnly), ownCall);
-    assert.equal(proto.getResultRenderer.call(ownedCallOnly), undefined);
-    assert.equal(proto.getRenderShell.call(ownedCallOnly), "default");
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderCall, ownCall);
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderResult, undefined);
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderShell ?? "default", "default");
 
     const ownedShell = {
       toolName: GRAPHIFY_RECEIPT_TOOL,
       toolDefinition: { name: "graphify", renderShell: "default" },
     };
     assert.equal(graphifyOwnsPresentation(ownedShell), false);
-    assert.equal(proto.getRenderShell.call(ownedShell), "self");
+    assert.equal(resolveReceiptFor(ownedShell)?.renderShell ?? "default", "self");
 
     const explicitDefaultShell = {
       toolName: GRAPHIFY_RECEIPT_TOOL,
@@ -155,15 +155,15 @@ describe("apex graphify receipts", () => {
         renderShell: "default",
       },
     };
-    assert.equal(proto.getRenderShell.call(explicitDefaultShell), "default");
+    assert.equal(resolveReceiptFor(explicitDefaultShell)?.renderShell ?? "default", "default");
 
     const other = {
       toolName: "bg_start",
       toolDefinition: { name: "bg_start" },
     };
-    assert.equal(proto.getCallRenderer.call(other), undefined);
-    assert.equal(proto.getResultRenderer.call(other), undefined);
-    assert.equal(proto.getRenderShell.call(other), "default");
+    assert.equal(resolveReceiptFor(other)?.renderCall, undefined);
+    assert.equal(resolveReceiptFor(other)?.renderResult, undefined);
+    assert.equal(resolveReceiptFor(other)?.renderShell ?? "default", "default");
     });
   });
 
@@ -173,7 +173,7 @@ describe("apex graphify receipts", () => {
       installGraphifyReceipts();
 
     const args = { operation: "query", question: "How does auth work?" };
-    const component = new ToolExecutionComponent(
+    const component = new ReceiptToolExecutionComponent(
       "graphify",
       "call-1",
       args,

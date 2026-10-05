@@ -12,7 +12,6 @@ import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
   componentOwnsPresentation,
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -144,5 +143,4 @@ export function lspOwnsPresentation(component: LspComponent): boolean {
 export function installLspReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(LSP_RECEIPT_TOOL, lspReceiptRenderers);
-  installHeadlessReceipts();
 }

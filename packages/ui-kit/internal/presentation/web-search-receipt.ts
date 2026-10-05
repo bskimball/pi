@@ -10,7 +10,6 @@ import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -214,5 +213,4 @@ export function installWebSearchReceipts(): void {
   registerHeadlessReceipt("web_search", webSearchReceiptRenderers);
   registerHeadlessReceipt("fetch_content", fetchContentReceiptRenderers);
   registerHeadlessReceipt("get_search_content", getSearchContentReceiptRenderers);
-  installHeadlessReceipts();
 }

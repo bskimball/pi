@@ -10,7 +10,6 @@ import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -99,5 +98,4 @@ export function installMemoryReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(MEMORY_LIST_TOOL, memoryListReceiptRenderers);
   registerHeadlessReceipt(MEMORY_WRITE_TOOL, memoryWriteReceiptRenderers);
-  installHeadlessReceipts();
 }

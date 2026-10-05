@@ -4,7 +4,8 @@ import {
   SkillInvocationMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import { apexPresentationEnabled } from "./presentation.ts";
-import { importLiveBundleModule } from "./headless-receipts.ts";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   fallbackTruncateToWidth,
   safeTruncateToWidth,
@@ -108,9 +109,9 @@ export function installSkillInvocationChrome(): void {
 
 /**
  * Chrome the bundled copy of SkillInvocationMessageComponent that the live
- * TUI instantiates. Same two-copy miss as the tool receipts: the class
- * extensions import (dist/index.js) is a different object from the bundled
- * live one, so the primary patch alone never affects a rendered message.
+ * TUI instantiates. The imported SDK class can differ from the bundled live
+ * class. Pi has no public renderer registration for its skill messages yet;
+ * this is the remaining presentation adapter that needs bundle access.
  * Fire-and-forget; a missing bundle (dev/test) silently skips, anything else
  * that fails is logged once to pi-render.log.
  */
@@ -150,4 +151,41 @@ async function patchLiveBundleSkill(current: SkillState): Promise<void> {
       return [fallbackTruncateToWidth("[skill unavailable]", width)];
     }
   };
+}
+
+/**
+ * File URL of the bundled core entry that owns the live component copies, if
+ * this install has one. Derived from the already-resolved core entry so it
+ * works regardless of where Pi is installed; undefined on unbundled runtimes
+ * (SDK/tests without a bundle).
+ */
+function resolveLiveBundleEntryUrl(): string | undefined {
+  let entry: string;
+  try {
+    entry = import.meta.resolve("@earendil-works/pi-coding-agent");
+  } catch {
+    return undefined;
+  }
+  const suffix = "/dist/index.js";
+  if (!entry.endsWith(suffix)) return undefined;
+  const candidate = `${entry.slice(0, -suffix.length)}/dist/bundle/index.js`;
+  let path: string;
+  try {
+    path = fileURLToPath(candidate);
+  } catch {
+    return undefined;
+  }
+  return existsSync(path) ? candidate : undefined;
+}
+
+/**
+ * Import the bundled core entry (the module object behind dist/bundle).
+ * Private to skill-message chrome; tool receipts use the public resolver.
+ * Rejects when the runtime has no bundled core entry.
+ */
+function importLiveBundleModule(): Promise<Record<string, unknown>> {
+  const url = resolveLiveBundleEntryUrl();
+  if (!url)
+    return Promise.reject(new Error("No bundled core entry in this install."));
+  return import(url) as Promise<Record<string, unknown>>;
 }

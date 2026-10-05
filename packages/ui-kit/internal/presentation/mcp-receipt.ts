@@ -20,7 +20,6 @@ import { apexPresentationEnabled } from "./presentation.ts";
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
   registerHeadlessReceiptPrefix,
   type HeadlessRenderers,
@@ -352,5 +351,4 @@ export function installMcpReceipts(): void {
     listMcpResourceTemplatesRenderers,
   );
   registerHeadlessReceipt(READ_MCP_RESOURCE_TOOL, readMcpResourceRenderers);
-  installHeadlessReceipts();
 }

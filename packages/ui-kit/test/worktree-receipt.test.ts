@@ -1,7 +1,7 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
@@ -82,13 +82,12 @@ describe("apex worktree receipt", () => {
     initTheme("dark");
     withApexUi("1", () => {
       installWorktreeReceipts();
-      const proto = ToolExecutionComponent.prototype as any;
       const definition = { toolName: WORKTREE_RECEIPT_TOOL, toolDefinition: { name: WORKTREE_RECEIPT_TOOL } };
-      assert.equal(proto.getCallRenderer.call(definition), worktreeReceiptRenderers.renderCall);
-      assert.equal(proto.getResultRenderer.call(definition), worktreeReceiptRenderers.renderResult);
-      assert.equal(proto.getRenderShell.call(definition), "self");
+      assert.equal(resolveReceiptFor(definition)?.renderCall, worktreeReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(definition)?.renderResult, worktreeReceiptRenderers.renderResult);
+      assert.equal(resolveReceiptFor(definition)?.renderShell ?? "default", "self");
 
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         WORKTREE_RECEIPT_TOOL,
         "call-1",
         { operation: "list" },

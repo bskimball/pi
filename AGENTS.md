@@ -61,7 +61,7 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 
 ### Three installable UIs
 
-`apex/`, `claude/`, and `hal/` are separately discovered UI extensions. Shared receipts, layout, todo tools, and the single `ToolExecutionComponent` wrap live in `packages/ui-kit`. Deleting one UI directory uninstalls that look. See `CONTEXT.md` for presentation ownership.
+`apex/`, `claude/`, and `hal/` are separately discovered UI extensions. Shared receipts, layout, todo tools, and the shared public tool renderer resolver live in `packages/ui-kit`. Deleting one UI directory uninstalls that look. See `CONTEXT.md` for presentation ownership.
 
 - `PI_UI_CHROME=0` is the installation-wide presentation opt-out (`PI_APEX_UI=0` remains a deprecated alias; `PI_UI_CHROME` wins when both are set): it disables custom styling, chrome, and render hooks. Kit-owned tools remain registered and executable. The todo panel stays mounted as a plain, uncolored list.
 - `/ui` selects `pi` (stock Pi) or an **installed** UI (`apex`, `claude`, `hal`). Missing UI directories fail closed. Installed custom UIs set `PI_UI_CHROME=1` (and the `PI_APEX_UI` alias) and `PI_UI_SKIN` to their name. Claude uses round receipts and `claude-dark`; HAL uses square receipts, a truecolor orb+wordmark landing, quiet activity, and `hal-dark`. Glyphs are read at call time so a live `/ui` switch applies without a restart; unset `PI_UI_SKIN` falls back to Apex glyphs.

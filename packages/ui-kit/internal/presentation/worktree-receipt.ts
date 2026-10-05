@@ -9,7 +9,6 @@ import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -59,5 +58,4 @@ export const worktreeReceiptRenderers = toolRenderers<WorktreeArgs>({
 export function installWorktreeReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(WORKTREE_RECEIPT_TOOL, worktreeReceiptRenderers);
-  installHeadlessReceipts();
 }

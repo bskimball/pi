@@ -15,7 +15,6 @@ import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { compactMcpProxyArgs } from "./mcp-receipt.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -322,5 +321,4 @@ export function installCodemodeReceipts(): void {
     overrideOwned: true,
   });
   registerHeadlessReceipt(TOOL_SEARCH_TOOL, toolSearchReceiptRenderers);
-  installHeadlessReceipts();
 }

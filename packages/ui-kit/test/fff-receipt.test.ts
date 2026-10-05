@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -282,7 +283,6 @@ describe("apex fff receipts", () => {
 
   it("overrides pi-fff owned renderers for fffind and ffgrep while leaving default owned presentation unchanged", () => {
     withApexUi("1", () => installFffReceipts());
-    const proto = ToolExecutionComponent.prototype as any;
 
     const ownFindCall = () => ({ render: () => ["OWN-FIND-CALL"], invalidate() {} });
     const ownFindResult = () => ({ render: () => ["OWN-FIND-RESULT"], invalidate() {} });
@@ -297,10 +297,10 @@ describe("apex fff receipts", () => {
 
     // fffind MUST be overridden by Apex receipts
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(fffindComp), fffindReceiptRenderers.renderCall);
-      assert.equal(proto.getResultRenderer.call(fffindComp), fffindReceiptRenderers.renderResult);
-      assert.equal(proto.getRenderShell.call(fffindComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(fffindComp), true);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderCall, fffindReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderResult, fffindReceiptRenderers.renderResult);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(fffindComp)), true);
     });
 
     const ownGrepCall = () => ({ render: () => ["OWN-GREP-CALL"], invalidate() {} });
@@ -316,10 +316,10 @@ describe("apex fff receipts", () => {
 
     // ffgrep MUST be overridden by Apex receipts
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(ffgrepComp), ffgrepReceiptRenderers.renderCall);
-      assert.equal(proto.getResultRenderer.call(ffgrepComp), ffgrepReceiptRenderers.renderResult);
-      assert.equal(proto.getRenderShell.call(ffgrepComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(ffgrepComp), true);
+      assert.equal(resolveReceiptFor(ffgrepComp)?.renderCall, ffgrepReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(ffgrepComp)?.renderResult, ffgrepReceiptRenderers.renderResult);
+      assert.equal(resolveReceiptFor(ffgrepComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(ffgrepComp)), true);
     });
 
     // Another arbitrary tool with owned presentation MUST NOT be overridden
@@ -334,9 +334,9 @@ describe("apex fff receipts", () => {
       },
     };
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(otherTool), otherOwnCall);
-      assert.equal(proto.getResultRenderer.call(otherTool), otherOwnResult);
-      assert.equal(proto.getRenderShell.call(otherTool), "default");
+      assert.equal(resolveReceiptFor(otherTool)?.renderCall, otherOwnCall);
+      assert.equal(resolveReceiptFor(otherTool)?.renderResult, otherOwnResult);
+      assert.equal(resolveReceiptFor(otherTool)?.renderShell ?? "default", "default");
     });
 
     // A headless tool without overrideOwned (e.g. lsp) preserves owned presentation if provided
@@ -349,15 +349,14 @@ describe("apex fff receipts", () => {
       },
     };
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(ownedLsp), otherOwnCall);
-      assert.equal(proto.getResultRenderer.call(ownedLsp), otherOwnResult);
-      assert.equal(proto.getRenderShell.call(ownedLsp), "default");
+      assert.equal(resolveReceiptFor(ownedLsp)?.renderCall, otherOwnCall);
+      assert.equal(resolveReceiptFor(ownedLsp)?.renderResult, otherOwnResult);
+      assert.equal(resolveReceiptFor(ownedLsp)?.renderShell ?? "default", "default");
     });
   });
 
   it("dynamically falls back when PI_APEX_UI=0 is toggled after installation and restores on re-enable", () => {
     withApexUi("1", () => installFffReceipts());
-    const proto = ToolExecutionComponent.prototype as any;
 
     const ownFindCall = () => ({ render: () => ["OWN-FIND-CALL"], invalidate() {} });
     const ownFindResult = () => ({ render: () => ["OWN-FIND-RESULT"], invalidate() {} });
@@ -372,10 +371,10 @@ describe("apex fff receipts", () => {
 
     // Enabled: returns Apex receipts
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(fffindComp), fffindReceiptRenderers.renderCall);
-      assert.equal(proto.getResultRenderer.call(fffindComp), fffindReceiptRenderers.renderResult);
-      assert.equal(proto.getRenderShell.call(fffindComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(fffindComp), true);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderCall, fffindReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderResult, fffindReceiptRenderers.renderResult);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(fffindComp)), true);
     });
 
     // Dynamically disable Apex presentation: falls back immediately to owned renderers / default shell
@@ -384,22 +383,22 @@ describe("apex fff receipts", () => {
     try {
       process.env.PI_APEX_UI = "0";
       process.env.PI_UI_CHROME = "0";
-      assert.equal(proto.getCallRenderer.call(fffindComp), ownFindCall);
-      assert.equal(proto.getResultRenderer.call(fffindComp), ownFindResult);
-      assert.equal(proto.getRenderShell.call(fffindComp), "default");
+      assert.equal(resolveReceiptFor(fffindComp)?.renderCall, ownFindCall);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderResult, ownFindResult);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderShell ?? "default", "default");
 
       const bareComp = { toolName: "bare_unregistered" };
-      assert.equal(proto.getCallRenderer.call(bareComp), undefined);
-      assert.equal(proto.getRenderShell.call(bareComp), "default");
-      assert.equal(proto.hasRendererDefinition.call(bareComp), false);
+      assert.equal(resolveReceiptFor(bareComp)?.renderCall, undefined);
+      assert.equal(resolveReceiptFor(bareComp)?.renderShell ?? "default", "default");
+      assert.equal(Boolean(resolveReceiptFor(bareComp)), false);
 
       // Re-enable Apex presentation: immediately restores Apex receipts
       process.env.PI_APEX_UI = "1";
       process.env.PI_UI_CHROME = "1";
-      assert.equal(proto.getCallRenderer.call(fffindComp), fffindReceiptRenderers.renderCall);
-      assert.equal(proto.getResultRenderer.call(fffindComp), fffindReceiptRenderers.renderResult);
-      assert.equal(proto.getRenderShell.call(fffindComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(fffindComp), true);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderCall, fffindReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderResult, fffindReceiptRenderers.renderResult);
+      assert.equal(resolveReceiptFor(fffindComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(fffindComp)), true);
     } finally {
       if (previousApex === undefined) delete process.env.PI_APEX_UI;
       else process.env.PI_APEX_UI = previousApex;
@@ -411,7 +410,6 @@ describe("apex fff receipts", () => {
   it("preserves receipt registry and avoids stacking closures across module reloads", async () => {
     withApexUi("1", () => installFffReceipts());
     const state = getHeadlessReceiptState();
-    assert.ok(state.installed);
     assert.ok(state.registry.has(FFF_FIND_TOOL));
     assert.ok(state.registry.has(FFF_GREP_TOOL));
 
@@ -431,80 +429,16 @@ describe("apex fff receipts", () => {
     });
 
     // Re-running install should not stack closures or throw
-    reloaded.installHeadlessReceipts();
-
-    const proto = ToolExecutionComponent.prototype as any;
+    // Runtime registration is covered by the resolver lifecycle tests.
     const probeComp = {
       toolName: "fff_reload_probe",
       toolDefinition: { name: "fff_reload_probe" },
     };
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(probeComp), probeCall);
-      assert.equal(proto.getResultRenderer.call(probeComp), probeResult);
-      assert.equal(proto.getRenderShell.call(probeComp), "self");
+      assert.equal(resolveReceiptFor(probeComp)?.renderCall, probeCall);
+      assert.equal(resolveReceiptFor(probeComp)?.renderResult, probeResult);
+      assert.equal(resolveReceiptFor(probeComp)?.renderShell ?? "default", "self");
     });
-  });
-
-  it("suppresses legacy registered receipts when Apex is disabled after migration", () => {
-    withApexUi("1", () => installFffReceipts());
-    const state = getHeadlessReceiptState();
-    const proto = ToolExecutionComponent.prototype as any;
-    const legacyCall = state.originals.getCallRenderer;
-    const legacyResult = state.originals.getResultRenderer;
-    const legacyShell = state.originals.getRenderShell;
-    const legacyHasRenderer = state.originals.hasRendererDefinition;
-
-    const renderCall = () => ({ render: () => ["LEGACY CALL"], invalidate() {} });
-    const renderResult = () => ({ render: () => ["LEGACY RESULT"], invalidate() {} });
-    state.registry.set("legacy_headless_probe", {
-      renderCall,
-      renderResult,
-      overrideOwned: false,
-    });
-    state.legacyWrapped = true;
-    state.originals = {
-      getCallRenderer(this: any) {
-        return state.registry.get(this.toolName)?.renderCall ?? legacyCall?.call(this);
-      },
-      getResultRenderer(this: any) {
-        return state.registry.get(this.toolName)?.renderResult ?? legacyResult?.call(this);
-      },
-      getRenderShell(this: any) {
-        return state.registry.has(this.toolName) ? "self" : legacyShell?.call(this);
-      },
-      hasRendererDefinition(this: any) {
-        return state.registry.has(this.toolName) || legacyHasRenderer?.call(this) || false;
-      },
-    };
-
-    const probe = {
-      toolName: "legacy_headless_probe",
-      toolDefinition: undefined,
-      builtInToolDefinition: undefined,
-    };
-    try {
-      withApexUi("1", () => {
-        assert.equal(proto.getCallRenderer.call(probe), renderCall);
-        assert.equal(proto.getResultRenderer.call(probe), renderResult);
-        assert.equal(proto.getRenderShell.call(probe), "self");
-        assert.equal(proto.hasRendererDefinition.call(probe), true);
-      });
-      withApexUi("0", () => {
-        assert.equal(proto.getCallRenderer.call(probe), undefined);
-        assert.equal(proto.getResultRenderer.call(probe), undefined);
-        assert.equal(proto.getRenderShell.call(probe), "default");
-        assert.equal(proto.hasRendererDefinition.call(probe), false);
-      });
-    } finally {
-      state.registry.delete("legacy_headless_probe");
-      state.legacyWrapped = false;
-      state.originals = {
-        getCallRenderer: legacyCall,
-        getResultRenderer: legacyResult,
-        getRenderShell: legacyShell,
-        hasRendererDefinition: legacyHasRenderer,
-      };
-    }
   });
 
   it("renders a real fffind ToolExecutionComponent as an Apex receipt", () => {
@@ -515,7 +449,7 @@ describe("apex fff receipts", () => {
       const args = { pattern: "receipt", path: "src/" };
       const ownCall = () => ({ render: () => ["SHOULD NOT BE USED"], invalidate() {} });
       const ownResult = () => ({ render: () => ["SHOULD NOT BE USED"], invalidate() {} });
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "fffind",
         "call-fff-1",
         args,
@@ -556,7 +490,7 @@ describe("apex fff receipts", () => {
       installFffReceipts();
 
       const args = { pattern: "Receipts", caseSensitive: true };
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "ffgrep",
         "call-fff-2",
         args,
@@ -600,7 +534,7 @@ describe("apex fff receipts", () => {
         pattern: "very_long_pattern_that_exceeds_narrow_terminals",
         path: "deeply/nested/path/to/some/source/code",
       };
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "fffind",
         "call-fff-3",
         args,

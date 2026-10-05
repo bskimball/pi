@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -149,22 +150,21 @@ describe("apex browser_attach receipt", () => {
     initTheme("dark");
     withApexUi("1", () => {
       installBrowserAttachReceipts();
-      const proto = ToolExecutionComponent.prototype as any;
       const definition = {
         toolName: BROWSER_ATTACH_TOOL,
         toolDefinition: { name: BROWSER_ATTACH_TOOL },
       };
       assert.equal(
-        proto.getCallRenderer.call(definition),
+        resolveReceiptFor(definition)?.renderCall,
         browserAttachReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(definition),
+        resolveReceiptFor(definition)?.renderResult,
         browserAttachReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(definition), "self");
+      assert.equal(resolveReceiptFor(definition)?.renderShell ?? "default", "self");
 
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         BROWSER_ATTACH_TOOL,
         "call-1",
         { task: "inspect https://example.com" },

@@ -1,173 +1,44 @@
-// headless-receipts: Apex chrome for tools owned by other extensions.
-//
-// Those extensions own execute and stay independently removable. First
-// registration wins the whole tool, so Apex cannot re-register them. This
-// skins receipts by wrapping ToolExecutionComponent getters instead.
-//
-// Two copies of that class exist at runtime: the one extensions import
-// (dist/index.js) and the one the bundled live TUI instantiates
-// (dist/bundle). Patching only the imported copy leaves every
-// wrap-dependent receipt on owner chrome, so both prototypes are wrapped.
-//
-// PI_APEX_UI=0 skips the wrap or dynamically falls back to original tool
-// presentation when toggled after installation. Any existing presentation on a
-// tool (renderCall, renderResult, or a non-default renderShell) wins unless a
-// receipt explicitly opts into overrideOwned upon registration.
-
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+// Receipt selection through Pi's public tool renderer resolver. Tool owners keep execution.
+import type { ExtensionAPI, ToolRenderers, ToolRendererResolver } from "@earendil-works/pi-coding-agent";
 import { apexPresentationEnabled } from "./presentation.ts";
-import { reportRenderFailure } from "./tool-receipt.ts";
 
 export const HEADLESS_STATE_KEY = Symbol.for("pi.apex.headlessReceipts.state");
 export const RECEIPTS_KEY = Symbol.for("pi.apex.headlessReceipts.registry");
-const LEGACY_INSTALL_KEY = Symbol.for("pi.apex.headlessReceipts.installed");
 
-export const HEADLESS_WRAPPER_VERSION = 4;
-
-export type HeadlessReceiptOptions = {
-  overrideOwned?: boolean;
-  suppressOwnedWhenDisabled?: boolean;
-};
-
-export type HeadlessRenderers = {
-  renderCall: unknown;
-  renderResult: unknown;
-};
-
-export type RegisteredReceipt = HeadlessRenderers & {
-  overrideOwned: boolean;
-  suppressOwnedWhenDisabled?: boolean;
-};
-
-export type RegisteredPrefix = {
-  prefix: string;
-  resolve: (toolName: string) => RegisteredReceipt;
-};
-
-export type HeadlessRendererFactory = (
-  toolName: string,
-) => HeadlessRenderers;
-
-export type HeadlessPresentation = {
-  renderCall?: unknown;
-  renderResult?: unknown;
-  renderShell?: unknown;
-  [key: string]: unknown;
-};
-
-export type HeadlessComponent = {
-  toolName?: string;
-  toolDefinition?: HeadlessPresentation;
-  builtInToolDefinition?: HeadlessPresentation;
-};
-
-export type HeadlessOriginals = {
-  getCallRenderer?: (this: HeadlessComponent) => unknown;
-  getResultRenderer?: (this: HeadlessComponent) => unknown;
-  getRenderShell?: (this: HeadlessComponent) => unknown;
-  hasRendererDefinition?: (this: object) => boolean;
-};
-
-export type LiveBundleState = "pending" | "patched" | "absent" | "failed";
-
+export type HeadlessReceiptOptions = { overrideOwned?: boolean; suppressOwnedWhenDisabled?: boolean };
+export type HeadlessRenderers = { renderCall: unknown; renderResult: unknown };
+export type RegisteredReceipt = HeadlessRenderers & { overrideOwned: boolean; suppressOwnedWhenDisabled?: boolean };
+export type RegisteredPrefix = { prefix: string; resolve: (toolName: string) => RegisteredReceipt };
+export type HeadlessRendererFactory = (toolName: string) => HeadlessRenderers;
+export type HeadlessPresentation = { renderCall?: unknown; renderResult?: unknown; renderShell?: unknown; [key: string]: unknown };
+export type HeadlessComponent = { toolName?: string; toolDefinition?: HeadlessPresentation; builtInToolDefinition?: HeadlessPresentation };
 export type HeadlessReceiptState = {
-  version: number;
-  installed: boolean;
-  legacyWrapped: boolean;
   registry: Map<string, RegisteredReceipt>;
   prefixes: RegisteredPrefix[];
-  originals: HeadlessOriginals;
-  /** Pristine methods per wrapped prototype (imported copy + bundled copy). */
-  protoOriginals: Map<object, HeadlessOriginals>;
-  /** Outcome of the attempt to wrap the bundled live copy. */
-  liveBundle: LiveBundleState;
-  /**
-   * Tool definitions the main thread has rendered, keyed by tool name. Pi
-   * exposes no tool-definition lookup to extensions, so the Agents peek reuses
-   * these to render sub-agent calls of the same tools with their own renderers.
-   */
   seenDefinitions: Map<string, HeadlessPresentation>;
-  shouldAttach?: (component: HeadlessComponent) => RegisteredReceipt | undefined;
+  // Runtime APIs become invalid on reload, so registration is generation-scoped.
+  owner?: ExtensionAPI;
 };
-
-type HeadlessReceiptGlobal = typeof globalThis & {
+type ReceiptGlobal = typeof globalThis & {
   [HEADLESS_STATE_KEY]?: HeadlessReceiptState;
   [RECEIPTS_KEY]?: Map<string, RegisteredReceipt>;
 };
 
-type HeadlessPrototype = object & {
-  [LEGACY_INSTALL_KEY]?: boolean;
-};
-
-// Extension reloads create a new module instance while the process-wide
-// ToolExecutionComponent prototype remains wrapped. Keep a global state object
-// on the global symbol table so that existing wrappers consult current decision
-// behavior and preserved registrations across reloads without stacking closures.
 export function getHeadlessReceiptState(): HeadlessReceiptState {
-  const g = globalThis as HeadlessReceiptGlobal;
-  let state = g[HEADLESS_STATE_KEY];
-  if (!state) {
-    const existingRegistry = g[RECEIPTS_KEY] as Map<string, RegisteredReceipt> | undefined;
-    state = {
-      version: HEADLESS_WRAPPER_VERSION,
-      installed: false,
-      legacyWrapped: Boolean(
-        (ToolExecutionComponent.prototype as HeadlessPrototype)[LEGACY_INSTALL_KEY],
-      ),
-      registry: existingRegistry ?? new Map<string, RegisteredReceipt>(),
-      prefixes: [],
-      originals: {},
-      protoOriginals: new Map(),
-      liveBundle: "pending",
-      seenDefinitions: new Map(),
-    };
-    g[HEADLESS_STATE_KEY] = state;
-    g[RECEIPTS_KEY] = state.registry;
-  }
-  // Prefix matchers arrived after the state shape; a process-wide state born
-  // under an older module instance will not have the field yet.
-  if (!state.prefixes) state.prefixes = [];
-  if (!state.protoOriginals) state.protoOriginals = new Map();
-  if (!state.liveBundle) state.liveBundle = "pending";
-  if (!state.seenDefinitions) state.seenDefinitions = new Map();
+  const global = globalThis as ReceiptGlobal;
+  const state = global[HEADLESS_STATE_KEY] ??= {
+    registry: global[RECEIPTS_KEY] ?? new Map<string, RegisteredReceipt>(),
+    prefixes: [],
+    seenDefinitions: new Map(),
+  };
+  state.prefixes ??= [];
+  state.seenDefinitions ??= new Map();
+  global[RECEIPTS_KEY] = state.registry;
   return state;
 }
 
-const SEEN_DEFINITIONS_CAP = 256;
-
-function rememberDefinition(state: HeadlessReceiptState, component: HeadlessComponent): void {
-  const name = component.toolName;
-  const definition = component.toolDefinition;
-  if (typeof name !== "string" || !definitionOwnsPresentation(definition)) return;
-  const seen = state.seenDefinitions;
-  if (seen.get(name) === definition) return;
-  if (!seen.has(name) && seen.size >= SEEN_DEFINITIONS_CAP) return;
-  seen.set(name, definition!);
-}
-
-/** The definition the main thread last rendered for `name`, if any. */
 export function rememberedToolDefinition(name: string): HeadlessPresentation | undefined {
   return getHeadlessReceiptState().seenDefinitions.get(name);
-}
-
-export function findOwnMethod(
-  start: object,
-  name: string,
-): { target: Record<string, unknown>; method: (...args: never[]) => unknown } | undefined {
-  let current: object | null = start;
-  while (current && current !== Object.prototype) {
-    const candidate = (current as Record<string, unknown>)[name];
-    if (typeof candidate === "function") {
-      return {
-        target: current as Record<string, unknown>,
-        method: candidate as (...args: never[]) => unknown,
-      };
-    }
-    current = Object.getPrototypeOf(current) as object | null;
-  }
-  return undefined;
 }
 
 export function definitionOwnsPresentation(definition: HeadlessPresentation | undefined): boolean {
@@ -253,17 +124,6 @@ function matchPrefixReceipt(
   return best?.resolve(toolName);
 }
 
-function shouldSuppressOwnedPresentation(
-  component: HeadlessComponent,
-): boolean {
-  if (apexPresentationEnabled() || !component.toolName) return false;
-  const state = getHeadlessReceiptState();
-  const receipt =
-    state.registry.get(component.toolName) ??
-    matchPrefixReceipt(state, component.toolName);
-  return Boolean(receipt?.suppressOwnedWhenDisabled);
-}
-
 export function shouldAttachApexReceipts(
   component: HeadlessComponent,
 ): RegisteredReceipt | undefined {
@@ -278,259 +138,49 @@ export function shouldAttachApexReceipts(
   return renderers;
 }
 
-function callOriginal<T>(
-  state: HeadlessReceiptState,
-  component: HeadlessComponent,
-  original: ((this: HeadlessComponent) => T) | undefined,
-): T | undefined {
-  if (!original) return undefined;
-  if (apexPresentationEnabled() || !state.legacyWrapped || !component.toolName) {
-    return original.call(component);
-  }
 
-  // The pre-state wrapper captured the shared registry and did not dynamically
-  // honor PI_APEX_UI. Suppress only this tool's legacy receipt while delegating
-  // during the one-time in-process migration, then restore it immediately.
-  const registered = state.registry.get(component.toolName);
-  if (!registered) return original.call(component);
-  state.registry.delete(component.toolName);
-  try {
-    return original.call(component);
-  } finally {
-    state.registry.set(component.toolName, registered);
-  }
-}
-
-// Keep process-global decision logic current across extension module reloads.
-const moduleState = getHeadlessReceiptState();
-moduleState.shouldAttach = shouldAttachApexReceipts;
-
-/**
- * Wrap one ToolExecutionComponent prototype so registered headless receipts
- * attach to the instances it creates. The decision logic stays process-global
- * (state.shouldAttach + registry), but pristine methods are captured per
- * prototype: the class extensions import (dist/index.js) is a different
- * object from the class the bundled live TUI instantiates (dist/bundle), and
- * each copy needs its own originals. Returns false — and logs once to
- * pi-render.log — when the target lacks the expected getters, instead of
- * silently leaving owner chrome in place. Exported for tests: pass a
- * stand-in prototype to prove a second copy gets wrapped.
- */
-export function wrapToolExecutionPrototype(
-  proto: object,
-  state: HeadlessReceiptState = getHeadlessReceiptState(),
-): boolean {
-  const call = findOwnMethod(proto, "getCallRenderer");
-  const result = findOwnMethod(proto, "getResultRenderer");
-  const shell = findOwnMethod(proto, "getRenderShell");
-  const hasRenderer = findOwnMethod(proto, "hasRendererDefinition");
-  if (!call || !result || !shell || !hasRenderer) {
-    reportRenderFailure(
-      "headless-receipts",
-      new Error(
-        "ToolExecutionComponent prototype is missing getCallRenderer/getResultRenderer/getRenderShell/hasRendererDefinition; kit receipts cannot attach to tools rendered by this copy.",
-      ),
-    );
-    return false;
-  }
-
-  // First install captures the pristine methods. Afterwards the
-  // process-global state already holds them: prefer the stored set (an older
-  // wrapper may already be installed on this prototype), then the legacy
-  // single-copy originals on a version upgrade, and only then the methods
-  // just found. Never mistake our own wrappers for pristine methods.
-  let originals = state.protoOriginals.get(proto);
-  if (!originals) {
-    const isPrimary = proto === (ToolExecutionComponent.prototype as object);
-    if (isPrimary && state.installed && state.originals.getCallRenderer) {
-      originals = state.originals;
-    } else {
-      originals = {
-        getCallRenderer: call.method as (this: HeadlessComponent) => unknown,
-        getResultRenderer: result.method as (this: HeadlessComponent) => unknown,
-        getRenderShell: shell.method as (this: HeadlessComponent) => unknown,
-        hasRendererDefinition: hasRenderer.method as (this: object) => boolean,
-      };
-      if (isPrimary && !state.installed) state.originals = originals;
-    }
-    state.protoOriginals.set(proto, originals);
-  }
-
-  call.target.getCallRenderer = function getHeadlessCallRenderer(
-    this: HeadlessComponent,
-  ) {
-    const s = getHeadlessReceiptState();
-    rememberDefinition(s, this);
-    const existing = callOriginal(s, this, originals.getCallRenderer);
-    if (shouldSuppressOwnedPresentation(this)) return undefined;
-    const decision = s.shouldAttach
-      ? s.shouldAttach(this)
-      : shouldAttachApexReceipts(this);
-    if (decision && (existing == null || decision.overrideOwned)) {
-      return decision.renderCall;
-    }
-    return existing;
-  };
-
-  result.target.getResultRenderer = function getHeadlessResultRenderer(
-    this: HeadlessComponent,
-  ) {
-    const s = getHeadlessReceiptState();
-    const existing = callOriginal(s, this, originals.getResultRenderer);
-    if (shouldSuppressOwnedPresentation(this)) return undefined;
-    const decision = s.shouldAttach
-      ? s.shouldAttach(this)
-      : shouldAttachApexReceipts(this);
-    if (decision && (existing == null || decision.overrideOwned)) {
-      return decision.renderResult;
-    }
-    return existing;
-  };
-
-  shell.target.getRenderShell = function getHeadlessRenderShell(
-    this: HeadlessComponent,
-  ) {
-    const s = getHeadlessReceiptState();
-    const existing = callOriginal(s, this, originals.getRenderShell);
-    if (shouldSuppressOwnedPresentation(this)) return "default";
-    const decision = s.shouldAttach
-      ? s.shouldAttach(this)
-      : shouldAttachApexReceipts(this);
-    if (decision) return "self";
-    return existing;
-  };
-
-  hasRenderer.target.hasRendererDefinition = function hasHeadlessRendererDefinition(
-    this: object,
-  ) {
-    const s = getHeadlessReceiptState();
-    const decision = s.shouldAttach
-      ? s.shouldAttach(this as HeadlessComponent)
-      : shouldAttachApexReceipts(this as HeadlessComponent);
-    if (decision) return true;
-    return callOriginal(
-      s,
-      this as HeadlessComponent,
-      originals.hasRendererDefinition as
-        | ((this: HeadlessComponent) => boolean)
-        | undefined,
-    ) ?? false;
-  };
-
-  return true;
-}
-
-/**
- * File URL of the bundled core entry that owns the live component copies, if
- * this install has one. Derived from the already-resolved core entry so it
- * works regardless of where Pi is installed; undefined on unbundled runtimes
- * (SDK/tests without a bundle).
- */
-export function resolveLiveBundleEntryUrl(): string | undefined {
-  let entry: string;
-  try {
-    entry = import.meta.resolve("@earendil-works/pi-coding-agent");
-  } catch {
-    return undefined;
-  }
-  const suffix = "/dist/index.js";
-  if (!entry.endsWith(suffix)) return undefined;
-  const candidate = `${entry.slice(0, -suffix.length)}/dist/bundle/index.js`;
-  let path: string;
-  try {
-    path = fileURLToPath(candidate);
-  } catch {
-    return undefined;
-  }
-  return existsSync(path) ? candidate : undefined;
-}
-
-/**
- * Import the bundled core entry (the module object behind dist/bundle).
- * Shared by every kit surface that must patch the live copies of core
- * classes instead of the dist/index.js copies extensions import. Resolves to
- * undefined when this install has no bundle; throws when the bundle exists
- * but cannot be imported (callers log that loudly: it means live rendering
- * is out of the kit's reach).
- */
-export function importLiveBundleModule(): Promise<Record<string, unknown>> {
-  const url = resolveLiveBundleEntryUrl();
-  if (!url)
-    return Promise.reject(new Error("No bundled core entry in this install."));
-  return import(url) as Promise<Record<string, unknown>>;
-}
-
-/**
- * Wrap the bundled copy of ToolExecutionComponent that the live TUI
- * instantiates. The class extensions import (dist/index.js) is a different
- * object, so the primary wrap alone never intercepts a rendered component.
- * Fire-and-forget: install stays synchronous; a missing bundle (dev/test)
- * silently skips, anything else that fails is logged once to pi-render.log.
- * Exported for tests: await it to prove the genuine bundled copy gets wrapped.
- */
-export async function patchLiveBundlePrototype(
-  state: HeadlessReceiptState,
-): Promise<void> {
-  if (state.liveBundle !== "pending") return;
-  if (!resolveLiveBundleEntryUrl()) {
-    state.liveBundle = "absent";
-    return;
-  }
-  let exported: unknown;
-  try {
-    exported = (await importLiveBundleModule()).ToolExecutionComponent;
-  } catch (error) {
-    state.liveBundle = "failed";
-    reportRenderFailure("headless-receipts", error);
-    return;
-  }
-  const proto =
-    typeof exported === "function"
-      ? (exported as { prototype?: unknown }).prototype
-      : undefined;
-  if (!proto || typeof proto !== "object") {
-    state.liveBundle = "failed";
-    reportRenderFailure(
-      "headless-receipts",
-      new Error(
-        "Bundled core entry does not export ToolExecutionComponent; kit receipts cannot attach to live tool calls.",
-      ),
-    );
-    return;
-  }
-  if (proto === (ToolExecutionComponent.prototype as object)) {
-    // Unbundled runtime: the primary wrap already covers it.
-    state.liveBundle = "patched";
-    return;
-  }
-  state.liveBundle = wrapToolExecutionPrototype(proto, state)
-    ? "patched"
-    : "failed";
-}
-
-/** Attach registered Apex receipts to matching ToolExecutionComponent instances. */
-export function installHeadlessReceipts(): void {
+/** Public resolver shared by the transcript and our read-only Agents peek. */
+export const resolveHeadlessToolRenderers: ToolRendererResolver = (toolName, next) => {
   const state = getHeadlessReceiptState();
-  state.shouldAttach = shouldAttachApexReceipts;
+  const owned = next();
+  if (definitionOwnsPresentation(owned as HeadlessPresentation | undefined)) {
+    if (state.seenDefinitions.has(toolName) || state.seenDefinitions.size < 256) {
+      state.seenDefinitions.set(toolName, owned as HeadlessPresentation);
+    }
+  }
+  const registered = () => state.registry.get(toolName) ?? matchPrefixReceipt(state, toolName);
+  if (!registered()) return owned;
+  // Pi keeps this object on the row. Getters let already-created rows honor a
+  // live /ui switch without wrapping Pi's component methods.
+  const selected = (): ToolRenderers | undefined => {
+    const receipt = registered();
+    if (!apexPresentationEnabled()) {
+      return receipt?.suppressOwnedWhenDisabled ? undefined : owned;
+    }
+    if (!receipt || (!receipt.overrideOwned && definitionOwnsPresentation(owned as HeadlessPresentation | undefined))) {
+      return owned;
+    }
+    return { renderCall: receipt.renderCall, renderResult: receipt.renderResult, renderShell: "self" } as ToolRenderers;
+  };
+  return {
+    get renderCall() { return selected()?.renderCall; },
+    get renderResult() { return selected()?.renderResult; },
+    get renderShell() { return selected()?.renderShell ?? "default"; },
+  };
+};
 
-  // A disabled clean startup must not add a process-wide presentation wrap.
-  // An older installed wrap must still be upgraded so v2 can suppress stale
-  // owned presentation and restore stock Pi chrome while Apex is disabled.
-  if (!apexPresentationEnabled() && !state.installed) return;
-  if (
-    state.installed &&
-    state.version >= HEADLESS_WRAPPER_VERSION &&
-    state.liveBundle !== "pending"
-  )
-    return;
-
-  // v2 wrapped exactly one prototype (the imported copy). The helper prefers
-  // the stored pristine originals, so the upgrade path replaces stale
-  // wrappers without touching them.
-  if (!wrapToolExecutionPrototype(ToolExecutionComponent.prototype as object, state))
-    return;
-
-  state.version = HEADLESS_WRAPPER_VERSION;
-  state.installed = true;
-  void patchLiveBundlePrototype(state);
+/** One public resolver per active extension runtime, including chrome-off startup. */
+export function installHeadlessReceipts(pi: ExtensionAPI): void {
+  const state = getHeadlessReceiptState();
+  if (state.owner) {
+    try {
+      state.owner.getFlag("__pi_receipts_probe");
+      return;
+    } catch {
+      // The old extension runtime was invalidated by /reload or session replacement.
+    }
+  }
+  pi.registerToolRenderer(resolveHeadlessToolRenderers);
+  state.seenDefinitions.clear();
+  state.owner = pi;
 }

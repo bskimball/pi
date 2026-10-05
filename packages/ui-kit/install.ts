@@ -11,6 +11,7 @@ import { installLspReceipts } from "./internal/presentation/lsp-receipt.ts";
 import { installMcpReceipts } from "./internal/presentation/mcp-receipt.ts";
 import { installMemoryReceipts } from "./internal/presentation/memory-receipt.ts";
 import { installPowerShellReceipts } from "./internal/presentation/powershell-receipt.ts";
+import { getHeadlessReceiptState, installHeadlessReceipts } from "./internal/presentation/headless-receipts.ts";
 import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installSkillInvocationChrome } from "./internal/presentation/skill-invocation.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
@@ -21,15 +22,19 @@ import { claimSharedTools, resetUiKitOnceForTests, uiKitShared } from "./once.ts
 /** Todo tools + bash/write adapters. First UI extension's `pi` owns them process-wide. */
 export function installSharedTools(pi: ExtensionAPI): void {
   if (!claimSharedTools(pi)) return;
+  // A public resolver belongs to the runtime, even when another skin is active
+  // or chrome is off. Empty registrations simply pass through to Pi.
+  installHeadlessReceipts(pi);
   installKitOwnedTools(pi);
   installBuiltinTools(pi);
 }
 
-/** One ToolExecutionComponent wrap. Safe to call from every UI extension. */
+/** One public tool renderer resolver. Safe to call from every UI extension. */
 export function installSharedPresentation(pi: ExtensionAPI): void {
   const shared = uiKitShared();
   if (shared.presentation) return;
   shared.presentation = true;
+  installHeadlessReceipts(pi);
   installRenderSafety();
   installBuiltinReceipts();
   installCodemodeReceipts();
@@ -50,4 +55,5 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
 
 export function resetUiKitInstallForTests(): void {
   resetUiKitOnceForTests();
+  getHeadlessReceiptState().owner = undefined;
 }

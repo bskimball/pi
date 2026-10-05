@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -119,34 +120,33 @@ describe("apex memory receipts", () => {
     assert.doesNotMatch(text, /┌|┐|└|┘/);
   });
 
-  it("wraps memory ToolExecutionComponent getters and leaves others alone", () => {
+  it("resolves memory tool renderers through the public API and leaves others alone", () => {
     withApexUi("1", () => {
       installMemoryReceipts();
-      const proto = ToolExecutionComponent.prototype as any;
 
       const list = {
         toolName: MEMORY_LIST_TOOL,
         toolDefinition: { name: "memory_list" },
       };
       assert.equal(
-        proto.getCallRenderer.call(list),
+        resolveReceiptFor(list)?.renderCall,
         memoryListReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(list),
+        resolveReceiptFor(list)?.renderResult,
         memoryListReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(list), "self");
+      assert.equal(resolveReceiptFor(list)?.renderShell ?? "default", "self");
 
       const write = {
         toolName: MEMORY_WRITE_TOOL,
         toolDefinition: { name: "memory_write" },
       };
       assert.equal(
-        proto.getCallRenderer.call(write),
+        resolveReceiptFor(write)?.renderCall,
         memoryWriteReceiptRenderers.renderCall,
       );
-      assert.equal(proto.getRenderShell.call(write), "self");
+      assert.equal(resolveReceiptFor(write)?.renderShell ?? "default", "self");
 
       const owned = {
         toolName: MEMORY_LIST_TOOL,
@@ -156,17 +156,17 @@ describe("apex memory receipts", () => {
         },
       };
       assert.notEqual(
-        proto.getCallRenderer.call(owned),
+        resolveReceiptFor(owned)?.renderCall,
         memoryListReceiptRenderers.renderCall,
       );
-      assert.equal(proto.getRenderShell.call(owned), "default");
+      assert.equal(resolveReceiptFor(owned)?.renderShell ?? "default", "default");
 
       const other = {
         toolName: "bash",
         toolDefinition: { name: "bash" },
       };
-      assert.equal(proto.getCallRenderer.call(other), undefined);
-      assert.equal(proto.getRenderShell.call(other), "default");
+      assert.equal(resolveReceiptFor(other)?.renderCall, undefined);
+      assert.equal(resolveReceiptFor(other)?.renderShell ?? "default", "default");
     });
   });
 
@@ -176,7 +176,7 @@ describe("apex memory receipts", () => {
       installMemoryReceipts();
 
       const args = { scope: "global", kind: "memory" };
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "memory_list",
         "call-1",
         args,

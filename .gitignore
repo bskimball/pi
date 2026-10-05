@@ -28,6 +28,14 @@ agent/harness/
 agent/logs/
 agent/fff/
 agent/intercom/
+
+# Pi managed install (releases + generated launchers)
+agent/install/
+agent/bin/package.json
+agent/bin/pi
+agent/bin/pi.cmd
+agent/bin/pi.ps1
+agent/bin/pi-launcher.js
 exa-usage.json
 .tmp/
 

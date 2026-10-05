@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -200,23 +201,22 @@ describe("apex lsp receipts", () => {
     assert.deepEqual(callComponent.render(80), []);
   });
 
-  it("wraps lsp ToolExecutionComponent getters and leaves others alone", () => {
+  it("resolves lsp tool renderers through the public API and leaves others alone", () => {
     withApexUi("1", () => {
       installLspReceipts();
-    const proto = ToolExecutionComponent.prototype as any;
 
     const lsp = {
       toolName: LSP_RECEIPT_TOOL,
       toolDefinition: { name: "lsp" },
     };
     assert.equal(lspOwnsPresentation(lsp), false);
-    assert.equal(proto.getCallRenderer.call(lsp), lspReceiptRenderers.renderCall);
+    assert.equal(resolveReceiptFor(lsp)?.renderCall, lspReceiptRenderers.renderCall);
     assert.equal(
-      proto.getResultRenderer.call(lsp),
+      resolveReceiptFor(lsp)?.renderResult,
       lspReceiptRenderers.renderResult,
     );
-    assert.equal(proto.getRenderShell.call(lsp), "self");
-    assert.equal(proto.hasRendererDefinition.call(lsp), true);
+    assert.equal(resolveReceiptFor(lsp)?.renderShell ?? "default", "self");
+    assert.equal(Boolean(resolveReceiptFor(lsp)), true);
 
     const ownCall = () => ({ render: () => ["OWN-CALL"], invalidate() {} });
     const ownResult = () => ({ render: () => ["OWN-RESULT"], invalidate() {} });
@@ -228,24 +228,24 @@ describe("apex lsp receipts", () => {
         renderResult: ownResult,
       },
     };
-    assert.equal(proto.getCallRenderer.call(ownedBoth), ownCall);
-    assert.equal(proto.getResultRenderer.call(ownedBoth), ownResult);
-    assert.equal(proto.getRenderShell.call(ownedBoth), "default");
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderCall, ownCall);
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderResult, ownResult);
+    assert.equal(resolveReceiptFor(ownedBoth)?.renderShell ?? "default", "default");
 
     const ownedCallOnly = {
       toolName: LSP_RECEIPT_TOOL,
       toolDefinition: { name: "lsp", renderCall: ownCall },
     };
-    assert.equal(proto.getCallRenderer.call(ownedCallOnly), ownCall);
-    assert.equal(proto.getResultRenderer.call(ownedCallOnly), undefined);
-    assert.equal(proto.getRenderShell.call(ownedCallOnly), "default");
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderCall, ownCall);
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderResult, undefined);
+    assert.equal(resolveReceiptFor(ownedCallOnly)?.renderShell ?? "default", "default");
 
     const ownedShell = {
       toolName: LSP_RECEIPT_TOOL,
       toolDefinition: { name: "lsp", renderShell: "default" },
     };
     assert.equal(lspOwnsPresentation(ownedShell), false);
-    assert.equal(proto.getRenderShell.call(ownedShell), "self");
+    assert.equal(resolveReceiptFor(ownedShell)?.renderShell ?? "default", "self");
 
     const explicitDefaultShell = {
       toolName: LSP_RECEIPT_TOOL,
@@ -255,15 +255,15 @@ describe("apex lsp receipts", () => {
         renderShell: "default",
       },
     };
-    assert.equal(proto.getRenderShell.call(explicitDefaultShell), "default");
+    assert.equal(resolveReceiptFor(explicitDefaultShell)?.renderShell ?? "default", "default");
 
     const other = {
       toolName: "bash",
       toolDefinition: { name: "bash" },
     };
-    assert.equal(proto.getCallRenderer.call(other), undefined);
-    assert.equal(proto.getResultRenderer.call(other), undefined);
-    assert.equal(proto.getRenderShell.call(other), "default");
+    assert.equal(resolveReceiptFor(other)?.renderCall, undefined);
+    assert.equal(resolveReceiptFor(other)?.renderResult, undefined);
+    assert.equal(resolveReceiptFor(other)?.renderShell ?? "default", "default");
     });
   });
 
@@ -278,7 +278,7 @@ describe("apex lsp receipts", () => {
       line: 20,
       column: 1,
     };
-    const component = new ToolExecutionComponent(
+    const component = new ReceiptToolExecutionComponent(
       "lsp",
       "call-1",
       args,

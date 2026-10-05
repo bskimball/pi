@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -206,7 +207,6 @@ describe("apex intercom receipts", () => {
   it("overrides intercom-owned presentation when Apex is on", () => {
     withApexUi("1", () => {
       installIntercomReceipts(fakePi());
-      const proto = ToolExecutionComponent.prototype as any;
       for (const [name, renderers] of [
         [INTERCOM_TOOL, intercomReceiptRenderers],
         [CONTACT_SUPERVISOR_TOOL, contactSupervisorReceiptRenderers],
@@ -220,12 +220,12 @@ describe("apex intercom receipts", () => {
             renderShell: "self",
           },
         };
-        assert.equal(proto.getCallRenderer.call(owned), renderers.renderCall);
+        assert.equal(resolveReceiptFor(owned)?.renderCall, renderers.renderCall);
         assert.equal(
-          proto.getResultRenderer.call(owned),
+          resolveReceiptFor(owned)?.renderResult,
           renderers.renderResult,
         );
-        assert.equal(proto.getRenderShell.call(owned), "self");
+        assert.equal(resolveReceiptFor(owned)?.renderShell ?? "default", "self");
       }
     });
   });
@@ -236,7 +236,7 @@ describe("apex intercom receipts", () => {
       installIntercomReceipts(fakePi());
 
       const args = { action: "send", to: "worker", message: "starting task-3" };
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         INTERCOM_TOOL,
         "call-1",
         args,

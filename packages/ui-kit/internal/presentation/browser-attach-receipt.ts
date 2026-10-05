@@ -11,7 +11,6 @@ import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -71,5 +70,4 @@ export const browserAttachReceiptRenderers = toolRenderers<BrowserAttachArgs>({
 export function installBrowserAttachReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(BROWSER_ATTACH_TOOL, browserAttachReceiptRenderers);
-  installHeadlessReceipts();
 }

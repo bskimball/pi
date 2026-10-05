@@ -23,7 +23,6 @@ import { WidthText, cleanInline, fitLine } from "./ui-common.ts";
 import { skinGlyphs } from "./skin.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 import {
@@ -194,7 +193,6 @@ export function installIntercomReceipts(pi: ExtensionAPI): void {
     contactSupervisorReceiptRenderers,
     { overrideOwned: true },
   );
-  installHeadlessReceipts();
   pi.registerMessageRenderer<IntercomMessageDetails>(
     INTERCOM_MESSAGE_TYPE,
     (message, options, theme) =>

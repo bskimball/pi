@@ -21,7 +21,7 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { createBuiltinToolRenderers } from "../presentation/builtin-tool-renderers.ts";
-import { rememberedToolDefinition } from "../presentation/headless-receipts.ts";
+import { rememberedToolDefinition, resolveHeadlessToolRenderers } from "../presentation/headless-receipts.ts";
 
 /** Initial read window: last 1 MiB of the worker session file. */
 export const PEEK_INITIAL_BYTES = 1024 * 1024;
@@ -352,7 +352,9 @@ export class PeekTranscript {
             call.id,
             call.args,
             { showImages: false },
-            renderOnlyDefinition(call.name) ?? rememberedToolDefinition(call.name),
+            resolveHeadlessToolRenderers(call.name, () =>
+              (renderOnlyDefinition(call.name) ?? rememberedToolDefinition(call.name)) as import("@earendil-works/pi-coding-agent").ToolRenderers | undefined,
+            ),
             this.tui as never,
             this.cwd,
           );

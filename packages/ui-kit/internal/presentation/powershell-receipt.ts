@@ -10,11 +10,8 @@
 
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
-import { apexPresentationEnabled } from "./presentation.ts";
 import {
   componentOwnsPresentation,
-  getHeadlessReceiptState,
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -125,7 +122,4 @@ export function installPowerShellReceipts(): void {
     overrideOwned: true,
     suppressOwnedWhenDisabled: true,
   });
-  if (apexPresentationEnabled() || getHeadlessReceiptState().installed) {
-    installHeadlessReceipts();
-  }
 }

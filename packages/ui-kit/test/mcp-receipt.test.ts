@@ -1,7 +1,7 @@
+import { ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
@@ -81,7 +81,7 @@ describe("native codemode/MCP/tool-search rendering", () => {
     withChrome("1", () => {
       resetUiKitInstallForTests();
       try {
-        const pi = { registerMessageRenderer() {} } as any;
+        const pi = { registerMessageRenderer() {}, registerToolRenderer() {}, getFlag() {} } as any;
         installSharedPresentation(pi);
         // MCP proxies attach even when Pi's owner renderers are present.
         for (const toolName of [
@@ -125,7 +125,7 @@ describe("native codemode/MCP/tool-search rendering", () => {
     withChrome("0", () => {
       resetUiKitInstallForTests();
       try {
-        const pi = { registerMessageRenderer() {} } as any;
+        const pi = { registerMessageRenderer() {}, registerToolRenderer() {}, getFlag() {} } as any;
         installSharedPresentation(pi);
         for (const toolName of [
           "mcp__chrome-devtools__list_pages",
@@ -413,7 +413,7 @@ describe("wrapped native components", () => {
     withChrome("1", () => {
       installMcpReceipts();
       installCodemodeReceipts();
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "mcp__context7__query-docs",
         "call-mcp-1",
         { libraryId: "/vercel/next.js", query: "routing" },
@@ -443,7 +443,7 @@ describe("wrapped native components", () => {
     initTheme("dark");
     withChrome("1", () => {
       installCodemodeReceipts();
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "codemode",
         "call-code-1",
         { code: CODE },
@@ -469,7 +469,7 @@ describe("wrapped native components", () => {
     initTheme("dark");
     withChrome("0", () => {
       installMcpReceipts();
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "mcp__context7__query-docs",
         "call-off-1",
         { libraryId: "/vercel/next.js" },

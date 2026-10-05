@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -16,8 +17,6 @@ import {
 } from "../internal/presentation/powershell-receipt.ts";
 
 import {
-  getHeadlessReceiptState,
-  HEADLESS_WRAPPER_VERSION,
 } from "../internal/presentation/headless-receipts.ts";
 
 const theme = {
@@ -145,10 +144,9 @@ describe("apex powershell receipts", () => {
     assert.deepEqual(callComponent.render(80), []);
   });
 
-  it("wraps powershell ToolExecutionComponent getters and leaves others alone", () => {
+  it("resolves powershell tool renderers through the public API and leaves others alone", () => {
     withApexUi("1", () => {
       installPowerShellReceipts();
-      const proto = ToolExecutionComponent.prototype as any;
 
       const tool = {
         toolName: POWERSHELL_RECEIPT_TOOL,
@@ -156,15 +154,15 @@ describe("apex powershell receipts", () => {
       };
       assert.equal(powershellOwnsPresentation(tool), false);
       assert.equal(
-        proto.getCallRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderCall,
         powershellReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderResult,
         powershellReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(tool), "self");
-      assert.equal(proto.hasRendererDefinition.call(tool), true);
+      assert.equal(resolveReceiptFor(tool)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(tool)), true);
 
       const ownCall = () => ({ render: () => ["OWN-CALL"], invalidate() {} });
       const ownResult = () => ({ render: () => ["OWN-RESULT"], invalidate() {} });
@@ -177,43 +175,43 @@ describe("apex powershell receipts", () => {
         },
       };
       assert.equal(
-        proto.getCallRenderer.call(ownedBoth),
+        resolveReceiptFor(ownedBoth)?.renderCall,
         powershellReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(ownedBoth),
+        resolveReceiptFor(ownedBoth)?.renderResult,
         powershellReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(ownedBoth), "self");
+      assert.equal(resolveReceiptFor(ownedBoth)?.renderShell ?? "default", "self");
 
       const ownedCallOnly = {
         toolName: POWERSHELL_RECEIPT_TOOL,
         toolDefinition: { name: "powershell", renderCall: ownCall },
       };
       assert.equal(
-        proto.getCallRenderer.call(ownedCallOnly),
+        resolveReceiptFor(ownedCallOnly)?.renderCall,
         powershellReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(ownedCallOnly),
+        resolveReceiptFor(ownedCallOnly)?.renderResult,
         powershellReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(ownedCallOnly), "self");
+      assert.equal(resolveReceiptFor(ownedCallOnly)?.renderShell ?? "default", "self");
 
       const ownedShell = {
         toolName: POWERSHELL_RECEIPT_TOOL,
         toolDefinition: { name: "powershell", renderShell: "default" },
       };
       assert.equal(powershellOwnsPresentation(ownedShell), false);
-      assert.equal(proto.getRenderShell.call(ownedShell), "self");
+      assert.equal(resolveReceiptFor(ownedShell)?.renderShell ?? "default", "self");
 
       const other = {
         toolName: "bash",
         toolDefinition: { name: "bash" },
       };
-      assert.equal(proto.getCallRenderer.call(other), undefined);
-      assert.equal(proto.getResultRenderer.call(other), undefined);
-      assert.equal(proto.getRenderShell.call(other), "default");
+      assert.equal(resolveReceiptFor(other)?.renderCall, undefined);
+      assert.equal(resolveReceiptFor(other)?.renderResult, undefined);
+      assert.equal(resolveReceiptFor(other)?.renderShell ?? "default", "default");
     });
   });
 
@@ -223,7 +221,7 @@ describe("apex powershell receipts", () => {
       installPowerShellReceipts();
 
       const args = { command: "Get-Location" };
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "powershell",
         "call-1",
         args,
@@ -270,7 +268,7 @@ describe("apex powershell receipts", () => {
         render: () => ["Took 1.4s"],
         invalidate() {},
       });
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "powershell",
         "call-stale-1",
         args,
@@ -310,7 +308,6 @@ describe("apex powershell receipts", () => {
   it("suppresses stale powershell renderers when Apex is toggled off", () => {
     withApexUi("1", () => {
       installPowerShellReceipts();
-      const proto = ToolExecutionComponent.prototype as any;
       const staleCall = () => ({ render: () => ["STALE-CALL"], invalidate() {} });
       const staleResult = () => ({
         render: () => ["STALE-RESULT"],
@@ -327,88 +324,42 @@ describe("apex powershell receipts", () => {
       };
 
       assert.equal(
-        proto.getCallRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderCall,
         powershellReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderResult,
         powershellReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(tool), "self");
+      assert.equal(resolveReceiptFor(tool)?.renderShell ?? "default", "self");
 
       process.env.PI_APEX_UI = "0";
       process.env.PI_UI_CHROME = "0";
-      assert.equal(proto.getCallRenderer.call(tool), undefined);
-      assert.equal(proto.getResultRenderer.call(tool), undefined);
-      assert.equal(proto.getRenderShell.call(tool), "default");
-      assert.equal(proto.hasRendererDefinition.call(tool), true);
+      assert.equal(resolveReceiptFor(tool)?.renderCall, undefined);
+      assert.equal(resolveReceiptFor(tool)?.renderResult, undefined);
+      assert.equal(resolveReceiptFor(tool)?.renderShell ?? "default", "default");
+      assert.equal(Boolean(resolveReceiptFor(tool)), true);
 
       process.env.PI_APEX_UI = "1";
       process.env.PI_UI_CHROME = "1";
       assert.equal(
-        proto.getCallRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderCall,
         powershellReceiptRenderers.renderCall,
       );
       assert.equal(
-        proto.getResultRenderer.call(tool),
+        resolveReceiptFor(tool)?.renderResult,
         powershellReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(tool), "self");
+      assert.equal(resolveReceiptFor(tool)?.renderShell ?? "default", "self");
     });
   });
 
-  it("migrates a genuine v1 wrapper while Apex is disabled without stacking originals", () => {
-    withApexUi("1", () => installPowerShellReceipts());
-
-    const state = getHeadlessReceiptState();
-    const proto = ToolExecutionComponent.prototype as any;
-    const originals = state.originals;
-    const fakeV1Call = function (this: any) {
-      return originals.getCallRenderer?.call(this);
-    };
-    proto.getCallRenderer = fakeV1Call;
-    proto.getResultRenderer = function (this: any) {
-      return originals.getResultRenderer?.call(this);
-    };
-    proto.getRenderShell = function (this: any) {
-      return originals.getRenderShell?.call(this);
-    };
-    proto.hasRendererDefinition = function (this: any) {
-      return originals.hasRendererDefinition?.call(this) ?? false;
-    };
-    state.installed = true;
-    state.version = HEADLESS_WRAPPER_VERSION - 1;
-
-    withApexUi("0", () => installPowerShellReceipts());
-
-    assert.equal(state.version, HEADLESS_WRAPPER_VERSION);
-    assert.notEqual(proto.getCallRenderer, fakeV1Call);
-    assert.equal(state.originals, originals);
-
-    const staleCall = () => ({ render: () => ["PS> stale"], invalidate() {} });
-    const staleResult = () => ({ render: () => ["Took 1.4s"], invalidate() {} });
-    const tool = {
-      toolName: POWERSHELL_RECEIPT_TOOL,
-      toolDefinition: {
-        name: "powershell",
-        renderCall: staleCall,
-        renderResult: staleResult,
-        renderShell: "self",
-      },
-    };
-    withApexUi("0", () => {
-      assert.equal(proto.getCallRenderer.call(tool), undefined);
-      assert.equal(proto.getResultRenderer.call(tool), undefined);
-      assert.equal(proto.getRenderShell.call(tool), "default");
-    });
-  });
-
-  it("renders stock Pi chrome after an installed v2 wrap is disabled", () => {
+  it("renders stock Pi chrome when the public receipt resolver is disabled", () => {
     initTheme("dark");
     withApexUi("1", () => installPowerShellReceipts());
 
     withApexUi("0", () => {
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "powershell",
         "call-disabled-1",
         { command: "Get-Date" },

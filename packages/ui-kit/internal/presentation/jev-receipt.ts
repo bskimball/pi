@@ -11,7 +11,6 @@ import { apexPresentationEnabled } from "./presentation.ts";
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -213,5 +212,4 @@ export const jevReceiptRenderers = toolRenderers<JevArgs>({
 export function installJevReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(JEV_TOOL, jevReceiptRenderers);
-  installHeadlessReceipts();
 }

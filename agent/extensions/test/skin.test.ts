@@ -15,6 +15,7 @@ import {
 import { TREE } from "../../../packages/ui-kit/internal/presentation/ui-common.ts";
 import { safeVisibleWidth } from "../../../packages/ui-kit/internal/presentation/safe-text-layout.ts";
 import { installBuiltinReceipts } from "../../../packages/ui-kit/internal/presentation/builtin-receipts.ts";
+import { resolveHeadlessToolRenderers } from "../../../packages/ui-kit/internal/presentation/headless-receipts.ts";
 import {
   intercomMessageLines,
   parseIntercomMessage,
@@ -276,7 +277,10 @@ describe("apex presentation skins", () => {
         "call-skin-e2e",
         { pattern: "skin" },
         { showImages: false },
-        { name: "grep", renderCall: () => {}, renderResult: () => {} } as any,
+        resolveHeadlessToolRenderers("grep", () => ({
+          renderCall: () => ({ render: () => ["OWNER"], invalidate() {} }),
+          renderResult: () => ({ render: () => ["OWNER"], invalidate() {} }),
+        })),
         stubUi() as any,
         process.cwd(),
       );

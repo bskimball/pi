@@ -12,7 +12,6 @@ import { cleanInline } from "./ui-common.ts";
 import { apexPresentationEnabled } from "./presentation.ts";
 import {
   componentOwnsPresentation,
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -104,5 +103,4 @@ export function graphifyOwnsPresentation(component: GraphifyComponent): boolean 
 export function installGraphifyReceipts(): void {
   if (!apexPresentationEnabled()) return;
   registerHeadlessReceipt(GRAPHIFY_RECEIPT_TOOL, graphifyReceiptRenderers);
-  installHeadlessReceipts();
 }

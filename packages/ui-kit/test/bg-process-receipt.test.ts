@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -176,24 +177,23 @@ describe("apex bg-process receipts", () => {
     assert.match(text, /exit 1/);
   });
 
-  it("wraps bg_status ToolExecutionComponent getters", () => {
+  it("resolves bg_status tool renderers through the public API", () => {
     withApexUi("1", () => {
       installBgProcessReceipts(fakePi());
-    const proto = ToolExecutionComponent.prototype as any;
     const status = {
       toolName: "bg_status",
       toolDefinition: { name: "bg_status" },
     };
     assert.equal(
-      proto.getCallRenderer.call(status),
+      resolveReceiptFor(status)?.renderCall,
       bgStatusReceiptRenderers.renderCall,
     );
     assert.equal(
-      proto.getResultRenderer.call(status),
+      resolveReceiptFor(status)?.renderResult,
       bgStatusReceiptRenderers.renderResult,
     );
-    assert.equal(proto.getRenderShell.call(status), "self");
-    assert.equal(proto.hasRendererDefinition.call(status), true);
+    assert.equal(resolveReceiptFor(status)?.renderShell ?? "default", "self");
+    assert.equal(Boolean(resolveReceiptFor(status)), true);
 
     const owned = {
       toolName: "bg_status",
@@ -203,10 +203,10 @@ describe("apex bg-process receipts", () => {
       },
     };
     assert.notEqual(
-      proto.getCallRenderer.call(owned),
+      resolveReceiptFor(owned)?.renderCall,
       bgStatusReceiptRenderers.renderCall,
     );
-    assert.equal(proto.getRenderShell.call(owned), "default");
+    assert.equal(resolveReceiptFor(owned)?.renderShell ?? "default", "default");
     });
   });
 
@@ -216,7 +216,7 @@ describe("apex bg-process receipts", () => {
       installBgProcessReceipts(fakePi());
 
     const args = { include_settled: true };
-    const component = new ToolExecutionComponent(
+    const component = new ReceiptToolExecutionComponent(
       "bg_list",
       "call-1",
       args,

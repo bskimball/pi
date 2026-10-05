@@ -1,7 +1,7 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { safeVisibleWidth } from "@pi/ui-kit/internal/presentation/safe-text-layout.ts";
@@ -403,7 +403,6 @@ describe("apex builtin grep/ls receipts", () => {
 
   it("overrides owned grep/ls renderers while enabled and falls back when PI_APEX_UI=0", () => {
     withApexUi("1", () => installBuiltinReceipts());
-    const proto = ToolExecutionComponent.prototype as any;
 
     const ownGrepCall = () => ({ render: () => ["OWN-GREP-CALL"], invalidate() {} });
     const ownGrepResult = () => ({ render: () => ["OWN-GREP-RESULT"], invalidate() {} });
@@ -417,29 +416,29 @@ describe("apex builtin grep/ls receipts", () => {
     };
 
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(grepComp), builtinGrepReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(grepComp)?.renderCall, builtinGrepReceiptRenderers.renderCall);
       assert.equal(
-        proto.getResultRenderer.call(grepComp),
+        resolveReceiptFor(grepComp)?.renderResult,
         builtinGrepReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(grepComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(grepComp), true);
+      assert.equal(resolveReceiptFor(grepComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(grepComp)), true);
     });
 
     withApexUi("0", () => {
-      assert.equal(proto.getCallRenderer.call(grepComp), ownGrepCall);
-      assert.equal(proto.getResultRenderer.call(grepComp), ownGrepResult);
-      assert.equal(proto.getRenderShell.call(grepComp), "default");
+      assert.equal(resolveReceiptFor(grepComp)?.renderCall, ownGrepCall);
+      assert.equal(resolveReceiptFor(grepComp)?.renderResult, ownGrepResult);
+      assert.equal(resolveReceiptFor(grepComp)?.renderShell ?? "default", "default");
     });
 
     // Re-enable restores Apex receipts.
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(grepComp), builtinGrepReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(grepComp)?.renderCall, builtinGrepReceiptRenderers.renderCall);
       assert.equal(
-        proto.getResultRenderer.call(grepComp),
+        resolveReceiptFor(grepComp)?.renderResult,
         builtinGrepReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(grepComp), "self");
+      assert.equal(resolveReceiptFor(grepComp)?.renderShell ?? "default", "self");
     });
 
     const ownLsCall = () => ({ render: () => ["OWN-LS-CALL"], invalidate() {} });
@@ -454,23 +453,23 @@ describe("apex builtin grep/ls receipts", () => {
     };
 
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(lsComp), builtinLsReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(lsComp)?.renderCall, builtinLsReceiptRenderers.renderCall);
       assert.equal(
-        proto.getResultRenderer.call(lsComp),
+        resolveReceiptFor(lsComp)?.renderResult,
         builtinLsReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(lsComp), "self");
+      assert.equal(resolveReceiptFor(lsComp)?.renderShell ?? "default", "self");
     });
 
     withApexUi("0", () => {
-      assert.equal(proto.getCallRenderer.call(lsComp), ownLsCall);
-      assert.equal(proto.getResultRenderer.call(lsComp), ownLsResult);
-      assert.equal(proto.getRenderShell.call(lsComp), "default");
+      assert.equal(resolveReceiptFor(lsComp)?.renderCall, ownLsCall);
+      assert.equal(resolveReceiptFor(lsComp)?.renderResult, ownLsResult);
+      assert.equal(resolveReceiptFor(lsComp)?.renderShell ?? "default", "default");
     });
 
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(lsComp), builtinLsReceiptRenderers.renderCall);
-      assert.equal(proto.getRenderShell.call(lsComp), "self");
+      assert.equal(resolveReceiptFor(lsComp)?.renderCall, builtinLsReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(lsComp)?.renderShell ?? "default", "self");
     });
 
     const ownFindCall = () => ({ render: () => ["OWN-FIND-CALL"], invalidate() {} });
@@ -485,24 +484,24 @@ describe("apex builtin grep/ls receipts", () => {
     };
 
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(findComp), builtinFindReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(findComp)?.renderCall, builtinFindReceiptRenderers.renderCall);
       assert.equal(
-        proto.getResultRenderer.call(findComp),
+        resolveReceiptFor(findComp)?.renderResult,
         builtinFindReceiptRenderers.renderResult,
       );
-      assert.equal(proto.getRenderShell.call(findComp), "self");
-      assert.equal(proto.hasRendererDefinition.call(findComp), true);
+      assert.equal(resolveReceiptFor(findComp)?.renderShell ?? "default", "self");
+      assert.equal(Boolean(resolveReceiptFor(findComp)), true);
     });
 
     withApexUi("0", () => {
-      assert.equal(proto.getCallRenderer.call(findComp), ownFindCall);
-      assert.equal(proto.getResultRenderer.call(findComp), ownFindResult);
-      assert.equal(proto.getRenderShell.call(findComp), "default");
+      assert.equal(resolveReceiptFor(findComp)?.renderCall, ownFindCall);
+      assert.equal(resolveReceiptFor(findComp)?.renderResult, ownFindResult);
+      assert.equal(resolveReceiptFor(findComp)?.renderShell ?? "default", "default");
     });
 
     withApexUi("1", () => {
-      assert.equal(proto.getCallRenderer.call(findComp), builtinFindReceiptRenderers.renderCall);
-      assert.equal(proto.getRenderShell.call(findComp), "self");
+      assert.equal(resolveReceiptFor(findComp)?.renderCall, builtinFindReceiptRenderers.renderCall);
+      assert.equal(resolveReceiptFor(findComp)?.renderShell ?? "default", "self");
     });
   });
 
@@ -511,7 +510,7 @@ describe("apex builtin grep/ls receipts", () => {
     withApexUi("1", () => {
       installBuiltinReceipts();
 
-      const grep = new ToolExecutionComponent(
+      const grep = new ReceiptToolExecutionComponent(
         "grep",
         "call-grep-1",
         { pattern: "renderCall", path: "src/" },
@@ -533,7 +532,7 @@ describe("apex builtin grep/ls receipts", () => {
       assert.doesNotMatch(grepText, /┌|┐|└|┘/);
       assert.ok(grepLines.every((line) => safeVisibleWidth(line) <= 80));
 
-      const ls = new ToolExecutionComponent(
+      const ls = new ReceiptToolExecutionComponent(
         "ls",
         "call-ls-1",
         { path: "src" },
@@ -562,7 +561,7 @@ describe("apex builtin grep/ls receipts", () => {
     withApexUi("1", () => {
       installBuiltinReceipts();
 
-      const find = new ToolExecutionComponent(
+      const find = new ReceiptToolExecutionComponent(
         "find",
         "call-find-1",
         { pattern: "*.ts", path: "src" },
@@ -584,7 +583,7 @@ describe("apex builtin grep/ls receipts", () => {
       assert.doesNotMatch(findText, /┌|┐|└|┘/);
       assert.ok(findLines.every((line) => safeVisibleWidth(line) <= 80));
 
-      const empty = new ToolExecutionComponent(
+      const empty = new ReceiptToolExecutionComponent(
         "find",
         "call-find-empty",
         { pattern: "*.zzz", path: "src" },
@@ -610,7 +609,7 @@ describe("apex builtin grep/ls receipts", () => {
       installBuiltinReceipts();
 
       const big = Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts:${i}:match`).join("\n");
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         "grep",
         "call-grep-bounded",
         { pattern: "match" },

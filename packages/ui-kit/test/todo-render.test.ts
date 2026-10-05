@@ -3006,7 +3006,10 @@ describe("installUiHost once-owner across skins", () => {
     const shortcuts = new Map<string, unknown>();
     const commands = new Map<string, unknown>();
     const events = { on() {} };
+    const renderers: unknown[] = [];
     return {
+      renderers,
+      registerToolRenderer(resolver: unknown) { renderers.push(resolver); },
       tools,
       shortcuts,
       commands,
@@ -3068,6 +3071,9 @@ describe("installUiHost once-owner across skins", () => {
         assert.equal(claude.commands.has(name), false);
         assert.equal(hal.commands.has(name), false);
       }
+      assert.equal(apex.renderers.length, 1);
+      assert.equal(claude.renderers.length, 0);
+      assert.equal(hal.renderers.length, 0);
       // Isolated jiti copies of the kit still share this interned process bag.
       const bag = (process as any)[Symbol.for("pi.ui-kit.shared")];
       assert.ok(bag?.toolsPi, "process bag claimed by first skin");
@@ -3109,6 +3115,8 @@ describe("installUiHost once-owner across skins", () => {
         assert.ok(next.commands.has(name), `${name} on reclaimed pi`);
         assert.equal(later.commands.has(name), false);
       }
+      assert.equal(next.renderers.length, 1);
+      assert.equal(later.renderers.length, 0);
       const bag = (process as any)[Symbol.for("pi.ui-kit.shared")];
       assert.equal(bag?.toolsPi, next, "bag claimant is the new generation");
       assert.equal(bag.hostListeners, true);

@@ -1,3 +1,4 @@
+import { resolveReceiptFor, ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -90,24 +91,23 @@ describe("apex web-search receipts", () => {
     assert.ok(rendered.every((line: string) => safeVisibleWidth(line) <= 80));
   });
 
-  it("wraps fetch_content ToolExecutionComponent getters", () => {
+  it("resolves fetch_content tool renderers through the public API", () => {
     withApexUi("1", () => {
       installWebSearchReceipts();
-    const proto = ToolExecutionComponent.prototype as any;
     const fetch = {
       toolName: "fetch_content",
       toolDefinition: { name: "fetch_content" },
     };
     assert.equal(
-      proto.getCallRenderer.call(fetch),
+      resolveReceiptFor(fetch)?.renderCall,
       fetchContentReceiptRenderers.renderCall,
     );
     assert.equal(
-      proto.getResultRenderer.call(fetch),
+      resolveReceiptFor(fetch)?.renderResult,
       fetchContentReceiptRenderers.renderResult,
     );
-    assert.equal(proto.getRenderShell.call(fetch), "self");
-    assert.equal(proto.hasRendererDefinition.call(fetch), true);
+    assert.equal(resolveReceiptFor(fetch)?.renderShell ?? "default", "self");
+    assert.equal(Boolean(resolveReceiptFor(fetch)), true);
 
     const owned = {
       toolName: "fetch_content",
@@ -117,10 +117,10 @@ describe("apex web-search receipts", () => {
       },
     };
     assert.notEqual(
-      proto.getCallRenderer.call(owned),
+      resolveReceiptFor(owned)?.renderCall,
       fetchContentReceiptRenderers.renderCall,
     );
-    assert.equal(proto.getRenderShell.call(owned), "default");
+    assert.equal(resolveReceiptFor(owned)?.renderShell ?? "default", "default");
     });
   });
 
@@ -130,7 +130,7 @@ describe("apex web-search receipts", () => {
       installWebSearchReceipts();
 
     const args = { url: "https://example.com/docs" };
-    const component = new ToolExecutionComponent(
+    const component = new ReceiptToolExecutionComponent(
       "fetch_content",
       "call-1",
       args,
@@ -353,7 +353,7 @@ describe("kit jev receipts", () => {
         try {
           if (skin === undefined) delete process.env.PI_UI_SKIN;
           else process.env.PI_UI_SKIN = skin;
-          const component = new ToolExecutionComponent(
+          const component = new ReceiptToolExecutionComponent(
             JEV_TOOL,
             `call-${skin ?? "unset"}`,
             jevArgs,
@@ -408,7 +408,7 @@ describe("kit jev receipts", () => {
         },
         usage: { input_tokens: 387, output_tokens: 65 },
       });
-      const component = new ToolExecutionComponent(
+      const component = new ReceiptToolExecutionComponent(
         JEV_TOOL, "call-switch", jevArgs, { showImages: false }, { name: JEV_TOOL } as any, stubUi() as any, process.cwd(),
       );
       component.markExecutionStarted();
@@ -458,7 +458,7 @@ describe("kit jev receipts", () => {
       process.env.PI_UI_CHROME = "0";
       process.env.PI_APEX_UI = "1";
       installJevReceipts();
-      const plain = new ToolExecutionComponent(
+      const plain = new ReceiptToolExecutionComponent(
         JEV_TOOL, "call-off", jevArgs, { showImages: false }, { name: JEV_TOOL } as any, stubUi() as any, process.cwd(),
       );
       plain.markExecutionStarted();
@@ -471,7 +471,7 @@ describe("kit jev receipts", () => {
       delete process.env.PI_UI_CHROME;
       process.env.PI_APEX_UI = "0";
       installJevReceipts();
-      const legacy = new ToolExecutionComponent(
+      const legacy = new ReceiptToolExecutionComponent(
         JEV_TOOL, "call-legacy", jevArgs, { showImages: false }, { name: JEV_TOOL } as any, stubUi() as any, process.cwd(),
       );
       legacy.markExecutionStarted();

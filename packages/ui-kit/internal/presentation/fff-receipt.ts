@@ -11,7 +11,6 @@ import { apexPresentationEnabled } from "./presentation.ts";
 import { boundedOutput, toolRenderers } from "./tool-receipt.ts";
 import { cleanInline } from "./ui-common.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -190,5 +189,4 @@ export function installFffReceipts(): void {
   registerHeadlessReceipt(FFF_GREP_TOOL, ffgrepReceiptRenderers, {
     overrideOwned: true,
   });
-  installHeadlessReceipts();
 }

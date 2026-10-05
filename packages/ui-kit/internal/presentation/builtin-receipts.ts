@@ -20,7 +20,6 @@ import {
   resultDiff,
 } from "./edit-diff.ts";
 import {
-  installHeadlessReceipts,
   registerHeadlessReceipt,
 } from "./headless-receipts.ts";
 
@@ -362,5 +361,4 @@ export function installBuiltinReceipts(): void {
   registerHeadlessReceipt(BUILTIN_FIND_TOOL, builtinFindReceiptRenderers, {
     overrideOwned: true,
   });
-  installHeadlessReceipts();
 }
