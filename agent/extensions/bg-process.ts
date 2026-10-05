@@ -9,12 +9,12 @@ import {
   type ChildProcess,
   type ChildProcessByStdio,
 } from "node:child_process";
-import type { Readable } from "node:stream";
-import * as path from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { killProcessTree, killProcessTreeSync } from "./bg-process/internal/process-tree-kill.ts";
 import { JobRegistry } from "./bg-process/internal/job-registry.ts";
+import { shellInvocation } from "./bg-process/internal/shell-invocation.ts";
 import { textResult, resolveCwd, validateCwd } from "./bg-process/internal/tool-result.ts";
 
 // ---------------------------------------------------------------- constants
@@ -91,36 +91,6 @@ function formatAge(ms: number): string {
   const min = Math.floor(sec / 60);
   const rem = sec % 60;
   return `${min}m${String(rem).padStart(2, "0")}s`;
-}
-
-
-function shellInvocation(command: string): {
-  file: string;
-  args: string[];
-  detached: boolean;
-  windowsHide?: boolean;
-} {
-  if (process.platform === "win32") {
-    const comspec =
-      process.env.ComSpec?.trim() ||
-      path.join(
-        process.env.SystemRoot ?? "C:\\Windows",
-        "System32",
-        "cmd.exe",
-      );
-    return {
-      file: comspec,
-      args: ["/d", "/s", "/c", command],
-      detached: false,
-      windowsHide: true,
-    };
-  }
-  const sh = process.env.SHELL?.trim() || "/bin/sh";
-  return {
-    file: sh,
-    args: ["-c", command],
-    detached: true,
-  };
 }
 
 
@@ -300,11 +270,14 @@ export default function (pi: ExtensionAPI) {
 
   const attachChild = (
     job: BgJob,
-    child: ChildProcessByStdio<null, Readable, Readable>,
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
   ) => {
     job.child = child;
     job.pid = child.pid;
 
+    // Leave stdin open. Closing it (stdio "ignore") is an immediate EOF, and
+    // servers that shut down when the parent terminal closes exit at launch.
+    child.stdin.on("error", () => {});
     child.stdout.on("data", (chunk: Buffer) => appendStream(job.stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => appendStream(job.stderr, chunk));
     child.stdout.on("error", () => {});
@@ -449,14 +422,15 @@ export default function (pi: ExtensionAPI) {
       jobs.set(id, job);
 
       const shell = shellInvocation(command);
-      let child: ChildProcessByStdio<null, Readable, Readable>;
+      let child: ChildProcessByStdio<Writable, Readable, Readable>;
       try {
         child = spawn(shell.file, shell.args, {
           cwd,
           env: process.env,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
           detached: shell.detached,
           windowsHide: shell.windowsHide,
+          windowsVerbatimArguments: shell.windowsVerbatimArguments,
         });
       } catch (error) {
         jobs.delete(id);

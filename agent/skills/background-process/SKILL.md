@@ -21,7 +21,7 @@ Use the `bg_*` tools for long-running processes. Use `bash` for short, finite co
 
 - Prefer `bg_start` for servers, bundlers, file watchers, and other keep-alive processes.
 - Prefer `bash` for builds, tests, one-shot scripts, and anything expected to finish quickly.
-- No interactive stdin: do not start prompts that wait for user input.
+- No interactive stdin: the job's stdin stays open and unused so servers that exit on EOF keep running. Do not start prompts that wait for input, and do not try to write to stdin.
 - After start, keep working; call `bg_status` when you need logs or readiness, not on a tight loop.
 - Always `bg_kill` when finished so npm/node descendants do not linger (especially on Windows).
 - Cap is a small number of concurrent jobs; kill idle ones before starting more.
