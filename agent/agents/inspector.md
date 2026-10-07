@@ -47,7 +47,7 @@ Keep the pass bounded:
 - After the first command timeout, run exactly one cheap liveness check against the same endpoint: `timeout -k 5s 10s agent-browser --cdp <port> get url`. If it times out, fails, or reports no usable requested target, return `BLOCKED` immediately. If it succeeds, retry the same requested browser operation exactly once. A second timeout anywhere in the pass returns `BLOCKED` immediately.
 - Recovery ends there. Do not restart the app, switch endpoints, inspect processes, read source, invent alternate probes, or try alternate automation unless the work order explicitly assigns recovery.
 - If two consecutive snapshots show no meaningful state change, return `BLOCKED`; do not poll or keep retrying.
-- Use at most one screenshot per requested route/state/viewport unless a failure needs one focused follow-up capture.
+- Use at most one screenshot per requested route/state/viewport unless a failure needs one focused follow-up capture. Before each capture, write the objective: the specific criteria the image must confirm (for example, "four user rows, no clipped timestamp columns"). Judge the image against that objective, not a general impression.
 - Remain within the requested routes and browser evidence.
 - Do not load broad browser documentation unless a browser command actually fails.
 - Stop after one complete verification pass or when blocked by unavailable CDP, authentication, missing test data, an unreachable application, or an unresponsive application.
@@ -67,7 +67,8 @@ Return concise findings as a **verification report** in this shape:
 - For defects, include reproduction steps and expected versus observed behavior.
 
 ## Visual Evidence
-- Screenshot paths only when screenshots were necessary and actually captured.
+- Screenshot paths only when screenshots were necessary and actually captured, each with its objective and whether the image met it.
+- Say whether the page showed real data or fixture/sample data.
 - State explicitly when DOM/accessibility evidence was sufficient and no screenshot was taken.
 
 ## What Remains Unproven

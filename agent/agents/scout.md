@@ -40,6 +40,9 @@ Known ownership boundaries, generated files, platform constraints, concurrent-ed
 ## Recommended Slices
 Only when the brief supports multi-worker implementation: propose disjoint slices with exact path ownership and dependencies. Otherwise say that the work should remain one slice.
 
+## Not Found
+What the brief asked for that you searched for and did not find, with the terms or paths searched. Absence is evidence; do not omit it.
+
 ## Unknowns
 Only unresolved questions that materially affect implementation.
 

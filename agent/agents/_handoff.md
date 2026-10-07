@@ -8,4 +8,4 @@ Always end the current generation with a final assistant message containing non-
 - Keep the final message compact and structured (Markdown headings are fine); tool transcripts are not a substitute.
 - Use your role brief's required report shape.
 
-Report Acceptance criteria explicitly; never label unfinished work "v1"/"MVP"/"scaffold" to imply completion; if formatters/linters/project-wide suites were skipped, say so.
+Report negative evidence: name what you searched for and did not find, so the parent does not search again. Report Acceptance criteria explicitly; never label unfinished work "v1"/"MVP"/"scaffold" to imply completion; if formatters/linters/project-wide suites were skipped, say so.

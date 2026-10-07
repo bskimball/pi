@@ -45,10 +45,12 @@ A brief carries every decision, command, and evidence the unit needs, as pointer
 - **Outcome:** observable behavior or evidence to return.
 - **Ownership:** exact writable paths; read-only if no edits are authorized.
 - **Preserve/change:** the contract and important constraints.
+- **Known facts:** what is already verified, so the unit does not re-derive it.
+- **Non-goals:** adjacent work the unit must not do (for example, "no code changes" on a research unit).
 - **Unknowns:** questions the sidekick may settle without redesigning the outcome.
 - **Operations:** known-working commands; each running process's URL, PID, launcher command, and lifetime owner (handles like `bg_1` are session-local); approaches that already failed.
-- **Acceptance:** one direct command, runtime path, or artifact proving completion, with success and relevant failure cases named up front; cover persistence round trips or headless branches the contract has, within the base prompt's test-file rules.
-- **Report:** outcome, changed files, validation actually run, operations state, blockers, and residual risk.
+- **Acceptance:** one direct command, runtime path, or artifact proving completion — for research, the stopping condition ("return file paths and line ranges for every place X happens") — with success and relevant failure cases named up front; cover persistence round trips or headless branches the contract has, within the base prompt's test-file rules.
+- **Report:** outcome, changed files, validation actually run, operations state, blockers, residual risk, and what was searched for and not found.
 
 Require current-file inspection before edits; retained context may be stale.
 

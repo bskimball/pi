@@ -67,8 +67,9 @@ Instruct stevedore in the brief to:
    - If commit or push is required or requested, stage and commit the full intended project change set (prefer repository-scoped `git add -A` after reviewing status). Never partially stage a feature while leaving related project files dirty.
    - Exclude only true noise, secrets, and generated artifacts (`node_modules/`, ignored build output, `.env*`, credentials, local scratch). If unsure whether a dirty file belongs in the release, stop with `need_decision` instead of omitting it silently.
    - After any commit: re-run `git status`. If project files that should have shipped remain dirty or untracked, fix staging and amend only if the commit has not been pushed and the brief permits; otherwise create a follow-up commit or stop and report. Never report success with a partial commit.
-7. Deploy to the stated target. If the target is ambiguous, contact the supervisor with `need_decision` instead of guessing.
-8. Verify the deployment and report results in structured format, including final `git status`.
+7. Deploy to the stated target. Before any remote mutation, confirm which account, project, environment, or database the tooling is actually pointed at, and name it in the report. If the target is ambiguous, contact the supervisor with `need_decision` instead of guessing.
+8. If the release includes database migrations, apply them before the new code can serve traffic. When a push triggers automatic deployment, migrate before pushing. Confirm that the migration record and the schema objects exist afterward. If a migration is not backward compatible with the code currently serving traffic, stop with `need_decision`.
+9. Verify the deployment and report results in structured format, including final `git status`. Check health and at least one changed contract on the live target, such as a new endpoint returning its expected status.
 
 If stevedore contacts you with `need_decision`, answer from context or relay the question to the user. Criterion: stevedore subagent dispatched with complete brief and explicit `cwd`.
 
@@ -77,7 +78,8 @@ When stevedore finishes, provide a structured summary:
 - Worktree path and branch
 - Pre-flight check results (lint, format, tests, build)
 - Release completeness confirmation (verifying full dirty set was included)
-- Target and deployment outcome (what was deployed where)
+- Target and deployment outcome (what was deployed where, and the confirmed account/project/environment)
+- Migrations applied, with their ordering relative to rollout
 - Verification results and final `git status`
 - Any follow-ups or open issues
 
