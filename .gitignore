@@ -53,3 +53,7 @@ __pycache__/
 nul
 *.bak
 graphify-out/
+
+# Account credentials and exported Amp threads (client material)
+agent/antigravity-accounts.json
+/T-*.md
