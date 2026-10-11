@@ -8,7 +8,7 @@ Match one playbook, copy its steps into the todo list first, then execute under 
 
 ## Scope
 In scope: matching Investigation, Bug fix, Feature, Refactor, Prototype, or Unattended; writing those steps as the first todos; executing them until the playbook's done criterion or a user-owned gate.
-Out of scope: changing `/mode`; opening, pushing, or merging a PR unless the user asked in this goal; enumerating specialists in the user-facing reply; importing Cursor pstack skills (`architect`, `arena`, `swarm`).
+Out of scope: changing `/mode`; git actions beyond the effective git level (see `opening-a-pr.md`); merging, force-pushing, or deleting branches unless the user asked in this goal; enumerating specialists in the user-facing reply; importing Cursor pstack skills (`architect`, `arena`, `swarm`).
 Arguments: the goal, plus any constraint that pins a playbook (`don't change any code yet`, `repro first`, `im stepping away`). Bare `do it` / `continue` / `keep going until done` continues the current playbook. `new task` (or an explicit subject change) re-matches instead of continuing.
 
 ## Route
@@ -20,8 +20,9 @@ Arguments: the goal, plus any constraint that pins a playbook (`don't change any
    - Behavior-preserving structure change → `refactor.md`
    - Throwaway sketch to settle a design or empirical fork → `prototype.md`
    - User stepping away, "run until done", "going to bed", or a falsifiable overnight predicate → `unattended.md`
-   Large or cross-cutting work that no single playbook covers: stay on Feature or Unattended (Unattended when they are leaving), and design extra phases *after* that playbook's copied steps. Criterion: the file for the matched playbook was read this turn.
-3. After that read, `todo_write` before any edit, shell, or dispatch. First items are the playbook's numbered steps copied in verbatim. A skipped step stays listed as `skip: <reason>`. Task-specific items go after those steps. Criterion: every playbook step is visible in the list, including skips.
+   Large or cross-cutting work that no single playbook covers: stay on Feature or Unattended (Unattended when they are leaving), and design extra phases *after* that playbook's copied steps.
+   For Bug fix, Feature, Refactor, and Unattended, also read `opening-a-pr.md` in that directory. It owns branching, commits, PRs, and issues. Criterion: the file for the matched playbook (and `opening-a-pr.md` when it applies) was read this turn.
+3. After that read, `todo_write` before any edit, shell, or dispatch. Write the list in this order: the `opening-a-pr.md` Preflight step (when it applies), then the playbook's numbered steps copied in verbatim, then any task-specific items, then the `opening-a-pr.md` Closer steps (when it applies). A skipped step stays listed as `skip: <reason>`. Criterion: every playbook and git step is visible in the list, including skips.
 4. Execute each remaining step under the active mode card. Who runs a step is the mode's problem (Apex inlines; Orchestrate delegates slices; Fusion assigns the sidekick). This prompt does not override specialist routing, Fusion's closed roster, Work's crew, or the review and verification gates in SYSTEM.md and the mode card. Criterion: each step's completion criterion in the playbook file is met or skipped with a reason.
 5. Continue later turns against the same playbook until its done criterion, the user says `new task`, or a user-owned gate blocks. `continue` does not open a new playbook. Criterion: the todo list still names the matched playbook until that playbook is done.
 
@@ -31,13 +32,14 @@ Prototype, not a question, when an empirical fork (behavior, timing, layout, out
 
 Inconclusive is not a pass. Wrong-surface verification is not a pass. Green compile/CI is not by itself the playbook's proof.
 
-Do not open, push, or merge a PR as a playbook closer. Shared-state git actions stay behind the user's explicit ask.
+Git follows `opening-a-pr.md`. Invoking `/poteto` authorizes this run to branch, commit, push its branch, open a ready PR, and file issues for adjacent bugs on GitHub repos. The goal can lower that to `local only` / `don't push` or `don't commit`. Merge, force-push, branch deletion, pushing to the default branch, and rewriting pushed history always need an explicit ask. The authorization covers this playbook run only. It does not apply outside `/poteto`.
 
 ## Report
 Lead with the matched playbook and whether this turn started or continued it.
 Then the playbook's own reply shape.
 Name skipped steps and their reasons.
 State what was verified, on which surface, and what was not.
+When git steps ran: branch, commits, and the PR URL/state from `gh pr view` or the local-only next command.
 If a later turn can `continue`, name the next remaining playbook step.
 
 Keep going until the matched playbook's done criterion, a user-owned gate, or the user says `new task`.

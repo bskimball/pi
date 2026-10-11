@@ -4,7 +4,7 @@ description: Work prose specialist (Flo, kindly intergalactic flamingo). Human-r
 model: claude-bridge/claude-sonnet-5-5
 fallbackModels:
   - antigravity/gemini-3.8-flash
-  - openai-codex/gpt-6.1-sol
+  - openai/gpt-6.1-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
 thinking: medium
 tools: read, ffgrep, fffind, ls, bash, edit, write

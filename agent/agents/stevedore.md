@@ -2,7 +2,7 @@
 name: stevedore
 description: Fast, cheap shipping specialist for integrated verification gates, release/git/deploy mechanics, and shipping platform CLIs. Not for diagnosing or debugging failures, code logic, or third-party SaaS/admin/security/credential work.
 tools: read, ffgrep, fffind, ls, bash, edit, write, jev, codemode
-model: openai-codex/gpt-6-luna
+model: openai/gpt-6-luna
 fallbackModels:
   - xai/grok-composer-2.5-fast
   - antigravity/gemini-3.8-flash

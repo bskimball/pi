@@ -5,7 +5,7 @@ model: xai/grok-4.7
 fallbackModels:
   - antigravity/gemini-3.8-flash
   - meta/muse-spark-1.3-contributor
-  - openai-codex/gpt-6.1-sol
+  - openai/gpt-6.1-sol
   - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
 thinking: high

@@ -1,7 +1,7 @@
 ---
 name: machinist
 description: Implementation specialist for independent separable non-visual slices across backend logic, data, CLI, build/config, refactors, migrations, bug fixes, and tests, plus execution of exact Oracle-authored diagnostic experiment plans. Long or multi-file work alone is not a reason to delegate in regular mode. Not for UI or prose deliverables.
-model: openai-codex/gpt-6.1-sol
+model: openai/gpt-6.1-sol
 fallbackModels:
   - xai/grok-4.7
   - meta/muse-1.3-contributor

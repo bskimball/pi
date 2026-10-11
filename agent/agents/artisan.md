@@ -4,7 +4,7 @@ description: Visual design and UI specialist for substantial frontend, redesign,
 model: meta/muse-spark-1.3-contributor
 fallbackModels: 
   - claude-bridge/claude-opus-5-5
-  - openai-codex/gpt-6-astra
+  - openai/gpt-6-astra
   - antigravity/gemini-3.8-flash
   - github-copilot/kimi-k3
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'

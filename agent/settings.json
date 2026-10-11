@@ -1,21 +1,12 @@
 {
-  "defaultModel": "gpt-6.1-sol",
-  "defaultProvider": "openai-codex",
+  "defaultModel": "grok-4.7",
+  "defaultProvider": "xai",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "1.0.4",
+  "lastChangelogVersion": "1.1.0",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
     "npm:pi-claude-bridge",
-    {
-      "source": "C:/Users/bskim/src/cursor-plugins/pstack",
-      "extensions": [],
-      "skills": [
-        "skills/blast-radius/SKILL.md"
-      ],
-      "prompts": [],
-      "themes": []
-    },
     "npm:pi-antigravity"
   ],
   "skills": [
@@ -39,5 +30,5 @@
   "theme": "apex-dark",
   "tuiMode": "fullscreen",
   "hideThinkingBlock": false,
-  "deviceId": "f045be16-7c28-4ff8-9224-dcdc7b6d8ce4"
+  "deviceId": "66d3421d-2d23-4a14-bd2b-5652e2c72537"
 }

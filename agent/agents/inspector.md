@@ -3,7 +3,7 @@ name: inspector
 description: Fast, cheap read-only browser verification for live interaction, screenshots, responsive checks, and focused visual regression analysis. Live-page checks route here in regular and orchestrate modes.
 model: antigravity/gemini-3.8-flash
 fallbackModels:
-  - openai-codex/gpt-6-luna
+  - openai/gpt-6-luna
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: medium

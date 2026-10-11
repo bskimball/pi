@@ -44,11 +44,14 @@ function redact(value: string, key?: string): string {
   return result.replace(/x-api-key\s*[:=]\s*[^\s,;]+/gi, "x-api-key=[REDACTED]");
 }
 
-function configPath(): string {
-  // Match the prior extension's config path: PI_CODING_AGENT_DIR, then XDG config, then ~/.pi.
-  const root = process.env.PI_CODING_AGENT_DIR?.trim()
-    || (process.env.XDG_CONFIG_HOME?.trim() ? join(process.env.XDG_CONFIG_HOME, "pi") : join(homedir(), ".pi"));
-  return join(root, "web-search.json");
+function configPaths(): string[] {
+  // First file holding a key wins: PI_CODING_AGENT_DIR, then XDG config, then ~/.pi.
+  const roots = [
+    process.env.PI_CODING_AGENT_DIR?.trim(),
+    process.env.XDG_CONFIG_HOME?.trim() ? join(process.env.XDG_CONFIG_HOME, "pi") : undefined,
+    join(homedir(), ".pi"),
+  ];
+  return [...new Set(roots.filter((root): root is string => Boolean(root)))].map((root) => join(root, "web-search.json"));
 }
 
 function expandEnv(value: string): string {
@@ -60,12 +63,16 @@ function expandEnv(value: string): string {
 function exaApiKey(): string | undefined {
   const environment = process.env.EXA_API_KEY?.trim();
   if (environment) return environment;
-  try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { exaApiKey?: unknown };
-    return typeof parsed.exaApiKey === "string" ? expandEnv(parsed.exaApiKey) || undefined : undefined;
-  } catch {
-    return undefined;
+  for (const path of configPaths()) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as { exaApiKey?: unknown };
+      const key = typeof parsed.exaApiKey === "string" ? expandEnv(parsed.exaApiKey) : "";
+      if (key) return key;
+    } catch {
+      // Missing or unreadable file: try the next location.
+    }
   }
+  return undefined;
 }
 
 function requireKey(): { key: string } | { error: string } {

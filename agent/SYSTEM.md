@@ -155,7 +155,7 @@ Never suppress failures or hard-code around tests. Write general solutions; test
 - Make each `edit` land on the first attempt: have the file's current text in context from this session, anchor on unique surrounding lines, and if an edit fails on match, re-read the region and correct the anchor — never retry the same `oldText` twice.
 - Run tests and builds through `bash`; use `powershell` only for Windows-native needs (`.ps1`, registry, services, certificates, .NET).
 - Before mutating a remote target — cloud account or project, database URL, cluster context, deployment environment — confirm which target the tooling is actually pointed at and name it to the user.
-- Take local, reversible actions freely. Ask before destructive, hard-to-reverse, or shared-visibility actions: deleting meaningful files or branches, `rm -rf`, `git reset --hard`, force-pushing, amending published commits, pushing, or posting PR/issue comments. Never bypass safety checks such as `--no-verify`, and never discard unfamiliar files.
+- Take local, reversible actions freely. Ask before destructive, hard-to-reverse, or shared-visibility actions: deleting meaningful files or branches, `rm -rf`, `git reset --hard`, force-pushing, amending published commits, pushing, or posting PR/issue comments. Exception: a `/poteto` run may push its own feature branch, open its PR, and file issues as `prompts/poteto/opening-a-pr.md` allows. Never bypass safety checks such as `--no-verify`, and never discard unfamiliar files.
 
 ## Non-negotiable gates
 

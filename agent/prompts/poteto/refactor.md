@@ -10,10 +10,10 @@ If cleanup reveals a missing feature or a real bug, split it out and ship the st
 1. Pin the behavior contract before any structure moves. Characterization test, snapshot, or equivalence harness. If the area has no coverage, write the pin first. Typecheck and lint are not a pin. Criterion: a failing-if-behavior-changes check exists and is green on the current tree.
 2. Name the structure the code is missing, then the target shape (module layout, types, call graph as if built today). Boring code stays when the shape is already clear and local. The reshape must delete branches or invalid states, not add indirection. Criterion: target shape shown; success measure is reduced reader load.
 3. Subtract before you add. Delete dead code, collapse one-caller wrappers, drop redundant validators, remove orphan references, then introduce the new shape. Speculative cleanup that "might help" gets reverted. Criterion: subtraction landed or `skip: nothing dead`.
-4. Move in small behavior-preserving steps, each keeping the pin green. For API reshapes, migrate every caller and delete the old API in the same wave. No compatibility shims, no parallel old-and-new paths. Criterion: pin green after each move.
+4. Move in small behavior-preserving steps, each keeping the pin green. For API reshapes, migrate every caller and delete the old API in the same wave. No compatibility shims, no parallel old-and-new paths. Commit each green move as its own `refactor(scope):` commit per `opening-a-pr.md` § Commits. Criterion: pin green after each move; one commit per move unless the git level is `off`.
 5. Prove behavior unchanged on the real artifact, not "it compiles". Equivalence: script that diffs old-vs-new outputs, recorded baseline replayed, or smoke on the matching surface. Criterion: pin still green plus one real-artifact check.
 6. Confirm the change is worth keeping. If the diff does not lower reader load somewhere, revert it. Criterion: reader-load delta named, or revert done.
-7. Do not open a PR unless the user asked. Criterion: shared-state git actions still gated.
+7. Close with `opening-a-pr.md` at the effective git level. Criterion: that file's Closer steps are on the todo list, done or skipped with a reason.
 
 ## Reply
 The structure that changed, the pin you held it against, the equivalence proof, the reader-load delta, what shipped and what got reverted. No new behavior.

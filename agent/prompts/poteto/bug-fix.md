@@ -9,8 +9,8 @@ Reproduce, root-cause, then ship the smallest change the evidence justifies. Bel
 2. Form candidate hypotheses and rule them out until one mechanism survives. Each pass takes the split that cuts the most remaining space and gets runtime evidence. Do not guess program state; instrument and read it running. Criterion: surviving mechanism named with the evidence that confirmed it; discarded hypotheses listed.
 3. Plan the smallest fix that addresses that mechanism. Inspect direct callers of the function you will touch; patch the shared routing point only when the broken invariant belongs to every caller. Criterion: one-sentence fix plan; owned paths named.
 4. Apply the fix under the active mode. Review the actual diff before calling it done. Criterion: diff exists; no extra speculative guards or unrelated cleanup.
-5. Verify on the same surface as step 1. The original repro now fails to reproduce. Unit tests show branch behavior, not bug absence. Inconclusive or wrong-surface is not a pass. Criterion: passing repro output or live-page evidence, or an explicit not-pass with what remains.
-6. If the user asked to open a PR, stop and say so; do not open one as this playbook's closer. Criterion: no push/PR unless this goal contained that ask.
+5. Verify on the same surface as step 1. The original repro now fails to reproduce. Unit tests show branch behavior, not bug absence. Inconclusive or wrong-surface is not a pass. On a pass, commit per `opening-a-pr.md` § Commits: when the repro is a repo test, commit it first as `test(scope): reproduce <bug>`, then commit the fix as `fix(scope): ...`. Criterion: passing repro output or live-page evidence, or an explicit not-pass with what remains; commits made on a pass unless the git level is `off`.
+6. Close with `opening-a-pr.md` at the effective git level. Criterion: that file's Closer steps are on the todo list, done or skipped with a reason.
 
 ## Reply
 What was broken, root cause, fix, how you verified. Paste failing-then-passing repro output when it is short; otherwise quote the decisive lines.
