@@ -52,10 +52,10 @@ const PEEK_DIRECTIVE_LINES = 1;
 const PEEK_MAX_LINES = 80;
 /**
  * Terminal width at which the peek overlay docks as a right rail instead of
- * a full-pane takeover. 160 columns leaves ~67 content columns at 42% plus
- * the lead transcript visible on the left.
+ * a full-pane takeover. 100 columns leaves ~42 content columns at 42% while
+ * the lead transcript keeps ~58 on the left.
  */
-export const PEEK_RAIL_MIN_WIDTH = 160;
+export const PEEK_RAIL_MIN_WIDTH = 100;
 
 /**
  * Overlay geometry for the peek workspace. Wide terminals get a right rail

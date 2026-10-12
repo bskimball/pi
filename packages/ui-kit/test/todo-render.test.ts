@@ -3052,9 +3052,15 @@ describe("fusion sidekick rail", () => {
     },
   ];
 
-  it("peeks as a right rail at >=160 cols and full-pane below", () => {
-    assert.equal(PEEK_RAIL_MIN_WIDTH, 160);
-    assert.deepEqual(peekOverlayOptions(160), {
+  it("peeks as a right rail at >=100 cols and full-pane below", () => {
+    assert.equal(PEEK_RAIL_MIN_WIDTH, 100);
+    assert.deepEqual(peekOverlayOptions(120), {
+      width: "42%",
+      maxHeight: "100%",
+      anchor: "top-right",
+      margin: 0,
+    });
+    assert.deepEqual(peekOverlayOptions(100), {
       width: "42%",
       maxHeight: "100%",
       anchor: "top-right",
@@ -3066,7 +3072,7 @@ describe("fusion sidekick rail", () => {
       anchor: "top-right",
       margin: 0,
     });
-    assert.deepEqual(peekOverlayOptions(159), {
+    assert.deepEqual(peekOverlayOptions(99), {
       width: "100%",
       maxHeight: "100%",
       anchor: "top-left",
@@ -3184,6 +3190,34 @@ describe("fusion sidekick rail", () => {
       maxLines: 24,
     });
     assert.deepEqual(solo, plain, "no chip row for a single worker");
+  });
+
+  it("keeps the agents pane visible and width-safe at narrow widths", () => {
+    const now = Date.now();
+    for (const width of [60, 40]) {
+      const lines = renderAgentList(
+        theme,
+        width,
+        [{
+          id: "task_1",
+          agent: "scout",
+          lifecycle: "running",
+          createdAt: now - 2 * 60_000,
+          lastEventAt: now - 2 * 60_000,
+          mission: "Steer the dock",
+        }],
+        { tabs: { pane: "agents", agentCount: 1, switchHint: "alt+a" }, now },
+      );
+      const text = stripAnsi(lines.join("\n"));
+      assert.match(text, /scout/, `width ${width}: worker row present`);
+      assert.match(text, /running/, `width ${width}: worker status present`);
+      for (const line of lines) {
+        assert.ok(
+          safeVisibleWidth(line) <= width,
+          `width ${width}: "${line}" exceeds budget`,
+        );
+      }
+    }
   });
 });
 
