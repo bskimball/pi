@@ -20,10 +20,12 @@ const { isAgentWorkspaceOpen, publishDockAgents, resetDockAgents } = await impor
 );
 const {
   TODO_LIST_MAX_LINES,
+  PEEK_RAIL_MIN_WIDTH,
   agentRowAtY,
   buildTodoList,
   canSwitchToSession,
   clampPeekScroll,
+  peekOverlayOptions,
   peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
@@ -2997,6 +2999,191 @@ describe("agents tab in all modes with selection and peek", () => {
       assert.doesNotMatch(settledIdle, /s steer/);
       assert.doesNotMatch(settledIdle, /x abort/);
     });
+  });
+
+  it("cycles the peeked worker with [ and ]", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      const now = Date.now();
+      publishDockAgents([
+        worker({ id: "task_1", agent: "oracle", fusion: false, createdAt: now }),
+        worker({ id: "task_2", agent: "artisan", fusion: false, createdAt: now }),
+      ]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      await Promise.resolve();
+      assert.ok(dock.overlay(), "click opens the peek overlay");
+      assert.match(stripAnsi(dock.overlay().render(80).join("\n")), /task_1/);
+      dock.overlay().handleInput("]");
+      const next = stripAnsi(dock.overlay().render(80).join("\n"));
+      assert.match(next, /task_2/, "] switches to the next worker");
+      assert.match(next, /artisan/, "chip row follows the switch");
+      dock.overlay().handleInput("[");
+      assert.match(
+        stripAnsi(dock.overlay().render(80).join("\n")),
+        /task_1/,
+        "[ switches back to the previous worker",
+      );
+      assert.ok(dock.overlay(), "cycling keeps the peek open");
+    } finally {
+      dock.shutdown();
+    }
+  });
+});
+
+describe("fusion sidekick rail", () => {
+  const railAgents = (now: number) => [
+    {
+      id: "task_1",
+      agent: "scout",
+      lifecycle: "running",
+      createdAt: now - 2 * 60_000,
+      lastEventAt: now - 2 * 60_000,
+      mission: "Steer the dock",
+    },
+    {
+      id: "task_2",
+      agent: "artisan",
+      lifecycle: "settled",
+      createdAt: now - 4 * 60_000,
+      lastEventAt: now - 60_000,
+      mission: "Audit the proxy layer",
+    },
+  ];
+
+  it("peeks as a right rail at >=160 cols and full-pane below", () => {
+    assert.equal(PEEK_RAIL_MIN_WIDTH, 160);
+    assert.deepEqual(peekOverlayOptions(160), {
+      width: "42%",
+      maxHeight: "100%",
+      anchor: "top-right",
+      margin: 0,
+    });
+    assert.deepEqual(peekOverlayOptions(200), {
+      width: "42%",
+      maxHeight: "100%",
+      anchor: "top-right",
+      margin: 0,
+    });
+    assert.deepEqual(peekOverlayOptions(159), {
+      width: "100%",
+      maxHeight: "100%",
+      anchor: "top-left",
+      margin: 0,
+    });
+    assert.deepEqual(peekOverlayOptions(80), {
+      width: "100%",
+      maxHeight: "100%",
+      anchor: "top-left",
+      margin: 0,
+    });
+  });
+
+  it("re-evaluates the overlay geometry from the live terminal width", async () => {
+    resetDockAgents();
+    const mock = createMockPi("1");
+    let capturedOptions: any;
+    let closePeek: ((value: { open: boolean }) => void) | undefined;
+    const stubTui: any = { requestRender() {} };
+    const tuiCtx = {
+      mode: "tui",
+      hasUI: true,
+      cwd: process.cwd(),
+      ui: {
+        setWidget() {},
+        onTerminalInput() {
+          return () => {};
+        },
+        custom(factory: any, options: any) {
+          capturedOptions = options;
+          return new Promise<{ open: boolean }>((resolve) => {
+            factory(stubTui, theme, new KeybindingsManager(TUI_KEYBINDINGS), resolve);
+            closePeek = resolve;
+          });
+        },
+        getEditorText: () => "",
+        setEditorText() {},
+        notify() {},
+        getToolsExpanded: () => false,
+      },
+    } as any;
+    try {
+      mock.emit("session_start", { reason: "new" }, tuiCtx);
+      const now = Date.now();
+      publishDockAgents(railAgents(now));
+      stubTui.terminal = { columns: 200, rows: 24 };
+      const pending = mock.commands.get("agents").handler("peek task_1", tuiCtx);
+      await Promise.resolve();
+      assert.ok(capturedOptions, "peek opens through ui.custom");
+      assert.equal(typeof capturedOptions.overlayOptions, "function", "geometry re-evaluates per call");
+      assert.deepEqual(capturedOptions.overlayOptions(), {
+        width: "42%",
+        maxHeight: "100%",
+        anchor: "top-right",
+        margin: 0,
+      });
+      stubTui.terminal = { columns: 80, rows: 24 };
+      assert.deepEqual(capturedOptions.overlayOptions(), {
+        width: "100%",
+        maxHeight: "100%",
+        anchor: "top-left",
+        margin: 0,
+      });
+      // Terminal width unavailable: falls back to the last render width.
+      delete stubTui.terminal;
+      assert.deepEqual(capturedOptions.overlayOptions(), {
+        width: "100%",
+        maxHeight: "100%",
+        anchor: "top-left",
+        margin: 0,
+      });
+      closePeek?.({ open: false });
+      await pending;
+    } finally {
+      publishDockAgents([]);
+      mock.emit("session_shutdown", {}, tuiCtx);
+    }
+  });
+
+  it("renders collapsed worker chips at rail width within budget", () => {
+    const now = Date.now();
+    const agents = railAgents(now);
+    const width = 67;
+    const lines = renderPeekBody(theme, width, agents[0], {
+      bodyLines: ["worker: progress"],
+      maxLines: 24,
+      agents,
+      selectedAgentId: "task_1",
+    });
+    const text = stripAnsi(lines.join("\n"));
+    assert.equal(lines.length, 24, "chip steals a body row, total still fills the pane");
+    assert.match(text, /scout/, "first worker chip");
+    assert.match(text, /artisan/, "second worker chip");
+    assert.match(text, /\u25b8/, "selected worker is marked");
+    for (const line of lines) {
+      assert.ok(
+        safeVisibleWidth(line) <= width,
+        `"${line}" exceeds the ${width}-col rail budget`,
+      );
+    }
+    assert.equal(
+      peekTranscriptBudget(width, agents[0], 24, agents),
+      peekTranscriptBudget(width, agents[0], 24) - 1,
+      "chip occupies exactly one body row",
+    );
+    // A lone worker keeps the single-agent layout byte-identical.
+    const solo = renderPeekBody(theme, width, agents[0], {
+      bodyLines: ["worker: progress"],
+      maxLines: 24,
+      agents: [agents[0]],
+      selectedAgentId: "task_1",
+    });
+    const plain = renderPeekBody(theme, width, agents[0], {
+      bodyLines: ["worker: progress"],
+      maxLines: 24,
+    });
+    assert.deepEqual(solo, plain, "no chip row for a single worker");
   });
 });
 

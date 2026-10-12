@@ -8,6 +8,7 @@
 // no timers, no invalidate/requestRender, no rendering state. Callers wrap
 // `renderTodoList` in a passive WidthText so a failure degrades to one row.
 
+import type { OverlayOptions } from "@earendil-works/pi-tui";
 import {
   padStartToWidth,
   safeTruncateToWidth,
@@ -49,6 +50,25 @@ const PEEK_MISSION_LINES = 3;
 const PEEK_DIRECTIVE_LINES = 1;
 /** Hard ceiling on the full-pane view; the live height comes from the terminal. */
 const PEEK_MAX_LINES = 80;
+/**
+ * Terminal width at which the peek overlay docks as a right rail instead of
+ * a full-pane takeover. 160 columns leaves ~67 content columns at 42% plus
+ * the lead transcript visible on the left.
+ */
+export const PEEK_RAIL_MIN_WIDTH = 160;
+
+/**
+ * Overlay geometry for the peek workspace. Wide terminals get a right rail
+ * so the lead transcript stays visible; narrow terminals keep the opaque
+ * full-pane takeover. Pure function of the terminal width so tests pin the
+ * contract without a synthetic TUI.
+ */
+export function peekOverlayOptions(termWidth: number): OverlayOptions {
+  if (termWidth >= PEEK_RAIL_MIN_WIDTH) {
+    return { width: "42%", maxHeight: "100%", anchor: "top-right", margin: 0 };
+  }
+  return { width: "100%", maxHeight: "100%", anchor: "top-left", margin: 0 };
+}
 /** The fleet bus hard cap; every retained worker must remain selectable. */
 const AGENT_ROWS = 8;
 /** Rows the list is allowed to spend on items, before/after notes excluded. */
@@ -700,11 +720,44 @@ function layoutPeekChrome(
   };
 }
 
-/** Transcript rows that fit under header + mission + directive + rules + footer. */
+/**
+ * Rows the collapsed fleet chip line occupies: one when two or more workers
+ * share the dock, zero otherwise so single-agent peeks render exactly as
+ * before. Shared by the budget and the renderer so the two never disagree.
+ */
+function peekFleetChipCount(agents: readonly DockAgentItem[] | undefined): number {
+  return agents !== undefined && agents.length >= 2 ? 1 : 0;
+}
+
+/**
+ * One collapsed chip per worker: `index + lifecycle glyph + short agent
+ * name`, the peeked worker marked with the same ▸ selection marker the
+ * agents pane uses. Plain text joined with spaces; the caller truncates to
+ * the inner width so the line stays width-safe at narrow rail widths.
+ */
+function renderPeekFleetChips(
+  surface: StatusTheme,
+  innerWidth: number,
+  agents: readonly DockAgentItem[],
+  selectedId: string | undefined,
+): string {
+  const chips = agents.slice(0, AGENT_ROWS).map((entry, index) => {
+    const glyph = AGENT_GLYPHS[entry.lifecycle] ?? skinGlyphs().statusIdle;
+    const name = cleanInline(entry.agent, 12) || "agent";
+    const text = `${index + 1}${glyph}${name}`;
+    return entry.id === selectedId
+      ? surface.fg("accent", `▸${text}`)
+      : surface.fg("muted", text);
+  });
+  return safeTruncateToWidth(chips.join(" "), innerWidth);
+}
+
+/** Transcript rows that fit under header + chips + mission + directive + rules + footer. */
 export function peekTranscriptBudget(
   width: number,
   item: DockAgentItem,
   maxLines: number,
+  agents?: readonly DockAgentItem[],
 ): number {
   const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
   if (width <= 0 || capped <= 3) return 0;
@@ -715,7 +768,7 @@ export function peekTranscriptBudget(
   const vPad = capped >= 14 ? 1 : 0;
   return Math.max(
     0,
-    capped - (vPad * 2 + 1 + chrome.missionRows.length + chrome.directiveRows.length + rules + 1),
+    capped - (vPad * 2 + 1 + peekFleetChipCount(agents) + chrome.missionRows.length + chrome.directiveRows.length + rules + 1),
   );
 }
 
@@ -778,6 +831,14 @@ export function renderPeekBody(
     confirmLine?: string;
     /** One-line action result shown in the footer until the next key. */
     statusLine?: string;
+    /**
+     * Fleet snapshot for the collapsed worker chips. Two or more workers
+     * render one chip row (stealing one body row via peekTranscriptBudget);
+     * fewer keeps the single-agent layout exactly as before.
+     */
+    agents?: readonly DockAgentItem[];
+    /** Id of the peeked worker, marked with ▸ in the chip row. */
+    selectedAgentId?: string;
   } = {},
 ): string[] {
   if (width <= 0) return [];
@@ -816,7 +877,17 @@ export function renderPeekBody(
   );
   const rules = maxLines >= 6 ? 2 : 1;
   const vPad = maxLines >= 14 ? 1 : 0;
-  const used = vPad * 2 + 1 + missionRows.length + directiveRows.length + rules + 1;
+  // The chip row is chrome, not body: it steals one transcript row through
+  // the same budget peekTranscriptBudget computes, so the pane still fills
+  // exactly maxLines. No room at tiny heights (budget is 0 there too).
+  const chipRow =
+    maxLines > 3 && peekFleetChipCount(options.agents) > 0
+      ? pad + safeTruncateToWidth(
+          renderPeekFleetChips(surface, innerWidth, options.agents!, options.selectedAgentId),
+          innerWidth,
+        )
+      : undefined;
+  const used = vPad * 2 + 1 + (chipRow !== undefined ? 1 : 0) + missionRows.length + directiveRows.length + rules + 1;
   const bodyBudget = Math.max(0, maxLines - used);
   const topRule = pad + safeTruncateToWidth(
     surface.fg("borderMuted", "\u2500".repeat(innerWidth)),
@@ -829,7 +900,9 @@ export function renderPeekBody(
 
   const lines: string[] = [];
   if (vPad > 0) lines.push("");
-  lines.push(header, ...missionRows, ...directiveRows);
+  lines.push(header);
+  if (chipRow !== undefined) lines.push(chipRow);
+  lines.push(...missionRows, ...directiveRows);
   if (maxLines <= 3) {
     if (maxLines >= 3) lines.push(controls);
     const padded = lines.slice(0, maxLines);

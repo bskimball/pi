@@ -34,6 +34,7 @@ import {
   buildTodoList,
   canSwitchToSession,
   clampPeekScroll,
+  peekOverlayOptions,
   peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
@@ -579,9 +580,21 @@ export function installTodoTools(pi: ExtensionAPI): void {
     try {
       let currentRows = () => 24;
       let currentWidth = 80;
+      // Live terminal width for the overlay geometry. Reads the terminal the
+      // same way currentRows() reads rows, falling back to the last render
+      // width when the terminal is unavailable, else 80.
+      let currentTermWidth = () => 80;
       result = await ctx.ui.custom<{ open: boolean }>(
         (tui, theme, keys, done) => {
           currentRows = () => Math.max(3, Math.min(80, tui?.terminal?.rows ?? 24));
+          currentTermWidth = () => {
+            // Terminal exposes columns, not width (rows is its sibling).
+            const raw = tui?.terminal?.columns;
+            if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+              return Math.trunc(raw);
+            }
+            return currentWidth > 0 ? currentWidth : 80;
+          };
           // Mount-time file read (never during render): the component
           // transcript is built once here, then extended by refreshOpenPeek.
           const doc = new PeekTranscript({
@@ -709,7 +722,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
           };
           const scrollBy = (delta: number): void => {
             const current = peekSnapshot ?? item;
-            const body = peekTranscriptBudget(currentWidth, current, currentRows());
+            const body = peekTranscriptBudget(currentWidth, current, currentRows(), liveAgents);
             peekScrollOffset = clampPeekScroll(totalRows(), body, peekScrollOffset, delta);
             peekInvalidate?.();
           };
@@ -717,7 +730,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
           const clampOffset = (): void => {
             if (peekScrollOffset === undefined) return;
             const current = peekSnapshot ?? item;
-            const budget = peekTranscriptBudget(currentWidth, current, currentRows());
+            const budget = peekTranscriptBudget(currentWidth, current, currentRows(), liveAgents);
             const maxOffset = Math.max(0, totalRows() - Math.max(0, budget));
             peekScrollOffset = maxOffset <= 0 ? undefined : Math.min(peekScrollOffset, maxOffset);
           };
@@ -765,6 +778,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 canOpenHere,
                 maxLines: currentRows(),
                 scrollOffset: peekScrollOffset,
+                // Fleet snapshot at render call time: no IO in render, and
+                // the same list the budget call sites below measure against.
+                agents: [...liveAgents],
+                selectedAgentId: peekItemId,
                 ...peekFooterOptions(innerWidthOf(width)),
               });
             },
@@ -812,19 +829,19 @@ export function installTodoTools(pi: ExtensionAPI): void {
               }
               if (data === "\u001b[5~") {
                 const current = peekSnapshot ?? item;
-                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                const body = peekTranscriptBudget(currentWidth, current, currentRows(), liveAgents);
                 scrollBy(-Math.max(1, body));
                 return;
               }
               if (data === "\u001b[6~" || data === " ") {
                 const current = peekSnapshot ?? item;
-                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                const body = peekTranscriptBudget(currentWidth, current, currentRows(), liveAgents);
                 scrollBy(Math.max(1, body));
                 return;
               }
               if (data === "b" || data === "B") {
                 const current = peekSnapshot ?? item;
-                const body = peekTranscriptBudget(currentWidth, current, currentRows());
+                const body = peekTranscriptBudget(currentWidth, current, currentRows(), liveAgents);
                 scrollBy(-Math.max(1, body));
                 return;
               }
@@ -905,12 +922,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
         },
         {
           overlay: true,
-          overlayOptions: () => ({
-            width: "100%",
-            maxHeight: "100%",
-            anchor: "top-left",
-            margin: 0,
-          }),
+          overlayOptions: () => peekOverlayOptions(currentTermWidth()),
         },
       );
     } finally {
