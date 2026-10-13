@@ -24,8 +24,6 @@
   },
   "colors": {
     "accent": "cyan",
-    "brand": "brand",
-    "brandDim": "brandDim",
     "border": "border",
     "borderAccent": "cyanDim",
     "borderMuted": "borderMuted",
