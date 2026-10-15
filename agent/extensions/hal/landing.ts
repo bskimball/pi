@@ -19,8 +19,10 @@ const MINIMAL_MIN = 20;
  * is inked from its own radial distance, giving a true continuous gradient.
  * Elsewhere the same geometry collapses to three theme keys.
  *
- * Crimson stays on the dedicated `brand`/`brandDim` keys of hal-dark and
- * degrades to accent/muted under any other theme (see {@link halFg}).
+ * Crimson is HAL identity, but the theme schema is closed (no custom color
+ * tokens), so hal-dark cannot carry `brand`/`brandDim` keys. HAL therefore
+ * carries its own crimson stops and inks them in {@link halFg}; under
+ * terminals without 24-bit colour the mark degrades to accent/muted.
  */
 const STRIPE = "\u2580";
 
@@ -278,12 +280,30 @@ function pad(visibleWidth: number, blockWidth: number): [string, string] {
 }
 
 /**
- * Brand inks with graceful degradation: `brand`/`brandDim` exist only in
- * hal-dark, so under any other theme the mark renders in accent/muted
- * instead of throwing (Pi's theme.fg throws on unknown keys, which would
- * otherwise collapse the whole landing to the unavailable fallback).
+ * Crimson stops HAL carries itself: the theme schema is closed, so these
+ * keys can never exist in any theme file. Inked with the same 24-bit SGR
+ * convention as {@link truecolorOrb} above (`\u001b[38;2;R;G;Bm` …
+ * `\u001b[39m`); without truecolor the mark degrades to accent/muted via
+ * fg() exactly as other themes always have. These helpers are HAL-only, so
+ * other themes are unaffected.
+ */
+const BRAND_RGB: Record<string, readonly [number, number, number]> = {
+  brand: [158, 27, 50], // #9e1b32 brand crimson (hal-dark vars)
+  brandDim: [58, 16, 25], // #3a1019 dim crimson (hal-dark vars)
+};
+
+/**
+ * Brand inks with graceful degradation: `brand`/`brandDim` are HAL-owned
+ * stops (see above), so on truecolor terminals they always render crimson;
+ * otherwise the mark renders in accent/muted via fg() instead of throwing
+ * (Pi's theme.fg throws on unknown keys, which would otherwise collapse the
+ * whole landing to the unavailable fallback).
  */
 function halFg(fg: Fg, key: string, text: string): string {
+  const rgb = BRAND_RGB[key];
+  if (rgb && TRUECOLOR) {
+    return `\u001b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${text}\u001b[39m`;
+  }
   try {
     return fg(key, text);
   } catch {

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { TRUECOLOR } from "@pi/ui-kit";
 
 export const HAL_INDICATOR_FRAME_COUNT = 128;
 
@@ -71,12 +72,30 @@ function halOrbitFrames(ctx: ExtensionContext, leadTone: string): string[] {
 }
 
 /**
- * HAL brand inks with graceful degradation: `brand`/`brandDim` exist only in
- * hal-dark, so under any other theme the core breathes in accent/muted
- * instead of throwing (Pi's theme.fg throws on unknown keys, which would
- * otherwise take the whole working chrome down with it).
+ * Crimson stops HAL carries itself: the theme schema is closed, so `brand` /
+ * `brandDim` keys can never exist in any theme file. Inked with the same
+ * 24-bit SGR convention the landing mark uses (`\u001b[38;2;R;G;Bm` …
+ * `\u001b[39m`); without truecolor the core degrades to accent/muted via
+ * fg() exactly as other themes always have. These helpers are HAL-only, so
+ * other themes are unaffected.
+ */
+const BRAND_RGB: Record<string, readonly [number, number, number]> = {
+  brand: [158, 27, 50], // #9e1b32 brand crimson (hal-dark vars)
+  brandDim: [58, 16, 25], // #3a1019 dim crimson (hal-dark vars)
+};
+
+/**
+ * HAL brand inks with graceful degradation: `brand`/`brandDim` are HAL-owned
+ * stops (see above), so on truecolor terminals they always render crimson;
+ * otherwise the core breathes in accent/muted via fg() instead of throwing
+ * (Pi's theme.fg throws on unknown keys, which would otherwise take the
+ * whole working chrome down with it).
  */
 function halFg(ctx: ExtensionContext, key: string, text: string): string {
+  const rgb = BRAND_RGB[key];
+  if (rgb && TRUECOLOR) {
+    return `\u001b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${text}\u001b[39m`;
+  }
   try {
     return ctx.ui.theme.fg(key as any, text);
   } catch {
