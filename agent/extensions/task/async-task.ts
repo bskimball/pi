@@ -223,7 +223,7 @@ const FUSION_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
 
 /** Single-line plain-text nudge appended to every Nth undispatched discovery result. */
 function fusionDiscoveryNudge(count: number): string {
-  return `[fusion] ${count} lead discovery calls this turn with no sidekick unit. Stop broad exploration: delegate the remaining mechanical discovery with task_start, or continue only when the next read resolves a lead-owned judgment.`;
+  return `[fusion] ${count} lead discovery calls this turn. Send the remaining discovery to the open sidekick with task_send. task_start one sidekick only when none is live.`;
 }
 
 /** Lead inline implementation edits per user turn that trigger one orchestrate dispatch nudge. */
@@ -254,12 +254,12 @@ function orchestrateCategory(tool: string, input: unknown): OrchestrateCategory 
 
 function orchestrateInlineNudge(category: OrchestrateCategory, count: number): string {
   const dispatch: Record<OrchestrateCategory, string> = {
-    implementation: "task_start agent machinist (or artisan for visual/UI implementation)",
-    "live-page": "task_start agent inspector for live-page checks",
-    gates: "task_start agent stevedore for one verification-only pass after writers settle",
-    discovery: "task_start agent scout with a slice-pack brief",
+    implementation: "task_send the rest to the live writer, or task_start one machinist (artisan if the slice is visual) when none is live. Same files stay with that writer",
+    "live-page": "one inspector owns this surface: task_send the check if one is live, otherwise task_start one inspector",
+    gates: "one stevedore after writers settle: task_send that pass if one is live, otherwise task_start one. Do not open another for the same tree",
+    discovery: "task_send a gap to the scout that already returned, or task_start one scout with a slice-pack brief when none has",
   };
-  return `[orchestrate] ${count} inline ${category} calls this turn; dispatch ${dispatch[category]}.`;
+  return `[orchestrate] ${count} inline ${category} calls this turn; ${dispatch[category]}.`;
 }
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */

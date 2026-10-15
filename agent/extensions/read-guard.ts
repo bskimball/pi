@@ -8,7 +8,10 @@
 //    token waste with no quality impact. A dimension note is appended so the
 //    model knows the coordinate mapping.
 // 3. Advisory on bash results over ~20KB: nudge toward head/tail/grep piping.
-// 4. No text re-read guard — text re-reads are intentional and cheap enough.
+// 4. Text re-read guard: the third unchanged read of the same path+region
+//    is blocked. One confirmation re-read stays allowed. An edit, a write,
+//    or a changed mtime/size clears it. Compaction clears it too, because
+//    the earlier copy is no longer in context.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -54,6 +57,21 @@ interface ImageReadRecord {
   mtimeMs: number;
   size: number;
   base64Chars: number;
+}
+
+interface TextReadRecord {
+  mtimeMs: number;
+  size: number;
+  count: number;
+}
+
+/** Third identical unchanged read of this region is the one that burns tokens. */
+const TEXT_REREAD_BLOCK_AT = 2;
+
+function readRegionKey(abs: string, offset: unknown, limit: unknown): string {
+  const off = typeof offset === "number" ? String(offset) : "";
+  const lim = typeof limit === "number" ? String(limit) : "";
+  return `${abs}\0${off}\0${lim}`;
 }
 
 interface ImageBlock {
@@ -124,13 +142,36 @@ async function downscaleImages(
   return changed ? { content: out, notes } : null;
 }
 
+function fileIdentity(abs: string): { mtimeMs: number; size: number } | undefined {
+  try {
+    const st = fs.statSync(abs);
+    return { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return undefined;
+  }
+}
+
 export default function (pi: ExtensionAPI): void {
   /** Absolute path → last successful image-read identity for this session. */
   let imageReads = new Map<string, ImageReadRecord>();
+  /** path+region → unchanged text reads still in context. */
+  let textReads = new Map<string, TextReadRecord>();
 
-  pi.on("session_start", () => {
+  const clearReads = () => {
     imageReads = new Map();
-  });
+    textReads = new Map();
+  };
+
+  const forgetPath = (abs: string) => {
+    imageReads.delete(abs);
+    const prefix = `${abs}\0`;
+    for (const key of textReads.keys()) {
+      if (key.startsWith(prefix)) textReads.delete(key);
+    }
+  };
+
+  pi.on("session_start", clearReads);
+  pi.on("session_compact", clearReads);
 
   pi.on("tool_call", (event, ctx) => {
     if (process.env.PI_BEHAVIOR_MODE === "pi") return;
@@ -141,12 +182,31 @@ export default function (pi: ExtensionAPI): void {
       return { block: true, reason: GREP_WILDCARD_REASON };
     }
 
+    if (isToolCallEventType("edit", event) || isToolCallEventType("write", event)) {
+      const raw = event.input.path;
+      if (typeof raw === "string" && raw.length > 0) forgetPath(resolveReadPath(raw, ctx.cwd));
+      return;
+    }
+
     if (!isToolCallEventType("read", event)) return;
 
     const raw = event.input.path;
     if (typeof raw !== "string" || raw.length === 0) return;
 
     const abs = resolveReadPath(raw, ctx.cwd);
+    const identity = fileIdentity(abs);
+    const region = readRegionKey(abs, event.input.offset, event.input.limit);
+    const textPrev = textReads.get(region);
+    if (identity && textPrev && textPrev.mtimeMs === identity.mtimeMs && textPrev.size === identity.size && textPrev.count >= TEXT_REREAD_BLOCK_AT) {
+      return {
+        block: true,
+        reason: `Text ${path.basename(abs)} is unchanged and already in context from earlier reads of this region. Use that copy, or read a different offset/limit. A re-read is allowed after the file changes.`,
+      };
+    }
+    if (textPrev && identity && (textPrev.mtimeMs !== identity.mtimeMs || textPrev.size !== identity.size)) {
+      textReads.delete(region);
+    }
+
     const prev = imageReads.get(abs);
     if (!prev) return;
 
@@ -189,6 +249,26 @@ export default function (pi: ExtensionAPI): void {
           },
         ],
       };
+    }
+
+    // Text reads: count unchanged repeats of the same region. The block
+    // fires on the next tool_call, so this result is already in context.
+    if (isReadToolResult(event) && !event.content.some(isImageBlock)) {
+      const raw = event.input.path;
+      if (typeof raw === "string" && raw.length > 0) {
+        const abs = resolveReadPath(raw, ctx.cwd);
+        const identity = fileIdentity(abs);
+        if (identity) {
+          const region = readRegionKey(abs, event.input.offset, event.input.limit);
+          const prev = textReads.get(region);
+          const same = prev !== undefined && prev.mtimeMs === identity.mtimeMs && prev.size === identity.size;
+          textReads.set(region, {
+            mtimeMs: identity.mtimeMs,
+            size: identity.size,
+            count: same && prev ? prev.count + 1 : 1,
+          });
+        }
+      }
     }
 
     // Any tool (read, mcp screenshots, ...): downscale oversized images.

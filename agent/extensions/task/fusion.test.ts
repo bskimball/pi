@@ -677,6 +677,7 @@ test("Fusion discovery backstop nudges every 6 undispatched discovery calls", ()
     assert.equal(sixth.content[0].type, "image", "non-text result block preserved");
     const first = nudgeText(sixth);
     assert.match(first!, /^\[fusion\] 6 lead discovery calls this turn/);
+    assert.match(first!, /task_send/, "continue the open sidekick instead of spawning another");
     assert.equal(first!.includes("\n"), false, "nudge is a single line");
     for (let i = 0; i < 5; i++) assert.equal(fireToolResult("bash"), undefined);
     assert.match(nudgeText(fireToolResult("fffind"))!, /^\[fusion\] 12 lead discovery calls this turn/, "second nudge at 12");
@@ -888,6 +889,7 @@ test("Orchestrate inline backstop classifies specialist work per turn", () => {
     const text = nudgeText(second);
     assert.match(text!, /^\[orchestrate\] 2 inline implementation calls this turn/);
     assert.match(text!, /task_start/);
+    assert.match(text!, /live writer/, "same files stay with the writer already in flight");
     assert.equal(text!.includes("\n"), false, "nudge is a single line");
     assert.equal(fireToolResult("edit"), undefined, "3rd inline edit: no nudge");
     assert.match(nudgeText(fireToolResult("write"))!, /^\[orchestrate\] 4 inline implementation calls this turn/, "second nudge at 4");

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import readGuard, { isWildcardOnlyGrepPattern } from "../read-guard.ts";
 
@@ -125,5 +128,58 @@ describe("tool_call grep wildcard guard", () => {
       }),
       undefined,
     );
+  });
+});
+
+describe("text re-read guard", () => {
+  it("blocks the third unchanged read of the same region and allows a different region or an edit", async () => {
+    const prior = process.env.PI_BEHAVIOR_MODE;
+    delete process.env.PI_BEHAVIOR_MODE;
+    const dir = mkdtempSync(path.join(tmpdir(), "read-guard-"));
+    const file = path.join(dir, "notes.txt");
+    writeFileSync(file, "unchanged\n");
+    const calls: Array<(event: unknown, ctx: { cwd: string }) => unknown> = [];
+    const results: Array<(event: unknown, ctx: { cwd: string }) => unknown> = [];
+    const compacts: Array<() => void> = [];
+    readGuard({
+      on(name: string, fn: (...args: unknown[]) => unknown) {
+        if (name === "tool_call") calls.push(fn as (event: unknown, ctx: { cwd: string }) => unknown);
+        if (name === "tool_result") results.push(fn as (event: unknown, ctx: { cwd: string }) => unknown);
+        if (name === "session_compact") compacts.push(fn as () => void);
+      },
+    } as never);
+    const ctx = { cwd: dir };
+    const readCall = (offset?: number) => calls[0]({
+      type: "tool_call",
+      toolName: "read",
+      input: offset === undefined ? { path: file } : { path: file, offset },
+    }, ctx);
+    const readResult = () => results[0]({
+      type: "tool_result",
+      toolName: "read",
+      isError: false,
+      input: { path: file },
+      content: [{ type: "text", text: "unchanged" }],
+    }, ctx);
+    try {
+      assert.equal(readCall(), undefined, "first read");
+      await readResult();
+      assert.equal(readCall(), undefined, "confirmation re-read stays allowed");
+      await readResult();
+      const blocked = readCall() as { block?: boolean; reason?: string } | undefined;
+      assert.equal(blocked?.block, true);
+      assert.match(String(blocked?.reason), /already in context/);
+      assert.equal(readCall(40), undefined, "a different region is a different read");
+      calls[0]({ type: "tool_call", toolName: "edit", input: { path: file, edits: [] } }, ctx);
+      assert.equal(readCall(), undefined, "an edit clears the region");
+      await readResult();
+      await readResult();
+      assert.equal((readCall() as { block?: boolean } | undefined)?.block, true, "blocks again after two post-edit reads");
+      compacts[0]();
+      assert.equal(readCall(), undefined, "compaction drops the copy, so the next read is allowed");
+    } finally {
+      if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE;
+      else process.env.PI_BEHAVIOR_MODE = prior;
+    }
   });
 });
