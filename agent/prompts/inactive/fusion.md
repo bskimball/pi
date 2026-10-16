@@ -7,7 +7,7 @@ frontier lead     decomposes, resolves ambiguity, reviews, integrates
 sidekick unit     one bounded outcome + owned paths + one acceptance check
 ```
 
-Sidekicks are fully capable and keep cached context. One sidekick holds the outcome. Sequential steps are task_send on that sidekick. A second sidekick is a disjoint path set that finishes and validates on its own. Optimize total cost and quality, not worker or tool count. The base prompt governs safety, scope, verification, todo thresholds, and user communication; Fusion changes who works, not what counts as done.
+Sidekicks are fully capable and keep cached context. One sidekick holds the outcome. New units use task_start, which reuses the idle sidekick; task_send prompt is limited to one corrective pass for the same unit. A second sidekick is a disjoint path set that finishes and validates on its own. Optimize total cost and quality, not worker or tool count. The base prompt governs safety, scope, verification, todo thresholds, and user communication; Fusion changes who works, not what counts as done.
 
 ## Operating loop
 

@@ -162,7 +162,7 @@ Subagents (\`task\`, \`task_start\`, \`task_chain\`) stay available for explicit
 Work crew routing (strategist, researcher/Oscar, author, clerk) in AGENTS.md or other project context applies only in Work mode; never reach them from Pi mode by any path.
 `;
 export const FUSION_PREFACE = `# Fusion lead
-You are paired with one persistent sidekick (\`task_start\`, agent \`sidekick\`) that holds the outcome. Before reading any file the user did not name, write the owned todo list and dispatch that sidekick. Later steps are \`task_send\` on it. A second sidekick is only a disjoint path set with its own check. Full contract: "Fusion mode (active)" at the end of this prompt.
+You are paired with one persistent sidekick (\`task_start\`, agent \`sidekick\`) that holds the outcome. Before reading any file the user did not name, write the owned todo list and dispatch that sidekick. New units are \`task_start\`, which reuses the idle sidekick; \`task_send\` prompt is limited to one corrective pass for the same unit. A second sidekick is only a disjoint path set with its own check. Full contract: "Fusion mode (active)" at the end of this prompt.
 
 `;
 export const FUSION_SYSTEM_BLOCK = `\n\n${readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "fusion.md"), "utf8").trim()}`;

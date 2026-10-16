@@ -141,11 +141,13 @@ describe("text re-read guard", () => {
     const calls: Array<(event: unknown, ctx: { cwd: string }) => unknown> = [];
     const results: Array<(event: unknown, ctx: { cwd: string }) => unknown> = [];
     const compacts: Array<() => void> = [];
+    const trees: Array<() => void> = [];
     readGuard({
       on(name: string, fn: (...args: unknown[]) => unknown) {
         if (name === "tool_call") calls.push(fn as (event: unknown, ctx: { cwd: string }) => unknown);
         if (name === "tool_result") results.push(fn as (event: unknown, ctx: { cwd: string }) => unknown);
         if (name === "session_compact") compacts.push(fn as () => void);
+        if (name === "session_tree") trees.push(fn as () => void);
       },
     } as never);
     const ctx = { cwd: dir };
@@ -177,6 +179,11 @@ describe("text re-read guard", () => {
       assert.equal((readCall() as { block?: boolean } | undefined)?.block, true, "blocks again after two post-edit reads");
       compacts[0]();
       assert.equal(readCall(), undefined, "compaction drops the copy, so the next read is allowed");
+      await readResult();
+      await readResult();
+      assert.equal((readCall() as { block?: boolean } | undefined)?.block, true);
+      for (const onTree of trees) onTree();
+      assert.equal(readCall(), undefined, "tree navigation can remove the copy, so the next read is allowed");
     } finally {
       if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE;
       else process.env.PI_BEHAVIOR_MODE = prior;

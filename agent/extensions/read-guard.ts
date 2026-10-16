@@ -172,6 +172,7 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", clearReads);
   pi.on("session_compact", clearReads);
+  pi.on("session_tree", clearReads);
 
   pi.on("tool_call", (event, ctx) => {
     if (process.env.PI_BEHAVIOR_MODE === "pi") return;
