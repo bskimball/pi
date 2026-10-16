@@ -5,6 +5,11 @@ import { Input, SelectList, Text, fuzzyFilter, getKeybindings, matchesKey, type 
 type PickerModel = Model<Api>;
 const identity = (model: PickerModel) => `${model.provider}/${model.id}`;
 const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+/** Prior selection first, then provider/id. Keeps the original model objects. */
+const sortModels = (models: readonly PickerModel[], previous: string | undefined) => [...models].sort((a, b) => {
+  const current = Number(identity(b) === previous) - Number(identity(a) === previous);
+  return current || a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id);
+});
 
 /** Pairing hint: lead plans/reviews (frontier, high thinking), sidekick executes (efficient, lower thinking). */
 export function pickerHint(title: string): string | undefined {
@@ -33,10 +38,7 @@ export class FusionModelPicker implements Component, Focusable {
     private terminalRows: () => number,
     private done: (model: PickerModel | undefined) => void,
   ) {
-    this.models = [...models].sort((a, b) => {
-      const current = Number(identity(b) === previous) - Number(identity(a) === previous);
-      return current || a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id);
-    });
+    this.models = sortModels(models, previous);
     this.scopedModels = this.models.filter(model => scopedIds.has(identity(model)));
     this.scoped = this.scopedModels.length > 0;
     this.filter();
@@ -110,7 +112,8 @@ export class FusionModelPicker implements Component, Focusable {
 }
 
 export async function pickFusionModel(ctx: ExtensionContext, role: string, previous?: { provider: string; modelId: string }): Promise<PickerModel | undefined> {
-  await ctx.modelRegistry.refresh();
+  // The registry is loaded before extensions start; its configured-provider
+  // snapshot is enough, and a refresh here made every pick slow.
   const models = ctx.modelRegistry.getAvailable();
   if (!models.length) {
     ctx.ui.notify("No models available from configured providers. Use /login or check your provider configuration.", "warning");
@@ -119,11 +122,11 @@ export async function pickFusionModel(ctx: ExtensionContext, role: string, previ
   const previousId = previous ? `${previous.provider}/${previous.modelId}` : undefined;
   const hint = pickerHint(role);
   if (ctx.mode !== "tui") {
-    const value = await ctx.ui.input(`${role} model (provider/model ID)${hint ? ` — ${hint}` : ""}`, previousId);
-    if (!value) return undefined;
-    const selected = models.find(model => identity(model) === value.trim());
-    if (!selected) ctx.ui.notify("Choose a model from a configured provider using its exact provider/model ID.", "warning");
-    return selected;
+    // Hosts without the custom TUI component get a plain select of exact
+    // provider/model identities; the chosen identity maps back to the model.
+    const sorted = sortModels(models, previousId);
+    const value = await ctx.ui.select(`${role} model${hint ? ` — ${hint}` : ""}`, sorted.map(identity));
+    return value === undefined ? undefined : sorted.find(model => identity(model) === value);
   }
   const scopedIds = new Set(ctx.scopedModels.map(({ model }) => identity(model)));
   return ctx.ui.custom<PickerModel | undefined>((tui, theme, _keys, done) => new FusionModelPicker(

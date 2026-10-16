@@ -285,6 +285,7 @@ export default function (pi: ExtensionAPI): void {
   // question in a request in parallel, so the second feature is near-free once
   // the first has paid the round trip.
   pi.on("before_agent_start", async (event, ctx) => {
+    if (event.messageType === "custom") return undefined;
     workspaceId = workspaceIdForCwd(ctx.cwd);
     const config = loadFeatureConfig();
     if (!config.skillRouter.enabled && !config.routingAdvisory.enabled) return undefined;

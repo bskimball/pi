@@ -47,8 +47,10 @@ export interface FooterSnapshot {
   /** The model runs on a subscription/OAuth login rather than metered billing. */
   subscription: boolean;
   usage: FooterUsage;
-  /** percent is 0-100, or null when unknown (e.g. right after compaction). */
-  context: { percent: number | null; window: number };
+  /** percent is 0-100, or null when unknown (e.g. right after compaction).
+   *  tokens is the absolute estimate, or null when unknown; renderers must
+   *  never fabricate a used count from the percent. */
+  context: { percent: number | null; window: number; tokens: number | null };
   /** Plain text of the "mode" extension status (e.g. "Fusion"), when set. */
   mode?: string;
   /** Every other extension status, sorted by key. */
@@ -116,6 +118,7 @@ function captureBase(ctx: ExtensionContext, pi: ExtensionAPI, model = ctx.model,
     context: {
       percent: usage ? usage.percent : 0,
       window: usage?.contextWindow ?? model?.contextWindow ?? 0,
+      tokens: usage?.tokens ?? null,
     },
   };
 }

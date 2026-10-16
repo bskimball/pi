@@ -28,7 +28,6 @@ describe("native-boundary telemetry", () => {
       originalWrite(JSON.stringify({ writes, events }));
     `;
     const result = spawnSync(process.execPath, [
-      "--experimental-transform-types",
       "--input-type=module",
       "--eval",
       script,

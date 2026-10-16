@@ -162,6 +162,10 @@ export default function (pi: ExtensionAPI): void {
     );
   });
   pi.on("before_agent_start", (event) => {
+    if (event.messageType === "custom") {
+      runtimeMonitor?.note("before-agent-start custom");
+      return;
+    }
     runtimeMonitor?.note(
       `before-agent-start promptChars=${event.prompt.length} images=${event.images?.length ?? 0}`,
     );

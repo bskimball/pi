@@ -55,6 +55,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (setDefault && state.mode !== "apex-orchestrate") latest.mode = state.mode;
     savePreferences(preferencePath, latest);
   };
+  // Structured pair for non-TUI hosts (desktop over RPC). TUI is skipped so
+  // raw JSON never reaches the terminal footer; cleared outside Fusion.
+  const publishPair = (ctx: ExtensionContext) => {
+    if (ctx.mode === "tui") return;
+    ctx.ui.setStatus("fusion-pair", usesPersistentSidekick(state.mode) && state.fusion ? JSON.stringify(state.fusion) : undefined);
+  };
   const announce = () => {
     process.env.PI_BEHAVIOR_MODE = state.mode;
     pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion });
@@ -152,6 +158,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       modelBlocked = false;
       recoveryBlocked = false;
       ctx.ui.setStatus("mode", labels[mode]);
+      publishPair(ctx);
       const identity = usesPersistentSidekick(mode) && state.fusion
         ? ` ${fusionPairLabel(state.fusion)}`
         : "";
@@ -200,7 +207,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       } else {
         recoveryBlocked = false;
       }
-      try { ctx.ui.setStatus("mode", labels[prevState.mode]); } catch { /* cosmetic */ }
+      try { ctx.ui.setStatus("mode", labels[prevState.mode]); publishPair(ctx); } catch { /* cosmetic */ }
       let note = `Mode switch to ${labels[mode]} failed (${message}); restored ${labels[prevState.mode]}.`;
       if (typeof recoveryBlocked === "string") {
         note = failures.length ? recoveryBlocked : `${note} Prior recovery block still in effect: ${recoveryBlocked}`;
@@ -258,19 +265,21 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     announce();
     pi.appendEntry("behavior-mode", structuredClone(state));
     if (ctx.hasUI) ctx.ui.setStatus("mode", labels[state.mode]);
+    publishPair(ctx);
   });
-  pi.on("model_select", (event) => {
+  pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
     modelBlocked = false;
     const choice = { provider: event.model.provider, modelId: event.model.id, thinking: pi.getThinkingLevel() };
     state.models[state.mode] = choice;
     if (usesPersistentSidekick(state.mode) && state.fusion) state.fusion.lead = choice;
     persist();
+    publishPair(ctx);
   });
-  pi.on("thinking_level_select", event => {
+  pi.on("thinking_level_select", (event, ctx) => {
     if (changing) return;
     const choice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
-    if (choice) { choice.thinking = event.level; persist(); }
+    if (choice) { choice.thinking = event.level; persist(); publishPair(ctx); }
   });
   pi.on("input", (_event, ctx) => {
     if (recoveryBlocked) {

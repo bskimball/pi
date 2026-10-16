@@ -31,6 +31,15 @@ export const TODO_LIST_MAX_LINES = 18;
  * wrapped title or note hangs at the title column instead of on a rail.
  */
 const ROW_INSET = "  ";
+/**
+ * Agent-row left edge: the same bordered-panel rail the peek overlay uses
+ * (narrow BMP │ U+2502 + two spaces of padding) instead of the todo rows'
+ * plain two-space inset. Themed at call time like the peek rail so a live
+ * /ui switch repaints it; the literal keeps its single-cell width.
+ */
+function agentEdge(theme: StatusTheme): string {
+  return `${theme.fg("borderMuted", "\u2502")}  `;
+};
 /** Cells before the title column: inset + glyph + separator. */
 const TITLE_INDENT = ROW_INSET.length + 2;
 const HANG_INSET = " ".repeat(TITLE_INDENT);
@@ -68,6 +77,40 @@ export function peekOverlayOptions(termWidth: number): OverlayOptions {
     return { width: "42%", maxHeight: "100%", anchor: "top-right", margin: 0 };
   }
   return { width: "100%", maxHeight: "100%", anchor: "top-left", margin: 0 };
+}
+
+/** Left border rail of the peek overlay: narrow BMP │ (U+2502), one cell. */
+const PEEK_RAIL = "\u2502";
+/** Pane width below which the rail (and all gutters) give way to content. */
+const PEEK_CHROME_MIN_WIDTH = 20;
+
+/**
+ * Peek chrome columns: 3 on the left (border rail + two spaces of interior
+ * padding) and 1 on the right when the pane can afford it, none on tiny
+ * panes. Single source of truth for the renderer, the transcript budget,
+ * and todo-tools' innerWidthOf so the three never disagree.
+ */
+function peekChromeWidths(width: number): { left: number; right: number } {
+  if (width < PEEK_CHROME_MIN_WIDTH) return { left: 0, right: 0 };
+  return { left: safeVisibleWidth(PEEK_RAIL) + 2, right: 1 };
+}
+
+/**
+ * Inner content width of the peek overlay. Shared with todo-tools (which
+ * pre-renders the transcript at this width) so caller and renderer agree.
+ */
+export function peekInnerWidth(width: number): number {
+  const chrome = peekChromeWidths(width);
+  return Math.max(1, width - chrome.left - chrome.right);
+}
+
+/**
+ * Styled left rail (borderMuted │ + two spaces) or "" on tiny panes.
+ * Read the tone at call time so a live /ui switch repaints the rail.
+ */
+function peekLeftPad(surface: StatusTheme, width: number): string {
+  if (width < PEEK_CHROME_MIN_WIDTH) return "";
+  return `${surface.fg("borderMuted", PEEK_RAIL)}  `;
 }
 /** The fleet bus hard cap; every retained worker must remain selectable. */
 const AGENT_ROWS = 8;
@@ -403,9 +446,11 @@ function tabChip(
 }
 
 /**
- * One agents-pane row. Id, state, and age always survive; the current task
- * (directive, else mission) is the first thing truncated when the row is
- * too narrow. Absent current task keeps the prior four-field layout.
+ * One agents-pane row. Id, state, turn progress, and age always survive on
+ * the right; the current task (directive, else mission) is the first thing
+ * truncated when the row is too narrow. fitLine keeps the whole trail and
+ * clips the left, so a wider trail naturally shrinks the middle budget
+ * first. Absent current task keeps the prior field layout.
  */
 function renderAgentRow(
   theme: StatusTheme,
@@ -422,15 +467,22 @@ function renderAgentRow(
   const id = cleanInline(item.id, 40);
   const state = workerStateText(item);
   const age = agentAge(item, options.now);
+  const turns = turnCountText(item.turns, item.maxTurns);
   const titleTone = options.selected ? "accent" : "text";
   const lead = [
     theme.fg(options.markerTone, options.marker),
     theme.fg(titleTone, title),
     theme.fg("dim", id),
   ].join(" ");
-  const trail = [theme.fg("muted", state), theme.fg("dim", age)].join(" ");
+  const trail = [
+    theme.fg("muted", state),
+    turns ? theme.fg("dim", turns) : "",
+    theme.fg("dim", age),
+  ]
+    .filter(Boolean)
+    .join(" ");
   const current = agentCurrentTask(item);
-  const prefix = ROW_INSET + lead;
+  const prefix = agentEdge(theme) + lead;
   if (!current) {
     return fitLine(prefix, trail, width);
   }
@@ -454,6 +506,30 @@ function ellipsizeToWidth(text: string, budget: number): string {
   return `${safeTruncateToWidth(text, budget - 3)}...`;
 }
 
+/**
+ * One indented activity sub-line for a worker row: the latest ledger entry
+ * as "<tool> <summary>", with the active glyph while the tool is still
+ * running. The ledger is oldest-first, so the latest entry is the last
+ * element. Returns undefined when the worker reports no activity.
+ */
+function renderAgentActivityLine(
+  theme: StatusTheme,
+  width: number,
+  item: DockAgentItem,
+): string | undefined {
+  const entries = Array.isArray(item.activity) ? item.activity : [];
+  if (!entries.length) return undefined;
+  const latest = entries[entries.length - 1]!;
+  const tool = safeText(latest.tool, 24) || "activity";
+  const summary = safeText(latest.summary, 80);
+  const text = summary ? `${tool} ${summary}` : tool;
+  const live = safeText(latest.status, 16) === "running";
+  const glyph = live ? skinGlyphs().statusActive : skinGlyphs().statusIdle;
+  const tone = live ? "warning" : "muted";
+  const left = `${agentEdge(theme)}  ${theme.fg(tone, glyph)} ${theme.fg("dim", text)}`;
+  return safeTruncateToWidth(left, width);
+}
+
 export function renderDockTabs(
   theme: StatusTheme,
   width: number,
@@ -469,6 +545,41 @@ export function renderDockTabs(
     .map((part) => theme.fg("dim", part as string))
     .join(" ");
   return fitLine(left, right, width);
+}
+
+/**
+ * Which visible agent rows render an activity sub-line. Single source of
+ * truth for renderAgentList and the pointer click mapping: the selected row
+ * owns one when a selection is in force, otherwise every live
+ * (not settled/failed) row with activity shows its latest entry. Sub-lines
+ * yield before rows when the pane would overflow its line budget, so rows
+ * are never dropped for detail. Pure over items + selectedIndex.
+ */
+export function agentSubLineFlags(
+  items: readonly DockAgentItem[],
+  selectedIndex?: number,
+): boolean[] {
+  const visible = items.slice(0, AGENT_ROWS);
+  const selectedValid =
+    selectedIndex !== undefined &&
+    selectedIndex >= 0 &&
+    selectedIndex < visible.length;
+  const flags = visible.map((item, rowIndex) => {
+    const eligible = selectedValid
+      ? rowIndex === selectedIndex
+      : !canSwitchToSession(item.lifecycle);
+    if (!eligible) return false;
+    const entries = Array.isArray(item.activity) ? item.activity : [];
+    return entries.length > 0;
+  });
+  let lineCount = 1 + visible.length + flags.filter(Boolean).length;
+  for (let index = visible.length - 1; index >= 0 && lineCount > TODO_LIST_MAX_LINES; index--) {
+    if (flags[index]) {
+      flags[index] = false;
+      lineCount--;
+    }
+  }
+  return flags;
 }
 
 export function renderAgentList(
@@ -497,7 +608,7 @@ export function renderAgentList(
     return [
       header,
       safeTruncateToWidth(
-        `${ROW_INSET}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", "no agents")}`,
+        `${agentEdge(theme)}${theme.fg("dim", MORE_GLYPH)} ${theme.fg("muted", "no agents")}`,
         width,
       ),
     ].slice(0, TODO_LIST_MAX_LINES);
@@ -513,7 +624,8 @@ export function renderAgentList(
         ]),
       })
     : header;
-  const rows = items.slice(0, AGENT_ROWS).map((item, rowIndex) => {
+  const visible = items.slice(0, AGENT_ROWS);
+  const rows = visible.map((item, rowIndex) => {
     const glyph = AGENT_GLYPHS[item.lifecycle] ?? skinGlyphs().statusIdle;
     const tone = AGENT_TONES[item.lifecycle] ?? "muted";
     const selected = options.selectedIndex === rowIndex;
@@ -524,21 +636,44 @@ export function renderAgentList(
       now,
     });
   });
-  return [safeTruncateToWidth(truthfulHeader, width), ...rows].slice(0, TODO_LIST_MAX_LINES);
+  const keepSub = agentSubLineFlags(items, options.selectedIndex);
+  const subs = visible.map((item, rowIndex) =>
+    keepSub[rowIndex] ? renderAgentActivityLine(theme, width, item) : undefined,
+  );
+  const output = [safeTruncateToWidth(truthfulHeader, width)];
+  for (let index = 0; index < visible.length; index++) {
+    output.push(rows[index]!);
+    if (keepSub[index]) output.push(subs[index]!);
+  }
+  return output.slice(0, TODO_LIST_MAX_LINES);
 }
 
 /**
  * Map a box-local click y to a rendered agent-row index. The agents pane
- * renders header at row 0 and one row per worker after it, so y - 1 is the
- * index; anything outside the visible rows is not a row. Pure function so
- * tests exercise the mapping without a synthetic TUI.
+ * renders header at row 0, then each visible worker occupies one row plus
+ * one activity sub-line when agentSubLineFlags says so; a click on a row
+ * or its own sub-line selects that worker. Without layout state it falls
+ * back to y - 1. Pure function so tests exercise the mapping without a
+ * synthetic TUI.
  */
 export function agentRowAtY(
   y: number,
   rowCount: number,
   visibleRows = AGENT_ROWS,
+  layout?: { items?: readonly DockAgentItem[]; selectedIndex?: number },
 ): number | undefined {
   if (!Number.isInteger(y) || y < 1) return undefined;
+  if (layout?.items) {
+    const flags = agentSubLineFlags(layout.items, layout.selectedIndex);
+    const count = Math.min(rowCount, flags.length, visibleRows);
+    let cursor = 1;
+    for (let index = 0; index < count; index++) {
+      const height = flags[index] ? 2 : 1;
+      if (y >= cursor && y < cursor + height) return index;
+      cursor += height;
+    }
+    return undefined;
+  }
   const index = y - 1;
   if (index < 0 || index >= rowCount || index >= visibleRows) return undefined;
   return index;
@@ -761,8 +896,7 @@ export function peekTranscriptBudget(
 ): number {
   const capped = Math.max(3, Math.min(PEEK_MAX_LINES, maxLines));
   if (width <= 0 || capped <= 3) return 0;
-  const gutter = width >= 20 ? 1 : 0;
-  const innerWidth = Math.max(1, width - gutter * 2);
+  const innerWidth = peekInnerWidth(width);
   const chrome = layoutPeekChrome(item, innerWidth, capped);
   const rules = capped >= 6 ? 2 : 1;
   const vPad = capped >= 14 ? 1 : 0;
@@ -847,10 +981,11 @@ export function renderPeekBody(
   const waiting = (finiteNum(item.waitingUi) ?? 0) > 0;
   const maxLines = Math.max(3, Math.min(PEEK_MAX_LINES, options.maxLines ?? TODO_LIST_MAX_LINES));
 
-  // Inset horizontal padding for content within the overlay pane
-  const gutter = width >= 20 ? 1 : 0;
-  const pad = " ".repeat(gutter);
-  const innerWidth = Math.max(1, width - gutter * 2);
+  // Left border rail + two spaces of interior padding; the paint fill
+  // below keeps the right side sane. Blank filler rows carry the rail too
+  // so the edge reads as one continuous bordered panel.
+  const pad = peekLeftPad(surface, width);
+  const innerWidth = peekInnerWidth(width);
 
   const header = pad + safeTruncateToWidth(
     surface.fg(waiting ? "warning" : "accent", peekHeaderText(item, now)),
@@ -899,14 +1034,14 @@ export function renderPeekBody(
   );
 
   const lines: string[] = [];
-  if (vPad > 0) lines.push("");
+  if (vPad > 0) lines.push(pad);
   lines.push(header);
   if (chipRow !== undefined) lines.push(chipRow);
   lines.push(...missionRows, ...directiveRows);
   if (maxLines <= 3) {
     if (maxLines >= 3) lines.push(controls);
     const padded = lines.slice(0, maxLines);
-    while (padded.length < maxLines) padded.push("");
+    while (padded.length < maxLines) padded.push(pad);
     return padded.map((row) => paintPeekRow(surface, width, row));
   }
   lines.push(topRule);
@@ -938,15 +1073,15 @@ export function renderPeekBody(
     }
   }
   if (rules >= 2) {
-    while (lines.length < maxLines - 2 - vPad) lines.push("");
+    while (lines.length < maxLines - 2 - vPad) lines.push(pad);
     lines.push(bottomRule);
   } else {
-    while (lines.length < maxLines - 1 - vPad) lines.push("");
+    while (lines.length < maxLines - 1 - vPad) lines.push(pad);
   }
   lines.push(controls);
-  if (vPad > 0) lines.push("");
+  if (vPad > 0) lines.push(pad);
   const padded = lines.slice(0, maxLines);
-  while (padded.length < maxLines) padded.push("");
+  while (padded.length < maxLines) padded.push(pad);
   return padded.map((row) => paintPeekRow(surface, width, row));
 }
 

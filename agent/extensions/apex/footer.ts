@@ -1,9 +1,15 @@
 // footer: sonar/deep-water instrument footer for the apex UI.
 //
-// Line 1 is a borderMuted rule carrying inline segments (mode, model, place)
-// across the full width; line 2 is a "depth" readout with a 10-cell braille
-// context gauge plus token/cost/status groups. Pure: no timers, no I/O,
+// Line 1 carries the model cluster (mode, model id, provider prefix, thinking)
+// left and the context cluster (braille gauge, percent, tokens/window) right,
+// joined by a borderMuted rule. Line 2 carries the place cluster (cwd, branch)
+// plus session usage, cost, and extension statuses. Pure: no timers, no I/O,
 // never more than FOOTER_MAX_LINES lines.
+//
+// Degradation order at shrinking width: statuses, then cost, then usage,
+// then branch, then thinking, then provider, then the tokens/window detail
+// (gauge+percent always remain), then model truncation. Narrow (<50) keeps
+// only model + gauge/percent on line 1 and the truncated cwd on line 2.
 
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
@@ -13,6 +19,7 @@ import {
   safeTruncateToWidth,
   safeVisibleWidth,
   type BuildFooter,
+  type FooterSnapshot,
 } from "@pi/ui-kit";
 
 interface Seg {
@@ -93,6 +100,21 @@ function toneFor(percent: number | null): ThemeColor {
   return "accent";
 }
 
+/**
+ * Context readout tail after the percent: absolute used/window tokens when
+ * the estimate is known ("96k/200k"), else the window alone ("of 200k") so
+ * no used count is ever fabricated. Empty when neither is known.
+ */
+function contextTail(s: FooterSnapshot): string {
+  const win = s.context.window;
+  const toks = s.context.tokens;
+  if (toks !== null && toks !== undefined) {
+    const used = formatTokens(toks);
+    return win > 0 ? `${used}/${formatTokens(win)}` : used;
+  }
+  return win > 0 ? `of ${formatTokens(win)}` : "";
+}
+
 export const buildFooter: BuildFooter = (s, width, paint) => {
   const w = Math.max(0, Math.floor(width));
   if (w <= 0) return [];
@@ -102,14 +124,13 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
   const modelId = s.model?.id ?? "no model";
   const think = (s.thinking ?? "").trim();
 
-  // Line 1: mode and model segments joined by one rule separator, with the
-  // rule filling the gap to the right (place) cluster. The model segment is
-  // one unit: an optional dim "provider/" prefix, the id, and an optional
-  // dim " · thinking" suffix; droppables shed in that reverse order.
+  // Line 1: model cluster left, context cluster right, rule-filled between.
+  // Shed thinking, then provider, then the tokens/window detail until a
+  // dash gap remains; the model id and gauge+percent never drop.
   const provName = s.multiProvider && s.model ? s.model.provider : "";
   let useProv = !!provName && !narrow;
   let useThink = !!think && !narrow;
-  let useBranch = !!s.branch && !narrow;
+  let useCtxDetail = !narrow;
   const buildLeft = () => {
     const modelSeg =
       (useProv ? paint.fg("dim", `${provName}/`) : "") +
@@ -119,21 +140,27 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
       .filter(Boolean)
       .join(paint.fg("borderMuted", " \u2500 "));
   };
-  const buildRight = () =>
-    paint.fg("muted", s.cwd) +
-    (useBranch ? paint.fg("dim", " on ") + paint.fg("accent", s.branch ?? "") : "");
+  const buildCtx = () => {
+    const tail = useCtxDetail ? contextTail(s) : "";
+    return (
+      paint.fg("dim", "ctx ") +
+      gauge(paint, toneFor(pct), pct) +
+      " " +
+      paint.fg("text", pct === null ? "?" : `${Math.round(pct)}%`) +
+      (tail ? paint.fg("dim", ` \u00B7 ${tail}`) : "")
+    );
+  };
   let left = buildLeft();
-  let right = buildRight();
-  // Shed droppables (thinking, provider, branch) until a dash gap remains.
+  let right = buildCtx();
   for (;;) {
     const gap = w - safeVisibleWidth(left) - safeVisibleWidth(right);
     if (gap >= 1) break;
     if (useThink) useThink = false;
     else if (useProv) useProv = false;
-    else if (useBranch) useBranch = false;
+    else if (useCtxDetail) useCtxDetail = false;
     else break;
     left = buildLeft();
-    right = buildRight();
+    right = buildCtx();
   }
   let line1: string;
   const gap = w - safeVisibleWidth(left) - safeVisibleWidth(right);
@@ -146,35 +173,45 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
     line1 = fitLine(left, right, w);
   }
 
-  // Line 2: depth gauge plus token/cost/status groups.
-  const groups: Seg[] = [
-    {
-      text:
-        paint.fg("dim", "depth ") +
-        gauge(paint, toneFor(pct), pct) +
-        " " +
-        paint.fg("text", pct === null ? "?" : `${Math.round(pct)}%`) +
-        paint.fg("dim", ` of ${formatTokens(s.context.window)}`),
-      pri: -1,
-    },
-  ];
-  if (!narrow) {
-    const io: string[] = [];
-    if (s.usage.input > 0) io.push(`\u2191${formatTokens(s.usage.input)}`);
-    if (s.usage.output > 0) io.push(`\u2193${formatTokens(s.usage.output)}`);
-    if (io.length > 0) groups.push({ text: paint.fg("dim", io.join(" ")), pri: 5 });
-    groups.push({
-      text: paint.fg(
-        "dim",
-        `$${s.usage.cost.toFixed(3)}${s.subscription ? " sub" : ""}`,
-      ),
-      pri: 4,
-    });
-    for (const st of s.statuses) {
-      groups.push({ text: paint.fg("muted", st.text), pri: 10 });
+  // Line 2: place cluster plus session usage/cost/statuses. Shed statuses,
+  // then cost, then usage, then branch; the cwd truncates only as a last
+  // resort. Narrow keeps just the truncated cwd.
+  const ioParts: string[] = [];
+  if (s.usage.input > 0) ioParts.push(`\u2191${formatTokens(s.usage.input)}`);
+  if (s.usage.output > 0) ioParts.push(`\u2193${formatTokens(s.usage.output)}`);
+  const costText = `$${s.usage.cost.toFixed(3)}${s.subscription ? " sub" : ""}`;
+  let useBranch = !!s.branch && !narrow;
+  let useUsage = !narrow && ioParts.length > 0;
+  let useCost = !narrow;
+  let useStatuses = !narrow && s.statuses.length > 0;
+  let line2: string;
+  for (;;) {
+    const place =
+      paint.fg("muted", s.cwd) +
+      (useBranch ? paint.fg("dim", " on ") + paint.fg("accent", s.branch ?? "") : "");
+    const groups: Seg[] = [];
+    if (useUsage) groups.push({ text: paint.fg("dim", ioParts.join(" ")), pri: 5 });
+    if (useCost) groups.push({ text: paint.fg("dim", costText), pri: 6 });
+    if (useStatuses) {
+      for (const st of s.statuses) {
+        groups.push({ text: paint.fg("muted", st.text), pri: 10 });
+      }
+    }
+    const rest = groups.length > 0 ? joinDropping(groups, paint.fg("dim", " \u00B7 "), w) : "";
+    const total = safeVisibleWidth(place) + (rest ? 1 + safeVisibleWidth(rest) : 0);
+    if (total <= w) {
+      line2 = rest ? fitLine(place, rest, w) : safeTruncateToWidth(place, w);
+      break;
+    }
+    if (useStatuses) useStatuses = false;
+    else if (useCost) useCost = false;
+    else if (useUsage) useUsage = false;
+    else if (useBranch) useBranch = false;
+    else {
+      line2 = rest ? fitLine(place, rest, w) : safeTruncateToWidth(place, w);
+      break;
     }
   }
-  const line2 = joinDropping(groups, paint.fg("dim", " \u00B7 "), w);
 
   return [line1, line2]
     .filter((line) => safeVisibleWidth(line) > 0)

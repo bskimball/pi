@@ -35,6 +35,7 @@ import {
   canSwitchToSession,
   clampPeekScroll,
   peekOverlayOptions,
+  peekInnerWidth,
   peekTranscriptBudget,
   renderAgentList,
   renderPeekBody,
@@ -319,7 +320,8 @@ export function reconstructTodoState(
 /**
  * Dock panel: the WidthText render path plus row click handling for the
  * agents pane. Clicks map box-local y to a rendered agent row (header at
- * row 0, one row per worker after it); only agent rows claim the click.
+ * row 0, each worker one row plus its activity sub-line when present);
+ * only agent rows claim the click.
  * Keyboard selection lives on the shortcuts/commands below; this class
  * only routes pointer input into the same row callback.
  */
@@ -330,6 +332,7 @@ class DockPanel implements Component {
       fallback: string;
       onAgentRow: (rowIndex: number) => void;
       rowCount: () => number;
+      agentLayout?: () => { items: readonly DockAgentItem[]; selectedIndex?: number };
     },
   ) {}
   render(width: number): string[] {
@@ -351,10 +354,11 @@ export function dockClickResult(
   hooks: {
     onAgentRow: (rowIndex: number) => void;
     rowCount: () => number;
+    agentLayout?: () => { items: readonly DockAgentItem[]; selectedIndex?: number };
   },
 ): TuiMouseEventResult | undefined {
   if (event.type !== "click" || event.button !== "left") return undefined;
-  const rowIndex = agentRowAtY(Math.trunc(event.y), hooks.rowCount());
+  const rowIndex = agentRowAtY(Math.trunc(event.y), hooks.rowCount(), undefined, hooks.agentLayout?.());
   if (rowIndex === undefined) return undefined;
   try {
     hooks.onAgentRow(rowIndex);
@@ -709,10 +713,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
             if (peekStatus !== undefined) return { statusLine: peekStatus };
             return {};
           };
-          const innerWidthOf = (width: number): number => {
-            const gutter = width >= 20 ? 1 : 0;
-            return Math.max(1, width - gutter * 2);
-          };
+          // Same inner width the peek renderer measures (border rail +
+          // padding on the left, one gutter on the right); shared helper so
+          // the transcript pre-render and the overlay never disagree.
+          const innerWidthOf = (width: number): number => peekInnerWidth(width);
           /** Rendered body rows plus the omitted-note row todo-view prepends. */
           const totalRows = (): number => {
             if (!peekDoc) return 0;
@@ -1049,6 +1053,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 });
               },
               rowCount: () => (dockPane === "agents" && !panelCollapsed ? liveAgents.length : 0),
+              agentLayout: () => ({ items: liveAgents, selectedIndex: selectedAgent }),
             },
           ),
         { placement: "aboveEditor" },

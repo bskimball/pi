@@ -22,6 +22,7 @@ const {
   TODO_LIST_MAX_LINES,
   PEEK_RAIL_MIN_WIDTH,
   agentRowAtY,
+  agentSubLineFlags,
   buildTodoList,
   canSwitchToSession,
   clampPeekScroll,
@@ -1202,6 +1203,12 @@ describe("dock tabs and agents pane", () => {
           createdAt: now - 4 * 60_000,
           lastEventAt: now - 4 * 60_000,
           mission: "Audit the proxy layer",
+          turns: 3,
+          maxTurns: 25,
+          activity: [
+            { tool: "read", summary: "src/index.ts", status: "completed" },
+            { tool: "bash", summary: "npm test", status: "running" },
+          ],
         },
         {
           id: "task_2",
@@ -1224,9 +1231,18 @@ describe("dock tabs and agents pane", () => {
     assert.match(text, /Audit the proxy layer/);
     assert.match(text, /settled/);
     const wideRow = lines[1] ?? "";
+    assert.match(wideRow, /^\u2502/, "agent row carries the border rail");
     assert.match(wideRow, /task_1/);
     assert.match(wideRow, /Audit the proxy layer/);
     assert.match(wideRow, /running/);
+    assert.match(wideRow, /3\/25 turns/, "turn progress rides in the row trail");
+    // No selection here, so the live running row shows its latest activity
+    // (oldest-first ledger: the last entry) on an indented sub-line; the
+    // settled row shows none.
+    assert.equal(lines.length, 4, "header plus two rows plus one activity line");
+    const activityLine = lines[2] ?? "";
+    assert.match(activityLine, /^\u2502/, "activity line hangs off the border rail");
+    assert.match(activityLine, /bash npm test/, "latest activity surfaces under the running row");
     const tight = renderAgentList(
       theme,
       36,
@@ -1242,11 +1258,14 @@ describe("dock tabs and agents pane", () => {
       { now },
     );
     const tightRow = tight[1] ?? "";
+    assert.match(tightRow, /^\u2502/, "agent row carries the border rail");
     assert.match(tightRow, /task_2/);
     assert.match(tightRow, /thinking/);
     assert.match(tightRow, /8s/);
-    assert.match(tightRow, /\.\.\./);
+    // The rail costs the row one column, so the middle budget drops to 3
+    // and the mission hard-truncates (ellipsis needs budget > 3).
     assert.doesNotMatch(tightRow, /nested workspace/);
+    assert.ok(safeVisibleWidth(tightRow) <= 36, "bordered row stays within budget");
     const queued = renderAgentList(
       theme,
       100,
@@ -1327,14 +1346,14 @@ describe("dock tabs and agents pane", () => {
     assert.match(tightDirectiveRow, /\.\.\./);
     assert.doesNotMatch(tightDirectiveRow, /nested workspace/);
     // The agents pane shares the todo dock's flat identity: no receipt-tree
-    // chrome, and body rows hang at the same two-space inset as todo rows.
+    // chrome. Agent rows hang off a left border rail instead of the todo
+    // two-space inset, with the latest activity on a sub-line under live rows.
     assert.ok(!text.includes("\u25c6"), "diamond header glyph");
     assert.ok(!text.includes("\u251c\u2500"), "branch rail");
     assert.ok(!text.includes("\u2570\u2500"), "last-branch rail");
-    assert.ok(!text.includes("\u2502"), "continuation gutter");
     assert.ok(
-      lines.slice(1).every((line) => line.startsWith("  ")),
-      "every agent row hangs at the flat two-space inset",
+      lines.slice(1).every((line) => line.startsWith("\u2502")),
+      "every agent row and activity line hangs off the border rail",
     );
   });
 
@@ -1865,6 +1884,7 @@ describe("agents tab in all modes with selection and peek", () => {
       clearScreen(): void {}
       setTitle(): void {}
       setProgress(): void {}
+      setProgramStatus(): void {}
     }
     class InputSink implements Component {
       readonly keys: string[] = [];
@@ -2180,6 +2200,72 @@ describe("agents tab in all modes with selection and peek", () => {
     assert.equal(agentRowAtY(NaN, 2), undefined);
   });
 
+  it("maps clicks layout-aware across activity sub-lines", () => {
+    const items = [
+      { id: "task_1", agent: "oracle", lifecycle: "running", createdAt: 1, activity: [{ tool: "bash", summary: "npm test", status: "running" }] },
+      { id: "task_2", agent: "artisan", lifecycle: "running", createdAt: 2 },
+      { id: "task_3", agent: "scout", lifecycle: "settled", createdAt: 3 },
+    ];
+    // No selection: live rows are eligible, so only row 0 (live + activity) owns a sub-line.
+    assert.deepEqual(agentSubLineFlags(items, undefined), [true, false, false]);
+    const layout = { items, selectedIndex: undefined };
+    assert.equal(agentRowAtY(1, 3, 8, layout), 0);
+    assert.equal(agentRowAtY(2, 3, 8, layout), 0, "sub-line click selects its parent agent");
+    assert.equal(agentRowAtY(3, 3, 8, layout), 1, "row below a sub-line is not misrouted");
+    assert.equal(agentRowAtY(4, 3, 8, layout), 2);
+    assert.equal(agentRowAtY(5, 3, 8, layout), undefined, "past the last visual row");
+    assert.equal(agentRowAtY(0, 3, 8, layout), undefined, "header is not a row");
+    // Rendered pane agrees with the mapping: header + row + sub + row + row.
+    const lines = renderAgentList(theme, 80, items, {});
+    assert.equal(lines.length, 5);
+    // Selection in force: only the selected row is eligible even when others have activity.
+    const selected = [
+      { id: "task_1", agent: "oracle", lifecycle: "running", createdAt: 1, activity: [{ tool: "bash", summary: "npm test", status: "running" }] },
+      { id: "task_2", agent: "artisan", lifecycle: "running", createdAt: 2, activity: [{ tool: "read", summary: "src/a.ts", status: "running" }] },
+    ];
+    assert.deepEqual(agentSubLineFlags(selected, 1), [false, true]);
+    const selLayout = { items: selected, selectedIndex: 1 };
+    assert.equal(agentRowAtY(1, 2, 8, selLayout), 0);
+    assert.equal(agentRowAtY(2, 2, 8, selLayout), 1);
+    assert.equal(agentRowAtY(3, 2, 8, selLayout), 1, "selected sub-line selects its parent");
+    assert.equal(agentRowAtY(4, 2, 8, selLayout), undefined);
+    // No sub-lines: layout mapping matches the legacy y-1 behavior.
+    const plain = [
+      { id: "task_1", agent: "oracle", lifecycle: "settled", createdAt: 1 },
+      { id: "task_2", agent: "artisan", lifecycle: "settled", createdAt: 2 },
+    ];
+    assert.deepEqual(agentSubLineFlags(plain, undefined), [false, false]);
+    assert.equal(agentRowAtY(1, 2, 8, { items: plain, selectedIndex: undefined }), agentRowAtY(1, 2));
+    assert.equal(agentRowAtY(2, 2, 8, { items: plain, selectedIndex: undefined }), agentRowAtY(2, 2));
+    assert.equal(agentRowAtY(3, 2, 8, { items: plain, selectedIndex: undefined }), agentRowAtY(3, 2));
+    // The real click path forwards layout state: sub-line and row-below clicks route correctly.
+    const seen: number[] = [];
+    const hooks = {
+      onAgentRow: (rowIndex: number) => { seen.push(rowIndex); },
+      rowCount: () => items.length,
+      agentLayout: () => ({ items, selectedIndex: undefined as number | undefined }),
+    };
+    dockClickResult({ type: "click", button: "left", y: 2 } as any, hooks);
+    dockClickResult({ type: "click", button: "left", y: 3 } as any, hooks);
+    assert.deepEqual(seen, [0, 1]);
+  });
+
+  it("themes the agent-row rail with the borderMuted tone", () => {
+    const seen: Array<{ token: string; text: string }> = [];
+    const recording = {
+      fg: (token: string, text: string) => {
+        seen.push({ token, text });
+        return text;
+      },
+    };
+    renderAgentList(recording as any, 80, [
+      { id: "task_1", agent: "oracle", lifecycle: "running", createdAt: 1, activity: [{ tool: "bash", summary: "npm test", status: "running" }] },
+    ], {});
+    assert.ok(seen.some((call) => call.token === "borderMuted" && call.text === "\u2502"), "agent rail reads borderMuted at call time");
+    renderAgentList(recording as any, 80, [], {});
+    assert.ok(seen.filter((call) => call.token === "borderMuted" && call.text === "\u2502").length >= 2, "no-agents row shares the themed rail");
+  });
+
   it("renders the peek body bounded with transcript tail", () => {
     const transcript = [
       "lead: please audit the proxy",
@@ -2362,9 +2448,10 @@ describe("agents tab in all modes with selection and peek", () => {
       tabs: { pane: "agents", agentCount: 8 },
       selectedIndex: 7,
     });
-    assert.equal(lines.length, 9, "header plus every retained worker");
-    assert.match(lines.at(-1) ?? "", /task_8/);
-    assert.match(lines.at(-1) ?? "", /\u25b8/, "eighth worker can be visibly selected");
+    assert.equal(lines.length, 10, "header plus every retained worker plus the selected activity line");
+    assert.match(lines.at(-2) ?? "", /task_8/);
+    assert.match(lines.at(-2) ?? "", /\u25b8/, "eighth worker can be visibly selected");
+    assert.match(lines.at(-1) ?? "", /bash npm run typecheck/, "selected row shows its latest activity");
     assert.match(lines[0], /6 running/);
     assert.match(lines[0], /2 settled/);
   });
@@ -2380,6 +2467,7 @@ describe("agents tab in all modes with selection and peek", () => {
       await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
       const agents = dock.render(80);
       assert.match(agents[1], /\u25b8/, "first row selected with a distinct marker");
+      assert.match(agents[1] ?? "", /^\u2502/, "selected row carries the border rail");
       assert.doesNotMatch(agents[1], /^  [\u25cb\u25cf\u25a1\u25a0] /, "selection marker is not a todo glyph");
     } finally {
       dock.shutdown();
@@ -2592,7 +2680,7 @@ describe("agents tab in all modes with selection and peek", () => {
     }
   });
 
-  it("insets peek content so no row starts flush at column 0 when width allows a gutter", () => {
+  it("frames peek content with a left border rail when width allows chrome", () => {
     const item = worker({ lifecycle: "running" });
     for (const width of [40, 80]) {
       const lines = renderPeekBody(theme, width, item, {
@@ -2601,7 +2689,7 @@ describe("agents tab in all modes with selection and peek", () => {
       });
       for (const line of lines) {
         if (line.trim().length > 0) {
-          assert.ok(line.startsWith(" "), "non-empty content row must start with leading gutter space");
+          assert.ok(line.startsWith("\u2502"), "non-empty content row must start with the border rail");
         }
       }
     }
@@ -3164,6 +3252,10 @@ describe("fusion sidekick rail", () => {
     });
     const text = stripAnsi(lines.join("\n"));
     assert.equal(lines.length, 24, "chip steals a body row, total still fills the pane");
+    assert.ok(
+      lines.every((line) => line.startsWith("\u2502")),
+      "every rail row carries the left border",
+    );
     assert.match(text, /scout/, "first worker chip");
     assert.match(text, /artisan/, "second worker chip");
     assert.match(text, /\u25b8/, "selected worker is marked");

@@ -184,6 +184,22 @@ model-array key that is not part of the documented schema above — treat any
 undocumented key found in the active file as provider/tooling-specific rather
 than assuming it is a typo; verify against the installed docs before editing.
 
+### Temporary shim: Meta Muse Wonder (remove once pi ships it natively)
+
+The local-only (gitignored) `agent/models.json` currently carries `providers.meta.models`
+entries for `muse-wonder-1.0` and `muse-wonder-1.0-contributor`. Pi 1.1.0's baked-in
+catalog predates Wonder's 2026-10-12 launch, and `pi update --models` only refreshes
+metadata for known models, so it cannot discover the new IDs. Non-`contextWindow`
+fields (`maxTokens`, `thinkingLevelMap`, image limits) were borrowed from
+`muse-spark-1.3`, and `cost` was left unset because Meta has not published Wonder
+pricing yet. Delete the `meta` block from `agent/models.json` (or the whole file if
+it becomes empty) once `pi update` lists Wonder on its own — verify with a fresh
+`GET https://api.meta.ai/v1/models` comparison. `muse-wonder-full-1.0` (1M context
+per Meta dev docs) is intentionally not shimmed: it is Muse Code subscription-only
+(Power/Maximum plans) and absent from the live `GET /v1/models` list for this account,
+so a models.json entry for it would be dead/non-callable. Revisit only if it appears
+in `GET https://api.meta.ai/v1/models`, copying the existing Wonder entry's fields.
+
 ### Example
 
 `agent/models.example.json` mirrors the real shape (`providers.local-proxy`,

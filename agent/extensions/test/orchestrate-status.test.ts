@@ -96,9 +96,11 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     let busy = false;
     let workerBusy = false;
     const notices: string[] = [];
-    const ctx: any = { cwd: dir, hasUI: true, isIdle: () => !busy,
+    const statuses = new Map<string, string | undefined>();
+    const pairStatus = () => { const text = statuses.get("fusion-pair"); return text === undefined ? undefined : JSON.parse(text); };
+    const ctx: any = { cwd: dir, mode: "rpc", hasUI: true, isIdle: () => !busy,
       sessionManager: { getEntries: () => entries, getBranch: () => entries },
-      ui: { theme: { name: "apex-dark" }, setStatus() {}, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
+      ui: { theme: { name: "apex-dark" }, setStatus: (key: string, text: string | undefined) => { statuses.set(key, text); }, notify: (text: string) => notices.push(text), setTheme(name: string) { this.theme.name = name; return { success: true }; } },
     };
     const pi: any = {
       registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, registerTool() {}, registerShortcut() {},
@@ -111,6 +113,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     promptCommands(pi);
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
     await emit("session_start", { reason: "new" });
+    assert.ok(statuses.has("fusion-pair") && pairStatus() === undefined, "non-Fusion startup clears the structured pair");
     const prompt = async (systemPrompt = "Apex base") => {
       const options = {
         cwd: dir,
@@ -183,6 +186,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.equal(process.env.PI_BEHAVIOR_MODE, "fusion");
     const restoredEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
     assert.deepEqual(restoredEntry.data.models.fusion, restoredEntry.data.fusion.lead, "successful restore normalizes session Fusion metadata");
+    assert.deepEqual(pairStatus(), restoredEntry.data.fusion, "Fusion startup publishes the structured pair");
     let persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
     assert.deepEqual(persisted.fusion, newerGlobalPair, "implicit session restore preserves newer global Fusion defaults");
     assert.deepEqual(persisted.models.fusion, newerGlobalPair.lead);
@@ -194,15 +198,25 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
     assert.deepEqual(persisted.fusion, restoredEntry.data.fusion, "explicit Fusion activation updates global defaults to the selected session pair");
     assert.deepEqual(persisted.models.fusion, restoredEntry.data.fusion.lead);
+    assert.deepEqual(pairStatus(), persisted.fusion, "successful Fusion switch publishes the pair");
     await emit("model_select", { source: "user", model: { provider: "override", id: "lead" } });
     persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
     assert.deepEqual(persisted.fusion.lead, { provider: "override", modelId: "lead", thinking: "medium" }, "explicit /model updates the authoritative global lead");
     assert.deepEqual(persisted.models.fusion, persisted.fusion.lead);
+    assert.deepEqual(pairStatus(), persisted.fusion, "model selection republishes the pair");
     await emit("thinking_level_select", { level: "high" });
     persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
     assert.equal(persisted.fusion.lead.thinking, "high", "thinking selection persists through the authoritative pair");
     assert.deepEqual(persisted.models.fusion, persisted.fusion.lead);
+    assert.deepEqual(pairStatus(), persisted.fusion, "thinking selection republishes the pair");
     await commands.mode("pi", ctx);
+    assert.ok(statuses.has("fusion-pair") && pairStatus() === undefined, "leaving Fusion clears the structured pair");
+    ctx.mode = "tui";
+    statuses.delete("fusion-pair");
+    await commands.mode("fusion", ctx);
+    assert.equal(statuses.has("fusion-pair"), false, "TUI never receives the raw JSON status");
+    await commands.mode("pi", ctx);
+    ctx.mode = "rpc";
     assert.deepEqual(active, ["read", "write", "edit", "bash", "task_start", "fffind", "ffgrep", "intercom"]);
     await commands.mode("work", ctx);
     assert.equal(process.env.PI_BEHAVIOR_MODE, "work");
@@ -290,7 +304,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     ctx.modelRegistry = {
       async refresh() { refreshed = true; },
       getAll() { return catalog; },
-      getAvailable() { assert.equal(refreshed, true); return catalog.slice(0, 1); },
+      getAvailable() { assert.equal(refreshed, false, "picker uses the startup registry snapshot without refresh"); return catalog.slice(0, 1); },
       find: () => undefined,
     };
     ctx.ui.custom = async (factory: Function) => new Promise(resolve => {

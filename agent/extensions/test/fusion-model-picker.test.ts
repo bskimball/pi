@@ -74,12 +74,27 @@ test("resizes its viewport, bounds row widths, and handles no matches without se
   assert.equal(state.completed, false);
 });
 
-test("RPC selection validates an exact model ID without exposing the global catalog", async () => {
+test("RPC selection offers configured provider/model identities through select, without refresh or input", async () => {
+  const available = [...models].reverse();
+  let refreshed = 0;
+  let offered: string[] = [];
+  let answer: string | undefined = "local-proxy/model-49";
   const ctx: any = {
-    mode: "rpc", modelRegistry: { refresh: async () => {}, getAvailable: () => models },
-    ui: { input: async () => "local-proxy/model-49", notify() {} },
+    mode: "rpc", modelRegistry: { refresh: async () => { refreshed++; }, getAvailable: () => available },
+    ui: { select: async (_title: string, options: string[]) => { offered = options; return answer; }, input: async () => assert.fail("input must not be used"), notify() {} },
   };
-  assert.equal((await pickFusionModel(ctx, "Fusion lead"))?.id, "model-49");
-  ctx.ui.input = async () => "unconfigured/model";
+  assert.equal(await pickFusionModel(ctx, "Fusion lead"), available[0], "returns the exact model object");
+  assert.equal(offered.length, models.length);
+  assert.equal(offered[0], "local-proxy/model-00", "sorted by provider/id");
+  await pickFusionModel(ctx, "Fusion lead", { provider: "local-proxy", modelId: "model-30" });
+  assert.equal(offered[0], "local-proxy/model-30", "prior selection first");
+  assert.equal(offered[1], "local-proxy/model-00");
+  answer = undefined;
+  assert.equal(await pickFusionModel(ctx, "Fusion lead"), undefined, "cancel returns undefined");
+  assert.equal(refreshed, 0, "the registry snapshot is used without refresh");
+  const warnings: string[] = [];
+  ctx.modelRegistry.getAvailable = () => [];
+  ctx.ui.notify = (text: string) => warnings.push(text);
   assert.equal(await pickFusionModel(ctx, "Fusion lead"), undefined);
+  assert.match(warnings.join("\n"), /No models available/);
 });
