@@ -3,6 +3,11 @@ import { test } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { registerModes } from "../prompt-commands/modes.ts";
+import { initialPreferences } from "../prompt-commands/mode-state.ts";
 import { FusionModelPicker, pickFusionModel } from "../prompt-commands/model-picker.ts";
 
 const theme = { fg: (_key: string, text: string) => text } as Theme;
@@ -97,4 +102,89 @@ test("RPC selection offers configured provider/model identities through select, 
   ctx.ui.notify = (text: string) => warnings.push(text);
   assert.equal(await pickFusionModel(ctx, "Fusion lead"), undefined);
   assert.match(warnings.join("\n"), /No models available/);
+});
+
+test("fusion-set changes only its role and rolls back failed asynchronous configuration", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-fusion-set-"));
+  const saved = { ...process.env };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  const path = join(dir, "mode-settings.json");
+  const pair = { lead: { provider: "configured", modelId: "Lead", thinking: "high" }, sidekick: { provider: "configured", modelId: "Side", thinking: "low" } };
+  writeFileSync(path, JSON.stringify({ ...initialPreferences(), mode: "fusion", fusion: pair }));
+  try {
+    const commands: any = {}, handlers: any = {}, notices: string[] = [], statuses: any = {};
+    const available = ["Lead", "Side", "Org/New", "Plain"].map(id => ({ provider: "configured", id, reasoning: id !== "Plain" }));
+    let thinking = "high", busy = false, failure = "", rollbacks = 0, requests = 0;
+    let pending: (() => void) | undefined;
+    const ctx: any = { mode: "rpc", hasUI: true, model: available[0], isIdle: () => !busy,
+      modelRegistry: { find: (provider: string, id: string) => available.find(m => m.provider === provider && m.id === id), getAvailable: () => available },
+      sessionManager: { getBranch: () => [] },
+      ui: { setStatus: (key: string, value: any) => { statuses[key] = value; }, notify: (text: string) => notices.push(text) } };
+    const pi: any = { registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; }, on: (name: string, fn: any) => { (handlers[name] ??= []).push(fn); },
+      getAllTools: () => [], getActiveTools: () => [], setActiveTools() {}, appendEntry() {},
+      getThinkingLevel: () => thinking, setThinkingLevel: (value: string) => { thinking = value; },
+      setModel: async (model: any) => { ctx.model = model; return true; },
+      events: { emit: (name: string, request: any) => {
+        if (name !== "pi:fusion:configure") return;
+        requests++;
+        if (failure === "missing") return;
+        request.acknowledged = true;
+        request.rollback = async () => { rollbacks++; };
+        request.promise = failure === "async" ? Promise.reject(new Error("configure rejected")) : failure === "pending" ? new Promise<void>(resolve => { pending = resolve; }) : Promise.resolve();
+      } } };
+    registerModes(pi, "", "", "", "");
+    await handlers.session_start[0]({ reason: "new" }, ctx);
+    const run = (args: string) => commands.mode(args, ctx);
+    const published = () => JSON.parse(statuses["fusion-pair"]);
+    await run("fusion-set sidekick model configured/Org/New");
+    assert.deepEqual(published(), { lead: pair.lead, sidekick: { ...pair.sidekick, modelId: "Org/New" } });
+    assert.equal(ctx.model.id, "Lead");
+    await run("fusion-set sidekick thinking medium");
+    const side = published().sidekick;
+    await run("fusion-set lead model configured/Org/New");
+    assert.deepEqual(published().sidekick, side);
+    assert.equal(thinking, "high");
+    await run("fusion-set lead thinking low");
+    assert.equal(thinking, "low");
+    assert.deepEqual(published().sidekick, side);
+    await run("fusion-set sidekick model configured/Plain");
+    assert.equal(published().sidekick.thinking, "off");
+    const before = readFileSync(path, "utf8"), status = statuses["fusion-pair"], count = requests;
+    for (const args of ["fusion-set sidekick model configured/missing", "fusion-set lead thinking nonsense", "fusion-set other model configured/Lead"]) await run(args);
+    busy = true;
+    await run("fusion-set lead model configured/Lead");
+    busy = false;
+    assert.equal(requests, count);
+    for (failure of ["async", "missing"]) {
+      await run("fusion-set lead model configured/Lead");
+      assert.equal(readFileSync(path, "utf8"), before);
+      assert.equal(statuses["fusion-pair"], status);
+      assert.equal(ctx.model.id, "Org/New");
+      assert.equal(thinking, "low");
+    }
+    assert.equal(rollbacks, 1);
+    failure = "pending";
+    const change = run("fusion-set sidekick thinking off");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(readFileSync(path, "utf8"), before, "no save before async acknowledgment completes");
+    assert.equal(statuses["fusion-pair"], status);
+    await run("fusion-set lead thinking high");
+    pending!();
+    await change;
+    assert.equal(thinking, "low", "concurrent change was rejected");
+    failure = "";
+    await run("pi");
+    const inactiveCount = requests;
+    await run("fusion-set lead thinking high");
+    assert.equal(requests, inactiveCount);
+    assert.match(notices.join("\n"), /Unsupported thinking level/);
+    assert.match(notices.join("\n"), /active, configured Fusion/);
+    assert.match(notices.join("\n"), /did not acknowledge/);
+    assert.match(notices.join("\n"), /configure rejected/);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

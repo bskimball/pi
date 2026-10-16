@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import { MODES, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
@@ -216,10 +216,46 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     } finally { changing = false; }
   }
   pi.registerCommand("mode", {
-    description: "Switch Pi, Apex, Apex Orchestrate, Fusion, or Work; /mode configure edits the active collaboration pair",
+    description: "Switch Pi, Apex, Apex Orchestrate, Fusion, or Work; /mode configure edits the pair; /mode fusion-set <lead|sidekick> <model|thinking> <value>",
     handler: async (args, ctx) => {
       if (!idle(ctx)) return;
       let value = args.trim().toLowerCase();
+      if (value.split(/\s+/)[0] === "fusion-set") {
+        const parts = args.trim().split(/\s+/);
+        const [, role, field, selection] = parts;
+        if (parts.length !== 4 || (role !== "lead" && role !== "sidekick") || (field !== "model" && field !== "thinking")) {
+          ctx.ui.notify("Usage: /mode fusion-set <lead|sidekick> model <provider>/<modelId> or /mode fusion-set <lead|sidekick> thinking <level>", "warning");
+          return;
+        }
+        if (state.mode !== "fusion" || !state.fusion) {
+          ctx.ui.notify("Fusion pair changes require an active, configured Fusion mode.", "warning");
+          return;
+        }
+        const pair = structuredClone(state.fusion);
+        const choice = pair[role];
+        const slash = selection.indexOf("/");
+        const provider = field === "model" ? selection.slice(0, slash) : choice.provider;
+        const modelId = field === "model" ? selection.slice(slash + 1) : choice.modelId;
+        const model = ctx.modelRegistry.getAvailable().find(model => model.provider === provider && model.id === modelId);
+        if ((field === "model" && slash <= 0) || !model) {
+          ctx.ui.notify(`Model unavailable: ${field === "model" ? selection : `${provider}/${modelId}`}. Choose an available configured model.`, "error");
+          return;
+        }
+        if (field === "thinking") {
+          const levels: string[] = getSupportedThinkingLevels(model);
+          if (!levels.includes(selection)) {
+            ctx.ui.notify(`Unsupported thinking level: ${selection}. Supported: ${levels.join(", ")}.`, "error");
+            return;
+          }
+          choice.thinking = selection;
+        } else {
+          choice.provider = model.provider;
+          choice.modelId = model.id;
+          choice.thinking = clampThinkingLevel(model, choice.thinking as Parameters<typeof clampThinkingLevel>[1]);
+        }
+        await switchMode("fusion", ctx, pair);
+        return;
+      }
       if (value === "configure") {
         if (state.mode === "work") {
           ctx.ui.notify("Work mode has no lead/sidekick pair to configure \u2014 it dispatches strategist, researcher, author, and clerk. Switch to Fusion to configure a pair.", "info");

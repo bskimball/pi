@@ -103,18 +103,18 @@ const ansiFg = (hex: string, text: string) => {
 // below is guarded; any failure falls back to this built-in set, which matches
 // the shipped apex-dark values.
 const DEFAULT_AGENT_HUES: Record<string, string> = {
-  advisor: "#94e2d5",
-  artisan: "#cba6f7",
-  inspector: "#89b4fa",
-  librarian: "#89dceb",
-  machinist: "#a6e3a1",
-  oracle: "#b4befe",
-  picasso: "#fab387",
-  scout: "#f9e2af",
-  scribe: "#f5c2e7",
-  stevedore: "#74c7ec",
-  author: "#f5c2e7",
-  fallback: "#6c7086",
+  advisor: "#5eead4",
+  artisan: "#c4b5fd",
+  inspector: "#38bdf8",
+  librarian: "#67e8f9",
+  machinist: "#4ade80",
+  oracle: "#a5b4fc",
+  picasso: "#fdba74",
+  scout: "#fbbf24",
+  scribe: "#f9a8d4",
+  stevedore: "#7dd3fc",
+  author: "#f9a8d4",
+  fallback: "#64748b",
 };
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
