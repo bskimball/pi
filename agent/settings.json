@@ -7,7 +7,8 @@
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
     "npm:pi-claude-bridge",
-    "npm:pi-antigravity"
+    "npm:pi-antigravity",
+    "npm:@amaster.ai/pi-computer-use"
   ],
   "skills": [
     "-skills/chrome-devtools-cli",
@@ -20,6 +21,12 @@
     "-skills/codex",
     "-skills/apex"
   ],
+  "pi-computer-use": {
+    "mode": "bundled",
+    "confirmAppLaunch": true,
+    "confirmDangerousActions": true,
+    "toolProfile": "core"
+  },
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",
