@@ -32,7 +32,8 @@ describe("command resolution", () => {
     const bin = join(dir, "npm-layout");
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "typescript-language-server"), "#!/usr/bin/env node\n");
-    writeFileSync(join(bin, "typescript-language-server.cmd"), "@echo off\n");
+    // Match PATHEXT casing so the Windows-policy fixture also works on case-sensitive hosts.
+    writeFileSync(join(bin, "typescript-language-server.CMD"), "@echo off\n");
     writeFileSync(join(bin, "typescript-language-server.ps1"), "echo");
 
     const resolved = resolveCommandPath(
@@ -115,7 +116,7 @@ describe("command resolution", () => {
     const bin = join(dir, "exe-layout");
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "gopls"), "not-an-exe");
-    writeFileSync(join(bin, "gopls.exe"), "MZ");
+    writeFileSync(join(bin, "gopls.EXE"), "MZ");
 
     const resolved = resolveCommandPath("gopls", undefined, "win32", bin, ".COM;.EXE;.BAT;.CMD");
     assert.ok(resolved);

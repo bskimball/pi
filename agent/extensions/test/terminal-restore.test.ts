@@ -194,8 +194,9 @@ describe("interactive terminal restore", () => {
       assert.match(crashLog, /runtime-snapshot:/);
       assert.match(lifecycle, /schedulerLagMs=12/);
       assert.match(crashLog, /tool-start name=todo_write/);
-      assert.match(lifecycle, /windows-postmortem: disabled/);
       if (process.platform === "win32") {
+        assert.match(lifecycle, /windows-postmortem: disabled/);
+        assert.match(crashLog, /windows-postmortem: disabled/);
         const windowsExitObservation =
           /exit-observation: source=windows-process-handle (?:signed=-?\d+ unsigned=\d+ hex=0x[0-9a-f]{8}|unavailable error=.+)/;
         assert.match(
@@ -208,6 +209,8 @@ describe("interactive terminal restore", () => {
         );
       } else {
         assert.match(lifecycle, /exit-observation: unavailable/);
+        assert.doesNotMatch(lifecycle, /windows-postmortem:/);
+        assert.doesNotMatch(crashLog, /windows-postmortem:/);
       }
       assert.throws(() =>
         readFileSync(runtimeSnapshotPath(parent.pid!, 0), "utf8"),
