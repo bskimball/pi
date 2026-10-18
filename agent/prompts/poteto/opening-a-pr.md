@@ -1,46 +1,40 @@
 # Opening a PR
 
-Git policy for every playbook that changes the repository (Bug fix, Feature, Refactor, Unattended). Investigation and Prototype do not touch git. The router copies the Preflight step in as the first todo and the Closer steps in as the last todos.
+Git policy for repository-changing playbooks (Bug fix, Feature, Refactor, Unattended). Investigation and Prototype do not mutate Git. Copy Preflight first and Closer last into the playbook todos.
 
-**Done when** the work sits on its own branch as small Conventional Commits, and is either published as a ready PR (level `pr`) or reported as local-only with the exact next command.
+Read `<agent-dir>/skills/shipping/SKILL.md` before preflight. It owns task registration, scoped checkpoints, worker integration, exact-revision verification, publication, landing, recovery and cleanup. Resolve agent dir from `PI_CODING_AGENT_DIR`, otherwise `~/.pi/agent`, not the project cwd.
+
+**Done when** the selected delivery target is met with a shipping receipt: local checkpoint, ready PR, or confirmed landing and task-owned cleanup. Implementation completion alone is not delivery completion.
 
 ## Permission level
-Invoking `/poteto` is the user's permission for this run's git actions. There is no per-repo setting. Levels:
-- `pr` (the default when `origin` is on GitHub and `gh auth status` succeeds): branch, commit, push the branch, open or update a ready PR, and file issues for adjacent bugs.
-- `local` (the default otherwise): branch and commit only.
-- `off`: no branch, commit, push, or PR. Skip every step below with `skip: git level off`.
 
-The goal can lower the level. "Local only" or "don't push" lowers it to `local`, and "don't commit" lowers it to `off`. The playbooks call the result "the effective git level" (or just "the git level"). Some actions stay behind an explicit ask at every level: merging, force-pushing, deleting branches, rewriting pushed commits, and pushing to the default branch. Never use `--no-verify`.
+Invoking `/poteto` grants this run's branch, scoped local commits, push to its task branch, ready PR and adjacent-bug issue creation on an authenticated GitHub destination. No AGENTS.md permission setting is needed.
+
+- `pr`: default when the intended remote is GitHub and `gh auth status` succeeds. Resolve the remote explicitly; `origin` may be upstream rather than the user's fork.
+- `local`: default otherwise, or when the user says “local only” / “don't push”. Branch and scoped commits only.
+- `off`: “don't commit”; skip all mutating Git steps with `skip: git level off`.
+- `ship`: an explicit “ship when ready” in this goal, or a later `/ship`, extends permission to landing this task on the selected default branch and cleaning its owned temporary artifacts. Without a usable authenticated destination, stop locally with the blocker. A narrower no-push/no-commit constraint wins.
+
+These permissions cover this run, not unrelated tasks or upstream branches. Pushed-history rewriting, bypassing checks/hooks, and deployment/install/version bumps remain outside this permission. Normal PR-only invocation does not authorize merging or arming auto-merge.
 
 ## Preflight
-1. Confirm the target is a git worktree and record the default branch name without the `origin/` prefix. Use `git symbolic-ref --short refs/remotes/origin/HEAD` (strip `origin/`), then `gh repo view --json defaultBranchRef`, then fall back to `main`. `<default>` below means that name. `<base>` means `git merge-base HEAD origin/<default>`, or the local `<default>` when there is no remote. Then pick the branch:
-   - On the default branch, run `git switch -c <type>/<slug>`. `<type>` is `fix` for Bug fix, `feat` for Feature, and `refactor` for Refactor; for Unattended it matches the work. `<slug>` is 2–5 kebab-case words from the goal. Uncommitted changes carry over to the new branch and stay unstaged.
-   - On a branch that belongs to this goal (matching name or open PR), stay on it.
-   - On a branch with unrelated work, create the new branch from the default branch in a separate worktree (`worktree add`) and work there. Leave the other branch untouched.
-   - If a file this goal must edit already has uncommitted changes you did not make, use a separate worktree. Do not mix those changes into your commits.
-   - If the goal names an issue (`#N` or an issue URL), read it with `gh issue view N` and keep `N` for the closer.
-   Criterion: branch name, default branch, worktree path, and any linked issue are stated, or `skip: <reason>`.
 
-## Commits (during the playbook)
-- Commit at each verified checkpoint, not at the end. Stage only paths this goal changed (`git add <paths>`). Never `git add -A` or `git add .`. Never stage secrets, temp artifacts, or files you did not change.
-- Write titles in Conventional Commits form, `type(scope): subject`. Use `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, or `perf` as the type (`wip` only for an Unattended stop) and the changed area as the scope. Keep the subject imperative and no longer than 72 characters. Add a body only to say why when the diff does not show it.
-- When a fix belongs in an unpushed commit, use `git commit --fixup <sha>`. Before the first push, run `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <base>`. Each commit should be landable and ordered to tell the story. Once the branch has an upstream (`git rev-parse @{u}` succeeds), add plain new commits and skip the rebase. Never rewrite pushed commits.
-- Bug fix: when the repro lives in a repo test (an existing test file, or one the user approved), commit it first as `test(scope): reproduce <bug>`, then commit the fix. This does not authorize new test files.
+1. Follow Shipping's Register steps: resolve the exact repository/remote/default branch; select one task branch and clean outcome checkout; register owned paths, base SHA and canonical checks with `shipping begin`. Reuse the current task branch when it belongs to this goal. If it belongs to another goal or necessary files contain unowned changes, isolate this goal instead of mixing them. On the default branch, create `<type>/<2–5-word-slug>` (`fix`, `feat`, or `refactor`; Unattended matches its work). If the goal names an issue, read it using explicit `gh issue view N --repo OWNER/REPO`. Criterion: task id, worktree, branch, base, destination, delivery level and linked issue stated, or a reasoned skip.
+
+## Commits during the playbook
+
+- Use Shipping's scoped checkpoints after local proof. Stage only owned paths; never `git add -A` or `git add .`. Never include secrets or another task's changes.
+- Use `type(scope): imperative subject`, at most 72 characters. Keep coherent commits; add new corrective commits rather than rewriting checkpoint history that integration receipts depend on. Never rewrite pushed commits.
+- For Bug fix, an approved repo regression can be committed before the fix as `test(scope): reproduce <bug>`. This does not authorize creating new test files by itself.
+- Internal worker branches feed the outcome branch; they do not each get a PR. Retire durably integrated worker artifacts at each milestone, not in a later “merge everything” pass.
 
 ## Closer
-2. Tidy and check. Autosquash fixups (unpushed branches only), review `git log --oneline <base>..HEAD` and `git diff <base>...HEAD --stat`, and confirm the tree is clean apart from changes you did not make. If the goal names issue `N`, the commit that closes it ends with the trailer `Fixes #N`. Criterion: ordered commit list shown; no stray staged or unstaged changes from this goal.
-3. Publish (level `pr` only; otherwise `skip: level local` and name the push command). If the current branch is `<default>` or HEAD is detached, stop at local and ask. Run `git push -u origin <branch>`. Check for an existing PR with `gh pr view --json number,url,state`. If one exists, push to it and update its body with `gh pr edit <n> --body-file <tmp>` when the scope changed. If not, run `gh pr create --base <default> --title "<conventional title>" --body-file <tmp>` without `--draft`. Write the body file under the OS temp dir. If a PR still opens as a draft, run `gh pr ready <n>`. If `gh` is missing, not logged in, or the remote is not GitHub, stop at local and say so. Criterion: `gh pr view <n> --json url,state,isDraft` was run after the write, and the reply quotes the URL and state from that output.
-4. Issues for adjacent bugs. List bugs found outside this goal's scope. At level `pr`, first check for duplicates with `gh issue list --state open --search "<keywords>"`. Then file each new one with `gh issue create`, including a title, repro, and evidence, and link it under the PR's `## Scope`. Below `pr`, write the issue text in the reply instead. Criterion: each adjacent bug is filed, matched to an existing issue, or drafted, or `skip: none found`.
-5. Stop. Do not merge, arm auto-merge, babysit CI, or delete the branch unless the user asked. Criterion: no merge, force-push, branch deletion, or pushed-history rewrite without an ask.
 
-## PR body
-Use these `##` headings, in this order. Drop an empty optional section. Keep the body under about 40 lines. A reviewer should understand the problem, scope, risk, and proof in under a minute.
-- `## Why`: the problem and the approach in 1–3 sentences, with `Fixes #N` when an issue is linked.
-- `## What changed`: 1–3 bullets. Name paths or symbols only when they carry the change.
-- `## Scope`: what is covered, plus meaningful gaps and the issues filed for them.
-- `## Tradeoffs` (optional): rejected alternatives a reviewer would ask about.
-- `## Blast Radius`: who and what is affected, and why that is safe or risky.
-- `## Verification`: 1–3 bullets with the real command or surface and its outcome. List only checks that ran this session.
+2. Converge and verify. Settle selected writers, integrate their scoped commits and retire worker artifacts. Review the actual integrated diff and run the registered canonical checks against the final clean candidate. Preserve unrelated work; if it prevents clean verification, use a separate outcome checkout. Criterion: exact candidate SHA with applicable review and gate evidence, or an explicit blocker.
+3. Deliver to the selected target. At `local`, report the checkpoint and next command; at `off`, report uncommitted work. At `pr`/`ship`, use Shipping's publication step and confirm the ready PR's repository, URL, state and head. Use the Shipping PR body headings. Criterion: remote evidence for the exact candidate, or an honest local-only result.
+4. Record adjacent bugs. At `pr`/`ship`, search for duplicate open issues with explicit `--repo` before filing each evidenced out-of-scope bug, then link it under the task PR's Scope. At lower levels, draft the issue text instead. Close only issues actually resolved by this task, normally through `Fixes #N` on its PR. Criterion: each adjacent bug is filed, matched or drafted, or `skip: none found`.
+5. Close at the selected boundary. At `ship`, run Shipping's landing and cleanup steps; queued auto-merge is pending, not landed. At `pr`, leave the outcome PR/branch for review; at `local`/`off`, preserve local work. Criterion: final receipt names the observed delivery state, exact commits, checks, cleanup, preserved work and next step. Do not babysit CI or merge at PR-only level.
 
 ## Reply
-Branch, the commit list (`git log --oneline <base>..HEAD`), the PR URL and state from `gh pr view` or the local-only next command, and issues linked, filed, or drafted.
+
+Use Shipping's final receipt, plus issues linked/filed/drafted and skipped playbook steps. Distinguish published, landed and installed. `/ship` resumes an existing PR task without starting another playbook or creating another PR.

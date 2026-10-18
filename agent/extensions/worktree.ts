@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { textResult } from "./worktree/internal/tool-result.ts";
+import { registerShipping } from "./worktree/internal/shipping-tool.ts";
+import { commonDir, commit, head, isAncestor, loadTask, locked, owns, registerTree, saveTree, scope, trees } from "./worktree/internal/shipping-state.ts";
 
 export const WORKTREE_TOOL_NAME = "worktree";
 export const GIT_TIMEOUT_MS = 30_000;
@@ -122,14 +124,14 @@ function exportPatch(cwd: string, paths: readonly string[]): { patch?: string; f
   const outside = changed.files.filter((file) => !pathIsAssigned(file, paths));
   if (outside.length) return { error: `refusing export; changed files outside assigned paths:\n${outside.join("\n")}` };
   if (!changed.files.length) return { error: "worktree has no changes to export." };
-  const tracked = git(cwd, ["diff", "--binary", "HEAD", "--", ...paths]);
+  const tracked = git(cwd, ["--literal-pathspecs", "diff", "--binary", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ...paths]);
   if (!tracked.ok) return { error: tracked.message || "git diff failed" };
   const chunks = [tracked.stdout];
   for (const file of changed.files) {
     if (git(cwd, ["ls-files", "--error-unmatch", "--", file]).ok) continue;
     const absolute = resolve(cwd, file);
     if (!existsSync(absolute) || statSync(absolute).isDirectory()) continue;
-    const untracked = git(cwd, ["diff", "--binary", "--no-index", "--", "/dev/null", file]);
+    const untracked = git(cwd, ["diff", "--binary", "--src-prefix=a/", "--dst-prefix=b/", "--no-index", "--", "/dev/null", file]);
     if (untracked.ok || untracked.stdout) chunks.push(untracked.stdout);
     else return { error: untracked.message || `failed to export untracked file ${file}` };
   }
@@ -155,14 +157,17 @@ function formatList(worktrees: Worktree[]): string {
 }
 
 export default function worktreeExtension(pi: ExtensionAPI): void {
+  registerShipping(pi);
   pi.registerTool({
     name: WORKTREE_TOOL_NAME,
     label: "Worktree",
-    description: "Create, list, remove, export scoped patches from, or apply scoped patches to local Git worktrees. Never commits or pushes.",
+    description: "Create, list, remove, export uncommitted scoped patches from, or apply scoped patches to Git worktrees. Records owner/base/task in Git-local metadata. Use shipping for committed worker integration and task cleanup. Never commits or pushes.",
     parameters: Type.Object({
       operation: Type.Union(OPERATIONS.map((value) => Type.Literal(value)), { description: "add | list | remove | export | apply" }),
       path: Type.Optional(Type.String({ description: "Worktree path for add, remove, or export; patch file path for apply." })),
       branch: Type.Optional(Type.String({ description: "Branch name for add." })),
+      startPoint: Type.Optional(Type.String({ description: "Explicit starting commit/ref for add. Defaults to the task HEAD or current HEAD; dirty changes are not inherited." })),
+      task: Type.Optional(Type.String({ description: "Shipping task slug owning this writer. Requires paths within that task's scope." })),
       force: Type.Optional(Type.Boolean({ description: "Use only with remove." })),
       paths: Type.Optional(Type.Array(Type.String(), { description: "Repository-relative paths assigned to this patch." })),
     }),
@@ -170,28 +175,45 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
       const root = repositoryRoot(ctx?.cwd ?? process.cwd());
       if (!root) return textResult("cwd must be inside a Git repository.", true);
       const operation = params.operation as typeof OPERATIONS[number];
+      const execute = async () => {
       const listed = () => {
         const result = git(root, ["worktree", "list", "--porcelain"]);
         return result.ok ? parseWorktreeList(result.stdout) : undefined;
       };
       if (operation === "list") {
         const worktrees = listed();
-        return worktrees ? textResult(boundText(formatList(worktrees))) : textResult("git worktree list failed.", true);
+        if (!worktrees) return textResult("git worktree list failed.", true);
+        const ownership = trees(root);
+        return textResult(boundText(formatList(worktrees) + "\n\nOwnership:\n" + ownership.filter(w => !w.removed).map(w => `${w.path}: task=${w.task ?? "unassigned"} owner=${w.owner} base=${w.base} state=${w.integrated ? "integrated" : w.settled ? "settled" : "working"}`).join("\n")));
       }
       if (operation === "add") {
         const branch = String(params.branch ?? `pi/wt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`).trim();
         if (!branch) return textResult("branch must not be empty.", true);
-        const target = resolve(params.path?.trim() || resolve(root, ".pi-worktrees", worktreeSlug(branch)));
+        const target = resolve(params.path?.trim() || resolve(root, "..", `${basename(root)}-worktrees`, worktreeSlug(branch)));
         if (!allowedWorktreePath(root, target)) {
           return textResult("worktree path must stay under the repository or its parent directory.", true);
         }
-        if (existsAndNotEmpty(target)) return textResult(`worktree path exists and is not empty: ${target}`, true);
+        const task = params.task ? loadTask(root, params.task) : undefined;
+        if (task && (task.cleaned || [task.branch, task.target].includes(branch))) throw new Error("Use a new worker branch for an open task, never its outcome/default branch.");
+        const paths = task ? scope(params.paths ?? []) : undefined;
+        if (task && paths?.some(p => !owns(task.paths, p))) throw new Error("Worker paths must be contained in task scope.");
+        const base = commit(root, params.startPoint ?? (task ? head(task.root) : "HEAD"));
+        if (task && !isAncestor(root, base, head(task.root))) throw new Error("Worker base must already be integrated in its task.");
+        if (!git(root, ["check-ref-format", `refs/heads/${branch}`]).ok) throw new Error("Invalid branch name.");
+        const owner = ctx.sessionManager?.getSessionId?.() ?? "unassigned";
+        const prior = trees(root).find(w => w.path === target && !w.removed);
+        if (existsAndNotEmpty(target)) {
+          if (prior && prior.owner === owner && prior.task === params.task && prior.branch === branch && listed()?.some(w => resolve(w.path) === target && w.branch === `refs/heads/${branch}`)) return textResult(`path: ${target}\nbranch: ${branch}\nAlready registered; no changes made.`);
+          return textResult(`worktree path exists and is not empty: ${target}`, true);
+        }
         const branchExists = git(root, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+        if (branchExists && commit(root, branch) !== base) throw new Error("Existing branch differs from startPoint; inspect and attach it explicitly.");
+        registerTree(root, { version: 1, path: target, branch, base, owner, task: params.task, paths });
         const result = git(root, branchExists
           ? ["worktree", "add", target, branch]
-          : ["worktree", "add", "-b", branch, target]);
-        if (!result.ok) return textResult(`git worktree add failed: ${result.message || "unknown error"}`, true);
-        return textResult(`path: ${target}\nbranch: ${branch}\nPass task_start cwd="${target}" for a writing worker.`);
+          : ["worktree", "add", "-b", branch, target, base]);
+        if (!result.ok) return textResult(`git worktree add failed (ownership retained for recovery): ${result.message || "unknown error"}`, true);
+        return textResult(`path: ${target}\nbranch: ${branch}\nbase: ${base}\nowner: ${owner}\ntask: ${params.task ?? "unassigned"}\nDirty parent changes were not inherited.\nPass task_start cwd="${target}" for a writing worker.`);
       }
       if (operation === "export") {
         if (!params.path?.trim()) return textResult("export requires the source worktree path.", true);
@@ -202,10 +224,7 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
         if (assigned.error || !assigned.paths) return textResult(assigned.error ?? "invalid paths", true);
         const exported = exportPatch(source, assigned.paths);
         if (exported.error || !exported.patch) return textResult(exported.error ?? "patch export failed", true);
-        const gitDirResult = git(root, ["rev-parse", "--git-dir"]);
-        if (!gitDirResult.ok) return textResult("could not resolve the repository git directory.", true);
-        const gitDir = resolve(root, gitDirResult.stdout.trim());
-        const patchDir = resolve(gitDir, "pi-patches");
+        const patchDir = resolve(commonDir(root), "pi-patches");
         mkdirSync(patchDir, { recursive: true });
         const patchPath = resolve(patchDir, `patch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.patch`);
         writeFileSync(patchPath, exported.patch, "utf8");
@@ -215,9 +234,7 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
         if (!params.path?.trim()) return textResult("apply requires a patch file path.", true);
         const patchPath = resolve(params.path);
         if (!existsSync(patchPath) || !statSync(patchPath).isFile()) return textResult(`patch file not found: ${patchPath}`, true);
-        const gitDirResult = git(root, ["rev-parse", "--git-dir"]);
-        if (!gitDirResult.ok) return textResult("could not resolve the repository git directory.", true);
-        const patchJail = resolve(root, gitDirResult.stdout.trim(), "pi-patches");
+        const patchJail = resolve(commonDir(root), "pi-patches");
         if (!isPathInside(patchJail, patchPath)) return textResult("patch file must come from this repository's git pi-patches directory.", true);
         const assigned = normalizeAssignedPaths(root, params.paths);
         if (assigned.error || !assigned.paths) return textResult(assigned.error ?? "invalid paths", true);
@@ -227,11 +244,14 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
         const outside = patchFiles.filter((file) => !pathIsAssigned(file, assigned.paths!));
         if (outside.length) return textResult(`refusing apply; patch contains files outside assigned paths:\n${outside.join("\n")}`, true);
         const check = gitWithInput(root, ["apply", "--check", "--binary", "-"], patchText);
-        if (!check.ok) return textResult(`git apply --check failed; no files changed:\n${check.message || "unknown conflict"}`, true);
+        if (!check.ok) {
+          const reversed = gitWithInput(root, ["apply", "--reverse", "--check", "--binary", "-"], patchText);
+          if (reversed.ok) return textResult("Patch is already present; no files changed. Retained patch is not proof of a durable commit.");
+          return textResult(`git apply --check failed; no files changed:\n${check.message || "unknown conflict"}`, true);
+        }
         const applied = gitWithInput(root, ["apply", "--binary", "-"], patchText);
         if (!applied.ok) return textResult(`git apply failed:\n${applied.message || "unknown error"}`, true);
-        try { unlinkSync(patchPath); } catch { /* best-effort cleanup */ }
-        return textResult(`Applied scoped patch to ${root}.\nfiles:\n${patchFiles.join("\n")}`);
+        return textResult(`Applied scoped patch to ${root}. Patch retained until durable integration is confirmed.\nfiles:\n${patchFiles.join("\n")}`);
       }
       if (!params.path?.trim()) return textResult("remove requires path.", true);
       const target = resolve(params.path);
@@ -242,8 +262,14 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
       const worktrees = listed();
       if (!worktrees) return textResult("git worktree list failed.", true);
       if (!worktrees.some((worktree) => resolve(worktree.path) === target)) return textResult("Refusing to remove a path that is not a listed worktree.", true);
+      if (trees(root).some(w => w.path === target && w.task && !w.removed)) return textResult("Task-owned worktrees must be retired through shipping cleanup with integration proof.", true);
       const result = git(root, ["worktree", "remove", ...(params.force ? ["--force"] : []), target]);
+      const record = trees(root).find(w => w.path === target && !w.removed);
+      if (result.ok && record) { record.removed = true; saveTree(root, record); }
       return result.ok ? textResult(`Removed worktree: ${target}`) : textResult(`git worktree remove failed: ${result.message || "unknown error"}`, true);
+      };
+      try { return operation === "list" ? await execute() : await locked(root, execute); }
+      catch (e) { return textResult(e instanceof Error ? e.message : String(e), true); }
     },
   });
 }

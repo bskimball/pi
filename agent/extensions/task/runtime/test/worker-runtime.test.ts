@@ -490,6 +490,50 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
+  it("requests supervision for repeated failed tool summaries without terminating persistent workers", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker({ disableIdleTimeout: true });
+    let notices = 0;
+    const eventHooks = hooks({ onRecoveryConcern: () => notices++ });
+    const tool = (id: string, isError: boolean) => {
+      runtime.handleEvent(item, { type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command: "check" } }, eventHooks);
+      assert.equal(item.idleTimer, undefined);
+      runtime.handleEvent(item, { type: "tool_execution_end", toolCallId: id, isError }, eventHooks);
+    };
+    tool("1", true);
+    tool("2", false);
+    tool("3", true);
+    assert.equal(notices, 0);
+    tool("4", true);
+    tool("5", true);
+    assert.equal(notices, 1);
+    assert.match(item.recoveryConcern ?? "", /Consecutive failed bash/);
+    assert.equal(item.lifecycle, "running");
+    assert.equal(item.killReason, undefined);
+    runtime.settleGeneration(item, "settled", {}, eventHooks);
+    runtime.startGeneration(item);
+    tool("6", true);
+    assert.equal(notices, 1);
+    runtime.clearTimers(item);
+  });
+
+  it("surfaces terminal provider failure after partial work but permits successful provider recovery", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker({ disableIdleTimeout: true, modelAttemptUsedTools: true, latestResult: "partial work" });
+    const failure = { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "quota exhausted" } };
+    runtime.handleEvent(item, failure, hooks());
+    runtime.handleEvent(item, { type: "agent_settled" }, hooks());
+    assert.equal(item.lifecycle, "failed");
+    assert.equal(item.latestResult, "partial work");
+    runtime.startGeneration(item);
+    runtime.handleEvent(item, failure, hooks());
+    runtime.handleEvent(item, { type: "message_end", message: { role: "assistant", stopReason: "stop", text: "recovered" } }, hooks());
+    runtime.handleEvent(item, { type: "agent_settled" }, hooks());
+    assert.equal(item.lifecycle, "settled");
+    assert.equal(item.modelError, undefined);
+    runtime.clearTimers(item);
+  });
+
   it("does not re-arm idle after the turn limit force-kills a worker", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker({ maxTurns: 0 });
@@ -561,6 +605,10 @@ describe("WorkerRuntime control plane", () => {
       latestAssistantText: "old assistant text",
       latestResult: "old",
       modelError: "old error",
+      errors: ["old error"],
+      recoveryConcern: "old concern",
+      recoveryNotified: true,
+      lastFailedTool: { tool: "bash", summary: "old" },
       circuitFailureAttempt: 0,
       modelAttemptUsedTools: true,
       killReason: "old reason",
@@ -584,6 +632,10 @@ describe("WorkerRuntime control plane", () => {
     assert.equal(item.latestResult, "");
     assert.equal(item.modelError, undefined);
     assert.equal(item.modelAttemptUsedTools, false);
+    assert.deepEqual(item.errors, []);
+    assert.equal(item.lastFailedTool, undefined);
+    assert.equal(item.recoveryConcern, undefined);
+    assert.equal(item.recoveryNotified, false);
     assert.equal(item.killReason, undefined);
     assert.equal(item.exitCode, null);
     runtime.clearTimers(item);
@@ -626,6 +678,7 @@ describe("WorkerRuntime control plane", () => {
       lifecycle: "failed",
       latestResult: "failed result",
       modelError: "provider failed",
+      errors: ["quota exhausted"],
       generationSettledAt: Date.now(),
     });
     runtime.handleEvent(item, { type: "agent_start" }, hooks());
@@ -633,6 +686,15 @@ describe("WorkerRuntime control plane", () => {
     assert.equal(item.generation, 2);
     assert.equal(item.latestResult, "");
     assert.equal(item.modelError, undefined);
+    runtime.handleEvent(item, { type: "message_end", message: { role: "assistant", text: "done", stopReason: "stop" } }, hooks());
+    runtime.handleEvent(item, { type: "agent_settled" }, hooks());
+    assert.equal(item.lifecycle, "settled");
+    assert.deepEqual(item.errors, []);
+    runtime.startGeneration(item);
+    runtime.handleEvent(item, { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "new quota failure" } }, hooks());
+    runtime.handleEvent(item, { type: "agent_settled" }, hooks());
+    assert.equal(item.lifecycle, "failed");
+    assert.equal(item.errors.at(-1), "new quota failure");
     runtime.clearTimers(item);
   });
 

@@ -533,6 +533,8 @@ function renderTaskComponent(
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
+  // Trial runner only. Unset in normal use. Sync task has no session file, so its usage is copied onto the tool result.
+  if (process.env.PI_TRIAL_DISABLE_DELEGATION === "1") return;
   const agents = discoverAgents();
   const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
 
@@ -662,6 +664,17 @@ export default function (pi: ExtensionAPI) {
       let killReason: string | undefined;
       let finalExitCode: number | null = null;
       let finalAssistantText = "";
+      const childUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      const addChildUsage = (message: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } | number } }) => {
+        const usage = message.usage;
+        if (!usage) return;
+        childUsage.input += Number(usage.input) || 0;
+        childUsage.output += Number(usage.output) || 0;
+        childUsage.cacheRead += Number(usage.cacheRead) || 0;
+        childUsage.cacheWrite += Number(usage.cacheWrite) || 0;
+        const cost = usage.cost;
+        childUsage.cost += typeof cost === "number" ? cost : Number(cost?.total) || 0;
+      };
       let currentModel: string | undefined;
       // Liveness mirrors the idle timer: it only advances on events that also
       // reset the kill budget, so the label can never outrun the guard.
@@ -1014,6 +1027,7 @@ export default function (pi: ExtensionAPI) {
                       message.stopReason === "error" || message.errorMessage
                         ? String(message.errorMessage ?? "provider/model error")
                         : undefined;
+                    addChildUsage(message);
                     const text = takeCompletedAssistant(message);
                     if (text) assistantText = text;
                     resetIdle();
@@ -1150,7 +1164,7 @@ export default function (pi: ExtensionAPI) {
           return {
             content: [{ type: "text", text: report }],
             isError: false,
-            details: snapshot("completed", report),
+            details: { ...snapshot("completed", report), childUsage },
           };
         }
 
@@ -1164,7 +1178,7 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text", text }],
           isError: allFailed || (!!killReason && !finalAssistantText),
-          details: snapshot(allFailed ? "failed" : "stopped", text),
+          details: { ...snapshot(allFailed ? "failed" : "stopped", text), childUsage },
         };
       } finally {
         clearTimeout(hardTimer);

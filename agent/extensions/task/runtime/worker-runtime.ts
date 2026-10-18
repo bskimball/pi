@@ -148,6 +148,9 @@ export interface RuntimeEventWorker extends RuntimeWorker {
   latestResult: string;
   latestContextTokens?: number;
   modelError?: string;
+  lastFailedTool?: { tool: string; summary: string };
+  recoveryConcern?: string;
+  recoveryNotified?: boolean;
   modelAttemptUsedTools: boolean;
   circuitFailureAttempt?: number;
   exitCode: number | null;
@@ -165,6 +168,7 @@ export interface WorkerRuntimeEventHooks<TWorker extends RuntimeEventWorker> {
   onFailedSettlement?(worker: TWorker): void;
   beforeSettlementNotify?(worker: TWorker): void;
   afterSettlementNotify?(worker: TWorker): void;
+  onRecoveryConcern?(worker: TWorker): void;
 }
 
 export interface SettleGenerationOptions {
@@ -507,6 +511,11 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     worker.latestAssistantText = "";
     worker.latestResult = "";
     worker.modelError = undefined;
+    // Historical diagnostics remain in the child session; live results are generation-local.
+    worker.errors.length = 0;
+    worker.lastFailedTool = undefined;
+    worker.recoveryConcern = undefined;
+    worker.recoveryNotified = false;
     worker.circuitFailureAttempt = undefined;
     worker.modelAttemptUsedTools = false;
     worker.fallbackInProgress = false;
@@ -586,10 +595,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
             return;
           } else if (
             worker.modelError &&
-            !worker.killReason &&
-            !worker.latestResult &&
-            !worker.latestAssistantText &&
-            !worker.modelAttemptUsedTools
+            !worker.killReason
           ) {
             this.settleGeneration(
               worker,
@@ -630,7 +636,19 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
       case "tool_execution_end": {
         const callId =
           event.toolCallId == null ? undefined : String(event.toolCallId);
-        worker.ledger.end(callId, Boolean(event.isError));
+        const activity = worker.ledger.end(callId, Boolean(event.isError));
+        if (activity) {
+          const previous = worker.lastFailedTool;
+          if (event.isError) {
+            worker.lastFailedTool = { tool: activity.tool, summary: activity.summary };
+            if (previous?.tool === activity.tool && previous.summary === activity.summary && !worker.recoveryConcern) {
+              worker.recoveryConcern = `Consecutive failed ${activity.tool} calls with the same argument summary: ${activity.summary}. Inspect the actual calls and results before deciding whether progress has stalled.`;
+              hooks.onRecoveryConcern?.(worker);
+            }
+          } else {
+            worker.lastFailedTool = undefined;
+          }
+        }
         if (worker.lifecycle === "running") this.armIdle(worker);
         break;
       }
@@ -672,6 +690,8 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
               );
               worker.modelError = error;
               this.pushError(worker, error);
+            } else if (assistant.stopReason !== "aborted") {
+              worker.modelError = undefined;
             }
           }
         }

@@ -9,6 +9,8 @@ sidekick unit     one bounded outcome + owned paths + one acceptance check
 
 Sidekicks are fully capable and keep cached context. One sidekick holds the outcome. New units use task_start, which reuses the idle sidekick; task_send prompt is limited to one corrective pass for the same unit. A second sidekick is a disjoint path set that finishes and validates on its own. Optimize total cost and quality, not worker or tool count. The base prompt governs safety, scope, verification, todo thresholds, and user communication; Fusion changes who works, not what counts as done.
 
+Before worker worktrees or Git closeout, read the shipping skill. Use one outcome branch/task; isolate concurrent writers, but let sequential units reuse the task checkout. Retire worker artifacts only after durable integration. Local, PR and ship are separate delivery targets; `/ship` or an explicit “ship when ready” authorizes this task's landing and cleanup, not unrelated work. Release-only sidekick units receive the task id and use the shipping helper under the lead's scope/permission.
+
 ## Operating loop
 
 1. **Frame.** Turn the request into an observable user outcome and one lead-owned todo list.
@@ -24,7 +26,7 @@ Sidekicks are fully capable and keep cached context. One sidekick holds the outc
 `task_start` begins a clean unit, reusing an idle sidekick's transcript or starting another when all are busy and the unit is disjoint. An idle sidekick past ~100k context tokens starts fresh automatically (the receipt says so), so every brief must be self-contained.
 
 - `context: "fresh"` parks the cached transcript: use it when the unit shares no findings with the last; omit it when cached context is genuine evidence.
-- Release-only commit/push/deploy units use `context: "fresh"` and get the authorized operation, repo/branch and commit or diff identity, approved paths, dirty-tree constraints, validation results, and required local/remote proof—not the implementation transcript. It grants no publish permission.
+- Release-only ship/install/cleanup units use `context: "fresh"` and the shipping skill's release handoff: the authorized operation, exact repo/branch/revision or dirty-diff identity, owned changed paths, artifact refs, permission scope, verification evidence with exact revision and environment, unresolved decisions, and required local/remote proof—not the implementation transcript. It grants no publish permission.
 - `task_send steer` may clarify the running unit's execution, never its outcome, owned paths, or acceptance check. Changing those needs a new `task_start` unit, even on one worker.
 - `task_send prompt` is one corrective pass against the same settled contract; the runtime blocks a second.
 - Close settled sidekicks whose context is no longer useful; free slots are no reason to keep them.
@@ -34,7 +36,9 @@ After one `task_wait` timeout, check `task_status` once and transition; never po
 ```text
 progressing -> do independent lead work; re-wait later only when useful
 waiting on UI -> answer with task_reply
-stalled/runaway -> task_abort, then reassess the unit
+parked or quiet long tool -> not stalled; a long tool or parked lifetime is normal, so wait or do independent work
+repeated failed-tool notice / no-progress evidence / terminal provider failure -> inspect, then task_send steer, or cooperative task_abort that keeps context; reassess the unit
+  never blind-retry, swap models, or replay side effects
 settled/failed -> collect the result and integrate
 ```
 
@@ -56,7 +60,7 @@ Require current-file inspection before edits; retained context may be stale.
 
 ## Pull-back and cost
 
-Pull work back when the sidekick stalls twice, contradicts the contract, weakens acceptance, or its corrective pass does not converge: reassess outcome, ownership, and acceptance, then issue a smaller unit or take the work.
+Pull work back when the sidekick shows repeated unsuccessful no-progress activity (the runtime's repeated consecutive failed-tool notice is advisory evidence, not a full stuck detector), ends in a terminal provider failure, contradicts the contract, weakens acceptance, or its corrective pass does not converge: reassess outcome, ownership, and acceptance, then issue a smaller unit or take the work.
 
 At compaction (a cache miss anyway), re-evaluate the model pair, then begin the next unit via `task_start`; never steer an old unit across it.
 

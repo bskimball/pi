@@ -29,10 +29,13 @@ rotation or provider switching needs no restart.
 Transport and auth belong to Pi's built-in classifier runtime
 (`modelRegistry.classify`): stored credentials, environment, or models.json.
 **Typesafe path:** a non-empty `TYPESAFE_API_KEY` overrides file `apiKey`.
-**Cloudflare path:** auth resolves per call from Pi's configured Cloudflare
-credential (stored credential or
-`CLOUDFLARE_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`); `jev.json` holds no secrets
-in that mode. Unknown fields are ignored.
+**Cloudflare path:** a saved `/login` API key is enough to attempt the call.
+The extension does not treat Pi's availability snapshot as logged out. Auth
+still resolves per call from that credential, or from
+`CLOUDFLARE_API_KEY` / `CLOUDFLARE_ACCOUNT_ID`. A non-empty
+`CLOUDFLARE_ACCOUNT_ID` in the environment is forwarded so it overrides an
+empty stored account id. `jev.json` holds no secrets in that mode. Unknown
+fields are ignored.
 
 Cloudflare access also requires sufficient account balance or BYOK. HTTP 402,
 code 2021 (`Insufficient balance; add money to your gateway or use BYOK`) indicates

@@ -89,6 +89,50 @@ interface JevTarget {
   apiKey?: string;
 }
 
+/** Pi's /login status. Undefined when this registry cannot report it. */
+function piLoginConfigured(modelRegistry: ModelRegistry, provider: string): boolean | undefined {
+  const statusFn = modelRegistry.getProviderAuthStatus;
+  if (typeof statusFn !== "function") return undefined;
+  const status = statusFn.call(modelRegistry, provider);
+  if (!isRecord(status) || typeof status.configured !== "boolean") return undefined;
+  return status.configured;
+}
+
+/**
+ * Refuse only when Pi itself says the provider is logged out, or when login
+ * status is unavailable and the availability snapshot also has no auth.
+ * A saved API key is logged in even if that snapshot has not resolved
+ * (Cloudflare needs an account id before hasConfiguredAuth flips true).
+ * classify reads credentials live, so do not block on the snapshot alone.
+ */
+function authBlocked(modelRegistry: ModelRegistry, model: Parameters<ModelRegistry["classify"]>[0], target: JevTarget): boolean {
+  if (target.apiKey) return false;
+  const loggedIn = piLoginConfigured(modelRegistry, target.provider);
+  // Explicit /login status wins over the availability snapshot in both directions.
+  if (loggedIn === false) return true;
+  if (loggedIn === true) return false;
+  // Pi's legacy signature names a chat model, but the implementation reads only provider.
+  return typeof modelRegistry.hasConfiguredAuth === "function"
+    && !modelRegistry.hasConfiguredAuth(model as unknown as Parameters<ModelRegistry["hasConfiguredAuth"]>[0]);
+}
+
+function missingAuthError(target: JevTarget): string {
+  if (target.provider === "cloudflare-workers-ai") {
+    return `Jev classifier "${target.provider}/${target.model}" has no Workers AI login Pi can use. A saved API key still needs a non-empty CLOUDFLARE_ACCOUNT_ID; an empty stored account id blocks the environment fallback. Add it on the saved credential (never paste the key in chat).`;
+  }
+  return `Jev classifier "${target.provider}/${target.model}" has no configured auth. For typesafe set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${getJevConfigPath()}; for other providers run /login or add models.json credentials (never paste the key in chat).`;
+}
+
+function unresolvedCloudflareAuthError(target: JevTarget): string {
+  return `Jev used the saved Workers AI login for "${target.provider}/${target.model}", but Pi could not build the request. CLOUDFLARE_ACCOUNT_ID is missing or empty, and an empty stored value blocks the environment fallback. Add the account id on that saved credential (never paste the key in chat).`;
+}
+
+function cloudflareEnvOverride(provider: string): { CLOUDFLARE_ACCOUNT_ID: string } | undefined {
+  if (provider !== "cloudflare-workers-ai") return undefined;
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  return accountId ? { CLOUDFLARE_ACCOUNT_ID: accountId } : undefined;
+}
+
 /** Resolve provider + model + optional explicit key. Throws actionable, key-free errors. */
 function resolveJevTarget(): JevTarget {
   const configPath = getJevConfigPath();
@@ -310,9 +354,7 @@ export async function evaluateJev(
   if (!model) {
     throw new Error(`Jev classifier "${target.provider}/${target.model}" is not in Pi's model catalog. List available classifiers with models.getAvailableOfType("classifier") (codemode) or check the provider is configured; no fallback provider is attempted.`);
   }
-  if (!target.apiKey && typeof modelRegistry.hasConfiguredAuth === "function" && !modelRegistry.hasConfiguredAuth(model as unknown as Parameters<ModelRegistry["hasConfiguredAuth"]>[0])) {
-    throw new Error(`Jev classifier "${target.provider}/${target.model}" has no configured auth. For typesafe set ${JEV_ENV_VAR} or add {"apiKey": "..."} to ${getJevConfigPath()}; for other providers run /login or add models.json credentials (never paste the key in chat).`);
-  }
+  if (authBlocked(modelRegistry, model, target)) throw new Error(missingAuthError(target));
   if (signal?.aborted) throw new Error("Jev request aborted before dispatch; no request was sent.");
 
   // Pi types state as a JSON object, but its transports forward state
@@ -355,12 +397,15 @@ export async function evaluateJev(
 
   let result: PiClassifierResult;
   try {
+    const cloudflareEnv = cloudflareEnvOverride(target.provider);
     result = await modelRegistry.classify(model, context, {
       signal,
       timeoutMs: REQUEST_TIMEOUT_MS,
       maxRetries: 0,
       fetch: capturingFetch,
       ...(target.apiKey ? { apiKey: target.apiKey } : {}),
+      // Overrides an empty stored CLOUDFLARE_ACCOUNT_ID, which otherwise blocks env fallback.
+      ...(cloudflareEnv ? { env: cloudflareEnv } : {}),
     });
   } catch (error) {
     if (signal?.aborted) throw new Error("Jev request aborted after dispatch; completion/billing is unknown.");
@@ -372,7 +417,11 @@ export async function evaluateJev(
     if (result.errorMessage && /timed out/i.test(result.errorMessage)) {
       throw new Error("Jev request timed out after 30s; completion/billing is unknown.");
     }
-    throw new Error(`Jev request failed: ${sanitizeDetail(result.errorMessage ?? result.stopReason, target.apiKey)}`);
+    const detail = sanitizeDetail(result.errorMessage ?? result.stopReason, target.apiKey);
+    if (target.provider === "cloudflare-workers-ai" && /not configured|account id|CLOUDFLARE_ACCOUNT_ID/i.test(detail)) {
+      throw new Error(unresolvedCloudflareAuthError(target));
+    }
+    throw new Error(`Jev request failed: ${detail}`);
   }
   try {
     return validateJevResponse(result, rawBody, request);

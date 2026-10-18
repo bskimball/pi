@@ -770,6 +770,8 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
+  // Trial runner only. Unset in normal use so specialist tools stay registered.
+  if (process.env.PI_TRIAL_DISABLE_DELEGATION === "1") return;
   if (taskPresentationEnabled()) installTaskRenderSafety();
   const agents = discoverAgents();
   const apexAgents = new Map([...agents].filter(([name]) => isApexRosterAgent(name)));
@@ -1294,6 +1296,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       `gen=${worker.generation}`,
       `turns=${worker.turns}`,
       worker.killReason ? `reason=${worker.killReason}` : undefined,
+      worker.errors.length ? `error=${cleanOneLine(worker.errors.at(-1) ?? "", 300)}` : undefined,
       `result=${result}`,
     ]
       .filter(Boolean)
@@ -1336,6 +1339,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
               generation: w.generation,
               turns: w.turns,
               killReason: w.killReason,
+              error: cleanOneLine(w.errors.at(-1) ?? "", 300),
               // Bounded preview so the transcript notice can show what the
               // worker concluded without re-parsing the prose body.
               result: cleanOneLine(
@@ -1358,6 +1362,24 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     if (worker.notifiedGeneration >= worker.generation) return;
     if (agentBusy) return;
     drainSettledNotifications();
+  };
+
+  const notifyRecoveryConcern = (worker: Worker) => {
+    if (shuttingDown || worker.closed || !worker.recoveryConcern || worker.recoveryNotified) return;
+    try {
+      pi.sendMessage(
+        {
+          customType: "async-task-recovery",
+          content: `${worker.id} gen=${worker.generation}: ${cleanOneLine(worker.recoveryConcern, 600)}\nLead supervision requested, not an automatic abort. Inspect task_status and the bounded result evidence; steer or cooperatively abort only when warranted. Preserve the session; do not blindly retry, swap models, or replay side effects. Quiet tools and parked workers alone are not stuck.`,
+          display: true,
+          details: { id: worker.id, generation: worker.generation },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+      worker.recoveryNotified = true;
+    } catch {
+      // Retry delivery at the next lead settlement, without changing worker execution.
+    }
   };
 
   const shouldRetryWorkerFallback = (worker: Worker) =>
@@ -1385,6 +1407,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       resolveWaiters(worker, generationSnapshot(worker));
     },
     afterSettlementNotify: maybeNotifySettled,
+    onRecoveryConcern: notifyRecoveryConcern,
   };
 
   const applySettledReport = (worker: Worker) => {
@@ -2438,6 +2461,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (cwdError) return textResult(cwdError, true);
 
       const digest: string[] = [];
+      const sessionFiles: string[] = [];
+      const noteSession = (worker: { sessionFile?: string }) => {
+        if (worker.sessionFile && !sessionFiles.includes(worker.sessionFile)) sessionFiles.push(worker.sessionFile);
+      };
       let prevText = "";
       let lastReport = "";
       let failed = false;
@@ -2473,6 +2500,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         const elapsed = formatDuration(Date.now() - startedAt);
 
         if (snapshot === "interrupted") {
+          noteSession(worker);
           closeWorker(worker, "task_chain abort", "sync");
           digest.push(`step ${i + 1} aborted ${step.agent} · ${elapsed}`);
           digest.push(`stopped: abort signal killed step ${i + 1}`);
@@ -2480,6 +2508,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           break;
         }
         if (snapshot === "timeout") {
+          noteSession(worker);
           closeWorker(worker, "task_chain timeout", "sync");
           digest.push(`step ${i + 1} timeout ${step.agent} · ${elapsed}`);
           digest.push(`stopped: step ${i + 1} wait timed out`);
@@ -2497,6 +2526,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
         lastReport = bound.text;
         prevText = boundText(bound.text, SETTLED_RESULT_CHARS, Number.POSITIVE_INFINITY).text;
+        noteSession(worker);
         closeWorker(worker, "task_chain step complete", "sync");
         if (!ok) {
           if (errorLine) digest.push(`stopped: step ${i + 1} ${errorLine}`);
@@ -2507,7 +2537,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
 
       const assembled = assembleChainDigest(digest, lastReport || "(empty)");
-      return textResult(assembled.text, failed);
+      return textResult(assembled.text, failed, { sessionFiles });
     },
   });
 
@@ -4088,6 +4118,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
   pi.on("agent_settled", () => {
     agentBusy = false;
+    for (const { item: worker } of workers.entries()) notifyRecoveryConcern(worker);
     drainSettledNotifications();
     syncFleetWidget();
   });
