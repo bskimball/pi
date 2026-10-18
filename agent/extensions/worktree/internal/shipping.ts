@@ -335,10 +335,10 @@ export async function shipping(cwd: string, owner: string, p: ShippingInput, exe
     if (branch(t.root) !== t.target) {
       if (branch(t.root) !== t.branch || head(t.root) !== t.landed.head) throw new Error("Checkout changed after landing; preserve it.");
       if (listedTrees(root).some(w => w.branch === t.target && resolve(w.path) !== t.root)) throw new Error("Default branch is checked out elsewhere; leave that active checkout untouched.");
-      if (refHead(root, `refs/heads/${t.target}`)) git(t.root, ["switch", t.target]);
-      else git(t.root, ["switch", "-c", t.target, `refs/remotes/${t.remote}/${t.target}`]);
+      if (refHead(root, `refs/heads/${t.target}`)) git(t.root, ["switch", "--no-overwrite-ignore", t.target]);
+      else git(t.root, ["switch", "--no-overwrite-ignore", "-c", t.target, `refs/remotes/${t.remote}/${t.target}`]);
     }
-    git(t.root, ["merge", "--ff-only", `refs/remotes/${t.remote}/${t.target}`]);
+    git(t.root, ["merge", "--ff-only", "--no-overwrite-ignore", `refs/remotes/${t.remote}/${t.target}`]);
     if (t.branch !== t.target) {
       const ref = `refs/heads/${t.branch}`;
       const local = refHead(root, ref);

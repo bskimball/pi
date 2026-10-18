@@ -360,6 +360,35 @@ test("cleanup leaves advanced branch tips and another default-branch checkout un
   assert.equal(head(f.root), newer); assert.ok(refHead(f.root, "refs/heads/feat/task"));
 });
 
+test("cleanup preserves ignored local data during default-branch switch and fast-forward", async () => {
+  const f = shippingFixture();
+  await f.begin({ paths: ["outside.txt", ".gitignore"] });
+  shippingGit(f.root, ["rm", "outside.txt"]);
+  writeFileSync(join(f.root, ".gitignore"), "outside.txt\n");
+  shippingGit(f.root, ["add", ".gitignore"]);
+  shippingGit(f.root, ["commit", "-m", "stop tracking local data"]);
+  await f.prove();
+  await f.call({ operation: "land", task: "demo", expectedHead: head(f.root), confirm: true });
+  writeFileSync(join(f.root, "outside.txt"), "private local data\n");
+  await assert.rejects(f.call({ operation: "cleanup", task: "demo", confirm: true }), /overwritten/);
+  assert.equal(readFileSync(join(f.root, "outside.txt"), "utf8"), "private local data\n");
+  assert.equal(shippingGit(f.root, ["branch", "--show-current"]), "feat/task");
+
+  const g = shippingFixture();
+  await g.begin();
+  writeFileSync(join(g.root, "new.txt"), "published data\n");
+  shippingGit(g.root, ["add", "new.txt"]);
+  shippingGit(g.root, ["commit", "-m", "add published file"]);
+  await g.prove();
+  await g.call({ operation: "land", task: "demo", expectedHead: head(g.root), confirm: true });
+  shippingGit(g.root, ["switch", "main"]);
+  writeFileSync(join(g.root, ".git", "info", "exclude"), "new.txt\n");
+  writeFileSync(join(g.root, "new.txt"), "other private data\n");
+  await assert.rejects(g.call({ operation: "cleanup", task: "demo", confirm: true }), /overwritten/);
+  assert.equal(readFileSync(join(g.root, "new.txt"), "utf8"), "other private data\n");
+  assert.equal(head(g.root), g.base);
+});
+
 test("exact-tip remote deletion refuses a branch advanced after the read-back", async () => {
   const f = shippingFixture(); await f.begin(); const sha = f.change(); await f.prove();
   shippingGit(f.root, ["push", "origin", `${sha}:refs/heads/feat/task`]);
