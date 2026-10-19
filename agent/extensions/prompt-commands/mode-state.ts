@@ -33,15 +33,50 @@ export function synchronizeFusionModel<T extends ModeState>(state: T): T {
   return state;
 }
 
+export function hasCliFlag(argv: readonly string[], flag: string): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") return false;
+    if (arg === flag && i + 1 < argv.length) return true;
+  }
+  return false;
+}
+
 export function restoreMode(entries: readonly any[], defaults: Preferences, fresh: boolean): ModeState {
   let saved: ModeState | undefined;
   let legacy = false;
+  let trailingModel: { provider: string; modelId: string } | undefined;
+  let trailingThinking: string | undefined;
   for (const entry of entries) {
+    if (entry.type === "model_change" && typeof entry.provider === "string" && typeof entry.modelId === "string") {
+      trailingModel = { provider: entry.provider, modelId: entry.modelId };
+      continue;
+    }
+    if (entry.type === "thinking_level_change" && typeof entry.thinkingLevel === "string") {
+      trailingThinking = entry.thinkingLevel;
+      continue;
+    }
     if (entry.type !== "custom") continue;
     if (entry.customType === "orchestrate-mode") legacy = entry.data?.enabled === true;
-    if (entry.customType === "behavior-mode" && isMode(entry.data?.mode)) saved = entry.data;
+    if (entry.customType === "behavior-mode" && isMode(entry.data?.mode)) {
+      saved = entry.data;
+      trailingModel = undefined;
+      trailingThinking = undefined;
+    }
   }
-  return structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion });
+  const restored = structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion });
+  if (!fresh && (trailingModel || trailingThinking)) {
+    const current = restored.mode === "fusion" ? restored.fusion?.lead : restored.models[restored.mode];
+    const provider = trailingModel?.provider ?? current?.provider;
+    const modelId = trailingModel?.modelId ?? current?.modelId;
+    const thinking = trailingThinking ?? current?.thinking ?? "medium";
+    if (provider && modelId) {
+      const choice: ModelChoice = { provider, modelId, thinking };
+      restored.models[restored.mode] = choice;
+      if (restored.mode === "fusion" && restored.fusion) restored.fusion.lead = structuredClone(choice);
+    }
+  }
+  return restored;
 }
 /** Fusion-owned: persistent-sidekick modes do not expose chain/rebind. */
 export function toolsForFusion(names: string[]): string[] {

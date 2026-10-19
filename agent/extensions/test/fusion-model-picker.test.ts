@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerModes } from "../prompt-commands/modes.ts";
-import { initialPreferences } from "../prompt-commands/mode-state.ts";
+import { initialPreferences, restoreMode } from "../prompt-commands/mode-state.ts";
 import { FusionModelPicker, pickFusionModel } from "../prompt-commands/model-picker.ts";
 
 const theme = { fg: (_key: string, text: string) => text } as Theme;
@@ -185,6 +185,99 @@ test("fusion-set changes only its role and rolls back failed asynchronous config
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("session_start honors explicit CLI --model/--thinking flags and trailing model_change entries instead of reverting to stale mode preferences", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-mode-startup-model-"));
+  const savedEnv = { ...process.env };
+  const savedArgv = [...process.argv];
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  const path = join(dir, "mode-settings.json");
+  writeFileSync(path, JSON.stringify({
+    ...initialPreferences(),
+    mode: "apex",
+    models: { apex: { provider: "openai", modelId: "gpt-6.1-sol", thinking: "medium" } },
+  }));
+  try {
+    const handlers: Record<string, Function[]> = {};
+    const appended: Array<{ type: string; data: any }> = [];
+    const available = [
+      { provider: "openai", id: "gpt-6.1-sol", reasoning: true },
+      { provider: "antigravity", id: "gemini-4-argon", reasoning: true },
+    ];
+    let thinking = "high";
+    const ctx: any = {
+      mode: "rpc",
+      hasUI: true,
+      model: available[1],
+      isIdle: () => true,
+      modelRegistry: {
+        find: (provider: string, id: string) => available.find(m => m.provider === provider && m.id === id),
+        getAvailable: () => available,
+      },
+      sessionManager: {
+        getBranch: () => [
+          { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+          {
+            type: "custom",
+            customType: "behavior-mode",
+            data: { mode: "apex", models: { apex: { provider: "openai", modelId: "gpt-6.1-sol", thinking: "medium" } } },
+          },
+        ],
+      },
+      ui: { setStatus() {}, notify() {} },
+    };
+    const pi: any = {
+      registerCommand() {},
+      on: (name: string, fn: Function) => { (handlers[name] ??= []).push(fn); },
+      getAllTools: () => [],
+      getActiveTools: () => [],
+      setActiveTools() {},
+      appendEntry: (type: string, data: any) => { appended.push({ type, data }); },
+      getThinkingLevel: () => thinking,
+      setThinkingLevel: (value: string) => { thinking = value; },
+      setModel: async (model: any) => { ctx.model = model; return true; },
+      events: { emit() {} },
+    };
+    process.argv = ["node", "pi", "--mode", "rpc", "--provider", "antigravity", "--model", "gemini-4-argon", "--thinking", "high"];
+    registerModes(pi, "", "", "", "");
+    await handlers.session_start[0]({ reason: "startup" }, ctx);
+
+    assert.equal(ctx.model.provider, "antigravity");
+    assert.equal(ctx.model.id, "gemini-4-argon");
+    assert.equal(thinking, "high");
+    assert.deepEqual(appended.at(-1)?.data.models.apex, {
+      provider: "antigravity",
+      modelId: "gemini-4-argon",
+      thinking: "high",
+    });
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).models.apex, {
+      provider: "antigravity",
+      modelId: "gemini-4-argon",
+      thinking: "high",
+    });
+
+    const restoredWithTrailingModel = restoreMode([
+      {
+        type: "custom",
+        customType: "behavior-mode",
+        data: { mode: "apex", models: { apex: { provider: "openai", modelId: "gpt-6.1-sol", thinking: "medium" } } },
+      },
+      { type: "model_change", provider: "antigravity", modelId: "gemini-4-argon" },
+      { type: "thinking_level_change", thinkingLevel: "high" },
+    ], initialPreferences(), false);
+    assert.deepEqual(restoredWithTrailingModel.models.apex, {
+      provider: "antigravity",
+      modelId: "gemini-4-argon",
+      thinking: "high",
+    });
+  } finally {
+    process.argv = savedArgv;
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
     rmSync(dir, { recursive: true, force: true });
   }
 });

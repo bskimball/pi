@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { clampThinkingLevel, getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
-import { MODES, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
+import { MODES, hasCliFlag, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 
@@ -288,6 +288,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
     state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
+    const cliModelOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--model") && Boolean(ctx.model);
+    const cliThinkingOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--thinking");
+    if (cliModelOverride && ctx.model) {
+      const thinking = cliThinkingOverride ? pi.getThinkingLevel() : (state.models[state.mode]?.thinking ?? pi.getThinkingLevel());
+      state.models[state.mode] = { provider: ctx.model.provider, modelId: ctx.model.id, thinking };
+    } else if (cliThinkingOverride && state.models[state.mode]) {
+      state.models[state.mode]!.thinking = pi.getThinkingLevel();
+    }
     changing = true;
     modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion;
     // Restore through a clone: applyModel records the actual (possibly
@@ -299,7 +307,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     finally { changing = false; }
     applyModeTools(state.mode);
     announce();
-    pi.appendEntry("behavior-mode", structuredClone(state));
+    if (cliModelOverride || cliThinkingOverride) persist();
+    else pi.appendEntry("behavior-mode", structuredClone(state));
     if (ctx.hasUI) ctx.ui.setStatus("mode", labels[state.mode]);
     publishPair(ctx);
   });
