@@ -1,71 +1,127 @@
 ---
 name: frontend-design
-description: Distinctive, production-grade frontend and visual design in code. Use when building, restyling, or redesigning web UI, landing pages, dashboards, design systems, components, layouts, interaction polish, diagrams, slides, or data visualization. Triggers on frontend design, visual design, redesign, UI restyle, landing page, dashboard, design system, aesthetic direction, visitor mode, "make it look good", avoid AI slop, memorable interface. Load this skill for substantial visual or design work even when a specialist is not available.
+description: Production-grade frontend and visual design in code. Use when building, extending, or redesigning web UI, workflows, dashboards, landing pages, design systems, components, layouts, interaction polish, diagrams, slides, or data visualization. Triggers on frontend design, visual design, redesign, UI restyle, landing page, dashboard, design system, aesthetic direction, visitor mode, "make it look good", avoid AI slop, memorable interface. Load this skill for substantial visual or design work even when a specialist is not available.
 ---
 
 # Frontend Design
 
-Create production-grade, memorable interfaces in code. Respect the existing product, framework, design system, performance constraints, and accessibility requirements. Intentionality matters more than intensity, but restraint without a point of view is blandness — a deliberately quiet direction still needs a stated reason it is quiet.
+Design for the product's goal and the user's activity. Respect the existing product, framework, design system, performance constraints, and accessibility requirements. A surface succeeds when its structure, interaction, and visual language serve what the user is trying to do and what the product needs to accomplish.
 
-## Aesthetic direction
+## 1. Frame the task
 
-Before implementation, commit to a coherent aesthetic direction based on purpose, audience, tone, constraints, and one memorable differentiator.
+Before choosing layout or styling, establish four things from the codebase, `PRODUCT.md` / `DESIGN.md` when present, and the brief:
 
-For existing products, preserve established tokens, fonts, components, and visual language unless the task explicitly calls for a redesign; product consistency outranks novelty. For greenfield work, choose typography, color, atmosphere, and animation on purpose rather than by generic-AI default: purposeful type (a workhorse face is fine only when you state why it fits this product, not merely that it is deliberate), a defined color direction over purple-on-white/dark-mode defaults, atmosphere via gradients/shapes/patterns rather than flat backgrounds, a few high-impact animations over scattered micro-motion, and varied visual language across outputs.
+- **Product and user goal** — who is using this surface, what they are trying to accomplish, and what outcome the app or site needs from it.
+- **Design-system context** — whether this work applies an existing system, extends one, or establishes a new one.
+- **Surface mode** — the primary job of the surface (**Operate**, **Read / understand**, **Persuade / decide**, or **Experience / explore**), plus any secondary mode inside it.
+- **Material constraints** — audience, tone, density, devices, accessibility, performance, and any reference or anti-reference.
 
-Taste intake (required when material): the brief should carry audience, tone, visitor mode, one reference or anti-reference, and either a differentiator or an explicit "deliberately plain" waiver. Visitor mode names what the surface is for:
+Work-order block when delegating or capturing context:
 
-- **Persuade** — landing/marketing: help someone decide
-- **Operate** — dashboard/workflow: help someone get something done
-- **Read** — docs/content: help someone scan and comprehend
-- **Experience** — brand/moment: make someone feel something
+```text
+goal / user task; audience / tone; system — Apply, Extend, or Establish;
+mode — Operate, Read / understand, Persuade / decide, or Experience / explore;
+reference or anti-reference (when relevant); scope / constraints.
+```
 
-If those are missing and the choice is taste-load-bearing, stop and report the exact missing taste decision rather than designing from nothing.
+If an open taste or product decision would materially change the design and cannot be inferred from the repo or brief, stop and ask for that exact decision rather than inventing requirements.
 
-Diverge then commit: sketch two distinct directions in a few lines each (direction, trade-off, what default it rejects), pick one with a stated reason, then implement only the chosen direction. No second implementation, no extra files.
+## 2. Design-system context
 
-Taste block to copy into a work order: audience / tone; mode — Persuade, Operate, Read, or Experience; reference or anti-reference; differentiator or "deliberately plain" waiver; scope — preserve tokens vs. redesign.
+Determine what is allowed to change before inventing patterns:
 
-## What to avoid
+### Apply an existing system
 
-These are unexamined defaults, not prohibitions: the problem is the reflex, not the technique. In an established product, the design system's deliberate choices override this list.
+- Reuse established tokens, typography, spacing, components, and interaction conventions.
+- Solve the problem through composition and hierarchy before introducing new visual treatments.
+- Do not invent a signature flourish just to make the slice look custom.
 
-- Glassmorphism as a default: blur, glass cards, and glow borders spread across every surface to stand in for hierarchy. Chosen deliberately for a specific surface and consistent with the product's visual language, glass is legitimate and we do use it.
-- Cyan-on-dark with purple gradients, the default AI palette.
-- Gradient text on headings and metrics where the gradient carries no meaning.
-- Card grids of identical cards: icon, heading, body text, repeated until the page ends.
-- Cards nested inside cards. Flatten the hierarchy instead.
-- A large rounded-corner icon above every heading.
-- Hero metric layouts: big number, small label, gradient accent.
-- Uniform spacing everywhere. Rhythm comes from varying it.
-- Center-aligning everything. Left alignment with deliberate asymmetry reads as designed.
-- Modals as the reflex for every interaction; they are rarely the best answer.
-- Pure black or pure white. Tint the neutrals.
-- Gray text on a colored background. Use a shade of that background instead.
-- Bounce and elastic easing. Exponential easing such as ease-out-quart or ease-out-expo has aged better.
-- Every button styled as primary. Hierarchy matters in actions as much as in type.
-- Headings that restate the sentence beneath them.
-- Empty states that announce "nothing here" instead of telling the user what to do next.
+### Extend an existing system
 
-The standard is intentionality and fit: every choice above should be one you would defend on the product's terms, not one that arrived by default.
+- Identify the specific user or content need that current components do not cover.
+- Derive new components, states, or tokens from the system's existing visual and interaction language so the addition looks native to the product.
+- Keep the extension local unless multiple surfaces in scope genuinely share the contract.
 
-## How to implement
+### Establish a distinct new system
 
-Once the target behavior and existing visual language are clear, state the two candidate directions and the choice, then implement only the chosen direction.
+- Derive the system from the product's domain, audience, operating conditions, and content — not from generic templates.
+- Define coherent foundations for type scale, spacing rhythm, color roles, surface hierarchy, controls, and motion.
+- Build only the tokens and primitives the requested scope needs. Distinctiveness should come from those foundations working together, not from decorative extras attached to every element.
 
-Implement the most coherent visual solution at the requested scope — the smallest diff that carries the chosen direction — including the hover, focus, active, loading, empty, and error states the requested flow actually needs. Account for responsive behavior, semantic HTML, keyboard use, contrast, reduced motion, and screen-reader needs.
+## 3. Surface modes
 
-Spend effort on the two-direction sketch, the assigned visual decision, and implementation — not a survey of every possible design direction. If validation fails, diagnose the concrete failure and fix it. Do not restart design exploration unless the failure disproves the chosen direction.
+Identify the primary mode for the requested surface. A product often combines modes across screens or regions; keep one product language while letting each surface prioritize its job.
 
-## Polish
+### Operate — workflows, dashboards, tools, settings, editors
 
-Finish with a `make-interfaces-feel-better` polish pass where it applies (concentric radius, optical alignment, shadows over borders, staggered enters, tabular numbers, exact transitions). Load `~/.agents/skills/make-interfaces-feel-better/SKILL.md` (or the project `.agents/skills` copy if present) and state what was applied or why nothing applied.
+Primary question: **Can the user complete the task accurately, quickly, and with confidence?**
 
-Then self-critique against the generic defaults: name which "What to avoid" defaults you rejected and why the alternative fits this product.
+- Prioritize action hierarchy, current state visibility, scannable grouping, keyboard/pointer efficiency, and appropriate information density.
+- Keep high-frequency controls calm and predictable; make destructive, dirty, loading, empty, and error states unmistakable.
+- Earn every container: use spacing, alignment, table structure, or subtle dividers before wrapping items in cards or callout boxes.
 
-Report:
+### Read / understand — docs, reports, feeds, analytics, reference views
 
-- chosen direction in one sentence, including the differentiator and what default it rejects
-- files changed or artifact paths
-- important visual tokens and interaction decisions
-- accessibility and responsive considerations
+Primary question: **Can the user locate, comprehend, and compare the information without friction?**
+
+- Prioritize typographic hierarchy, measure, reading sequence, progressive disclosure, and clear comparison across items or time.
+- Let headings, whitespace, alignment, and data layout carry structure; reserve callouts, badges, and accent rails for exceptions that change how the reader acts or interprets a section.
+- Keep chrome quiet so content and evidence lead.
+
+### Persuade / decide — landing pages, marketing, pricing, onboarding, upgrade flows
+
+Primary question: **Can the visitor understand the value, trust the claim, and take the next step?**
+
+- Prioritize proposition clarity, narrative pacing, concrete product proof, objection handling, and an unambiguous primary action path.
+- Use atmosphere, contrast, imagery, or motion where they sharpen the product story or focal point, not as filler between sections.
+- Vary section structure to match the argument instead of repeating the same card grid down the page.
+
+### Experience / explore — brand moments, interactive storytelling, creative tools, showcases
+
+Primary question: **Does the pacing, atmosphere, and interaction create the intended feeling while keeping the user oriented?**
+
+- Commit to a clear point of view in typography, color, spatial composition, and motion choreography.
+- Give expressive moments room to breathe against quieter supporting chrome, and preserve orientation, responsiveness, and reduced-motion ergonomics.
+
+## 4. Structure before treatment
+
+Before styling containers or adding ornament, make the structural decisions in this order:
+
+1. **First impression and focal point** — what the user must notice first, second, and third.
+2. **Task or reading flow** — the sequence of inspection, inputs, decisions, and actions.
+3. **Grouping and separation** — prefer proximity, alignment, typographic contrast, and simple dividers first. Introduce a bounded container, card, tinted surface, or accent border only when it communicates a real boundary: an independent interactive unit, a distinct elevation layer, a live status/selection state, or a semantic callout.
+4. **State semantics** — decide how selection, focus, status, validation, active region, and hierarchy are distinguished so one visual cue is not overused for everything.
+
+When a meaningful design choice is genuinely open — such as establishing a new system, redesigning a surface, or choosing between distinct layouts/flows — briefly sketch two viable directions (how each structures the task, its trade-off, and why), pick one, and implement only the chosen direction. When applying an established system to a clear pattern, state the existing pattern you are following and proceed directly.
+
+## 5. Examine defaults rather than running on reflex
+
+None of the patterns below are banned when the product system or a specific UI state genuinely calls for them. Avoid them as automatic filler:
+
+- Wrapping every group, list row, or section in a rounded card or left-border callout when spacing, typography, a table, or a divider would be clearer.
+- Using the same visual cue (such as an accent rail, badge, or pill) for headings, grouping, status, and decoration on the same screen.
+- Glassmorphism, blur, and glow borders spread across every surface instead of reserved for true overlays or an established product motif.
+- Default AI palettes (cyan-on-dark, purple gradients), gradient headings/metrics with no semantic meaning, or pure `#000`/`#fff` neutrals where tinted neutrals belong.
+- Repeating identical card grids (`icon + heading + paragraph`), nesting cards inside cards, or placing a large rounded icon above every heading.
+- Hero metric tiles (`huge number + tiny label + gradient accent`) where trend, context, or comparison is what the user actually needs.
+- Center-aligning everything or using uniform spacing everywhere instead of deliberate rhythm and alignment.
+- Modals as the reflex for flows that belong inline, in a drawer, or on their own route.
+- Styling every action as primary, headings that merely repeat the sentence below, or empty states that say "nothing here" without the next action.
+- Gray text on colored backgrounds instead of a shade of that hue, or bounce/elastic easing where crisp exponential easing (`ease-out`) belongs.
+
+## 6. Implement and polish
+
+Implement the smallest coherent change that delivers the chosen design at the requested scope, including the hover, focus, active, loading, empty, and error states the flow actually uses. Account for responsive layout, semantic HTML, keyboard navigation, contrast, reduced motion, and screen-reader labels.
+
+If validation fails, fix the concrete defect rather than restarting design exploration unless the failure disproves the design.
+
+Finish with a `make-interfaces-feel-better` polish pass where it applies to the elements you actually built (concentric radii on genuinely nested rounded surfaces, optical alignment, shadows vs. structural borders, tabular numbers, restrained motion, exact transition properties, minimum hit areas). Load `~/.agents/skills/make-interfaces-feel-better/SKILL.md` (or the project `.agents/skills` copy if present) to refine chosen surfaces — never add extra containers, animations, or borders just to exercise a polish rule.
+
+## 7. Report
+
+Keep the report concise:
+
+- **Context and direction** — design-system mode (`Apply`, `Extend`, or `Establish`), primary surface mode, and the chosen structural/visual approach in 1–2 sentences (plus the two-direction choice when one was required).
+- **Files or artifacts** — paths changed or created.
+- **Key design decisions** — hierarchy, grouping/containment choices, tokens or components reused/added, and interaction states covered.
+- **Accessibility, responsiveness, and polish** — what was verified and which `make-interfaces-feel-better` checks applied.
