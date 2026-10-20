@@ -3,6 +3,7 @@ import { installBgProcessReceipts } from "./internal/presentation/bg-process-rec
 import { installBrowserAttachReceipts } from "./internal/presentation/browser-attach-receipt.ts";
 import { installBuiltinReceipts } from "./internal/presentation/builtin-receipts.ts";
 import { installCodemodeReceipts } from "./internal/presentation/codemode-receipt.ts";
+import { installComputerUseReceipts } from "./internal/presentation/computer-use-receipt.ts";
 import { installFffReceipts } from "./internal/presentation/fff-receipt.ts";
 import { installGraphifyReceipts } from "./internal/presentation/graphify-receipt.ts";
 import { installIntercomReceipts } from "./internal/presentation/intercom-receipt.ts";
@@ -38,6 +39,7 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
   installRenderSafety();
   installBuiltinReceipts();
   installCodemodeReceipts();
+  installComputerUseReceipts();
   installMcpReceipts();
   installSkillInvocationChrome();
   installFffReceipts();

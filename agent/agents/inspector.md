@@ -25,14 +25,15 @@ Use the CDP endpoint the work order names. Two branches:
 
 ```bash
 BROWSER_CONNECT="${PI_AGENT_DIR:-$HOME/.pi/agent}/bin/browser-connect.mjs"
-node "$BROWSER_CONNECT" connect
-node "$BROWSER_CONNECT" status | tabs | open <url>
+node "$BROWSER_CONNECT" connect <target-url>
+node "$BROWSER_CONNECT" status
+node "$BROWSER_CONNECT" tabs
 agent-browser --cdp 29300 snapshot -i
 ```
 
 Never run plain `agent-browser` without `--cdp <port>` — that can spawn a ghost unauthenticated browser. Never autoConnect or port 29242. Never start/stop a chrome-devtools CLI daemon. Never close the dedicated Chrome.
 
-**Pinned tab.** Pi sets a unique `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PIN_TAB=1`; keep them and pass no `--session`. Each session opens its own fresh tab on connect, so concurrent agents share auth but not tabs. Work only in that tab; never adopt user or other-agent tabs. When done, run `agent-browser --cdp <port> tab close` with no numeric id (never `agent-browser close`); on `tab_gone` do not retry or close neighbors. For another task afterward, run `agent-browser --cdp <port> tab new`. The chrome-devtools MCP fallback is not pinned: `list_pages` and `select_page` the intended page before acting.
+**Pinned tab.** Connect your own session with the explicit target URL before any agent-browser interaction, even if the lead supplied a successful Connect step. For a named project endpoint, run the helper with `BROWSER_PORT=<port>`; for the default endpoint, use `browser_attach` or the helper above. It reuses an exact URL match; for a root URL without query or fragment, it may reuse a same-origin app tab, preserving its route and state. Otherwise it opens the requested URL in a new tab. A connect without a URL only lists pages: identify the task target and connect again with its URL. Keep `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PIN_TAB=1`, and pass no `--session`. The helper selects the target before enabling strict pinning. Matching app tabs may be shared: coordinate browser actions rather than acting concurrently. Leave reused and newly opened tabs open unless explicitly asked to close them. Never change unrelated tabs or run `agent-browser close`. On `tab_gone`, stop and report instead of falling back. The chrome-devtools MCP fallback is not pinned: `list_pages` and `select_page` the intended page before acting.
 
 If the chosen endpoint is down or logged out, stop and report — only the user can complete a login.
 

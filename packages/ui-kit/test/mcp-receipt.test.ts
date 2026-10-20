@@ -1,4 +1,5 @@
 import { ReceiptToolExecutionComponent } from "./receipt-test-host.ts";
+import { computerUseRenderers, installComputerUseReceipts } from "../internal/presentation/computer-use-receipt.ts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -76,6 +77,36 @@ const OWNER_DEF = {
   },
 };
 
+describe("computer-use rendering", () => {
+  it("renders compact targets without echoing typed text and bounds narrow receipts", () => {
+    const renderer = computerUseRenderers("computer_use_type_text");
+    const args = { pid: 42, window_id: 17, text: "private entry", x: 20, y: 30 };
+    const rendered = renderer.renderCall(args, theme as any, context(args)).render(120).join("\n");
+    assert.match(rendered, /computer \/ type text/);
+    assert.match(rendered, /pid=42/);
+    assert.match(rendered, /text=13 chars/);
+    assert.doesNotMatch(rendered, /private entry/);
+    const narrow = renderer.renderCall(args, theme as any, context(args)).render(30);
+    assert.ok(narrow.every((line) => safeVisibleWidth(line) <= 30));
+  });
+
+  it("preserves unconfirmed outcomes, image counts, expansion and error text", () => {
+    const renderer = computerUseRenderers("computer_use_get_window_state");
+    const result = {
+      content: [{ type: "text", text: "unverifiable: read-back unavailable\nsecond line" }, { type: "image", data: "", mimeType: "image/png" }],
+      details: { app_name: "Notepad", window_title: "Editor", status: "complete", outcome: "unverifiable", truncated: true },
+    };
+    const render = (expanded: boolean, isError = false) => renderer.renderResult(result as any,
+      { expanded, isPartial: false }, theme as any, context({}, { isError })).render(140).join("\n");
+    assert.match(render(false), /1 image/);
+    assert.match(render(false), /truncated/);
+    assert.match(render(false), /window title: Editor/);
+    assert.match(render(false), /unverifiable/);
+    assert.match(render(true), /second line/);
+    assert.match(render(false, true), /read-back unavailable/);
+  });
+});
+
 describe("native codemode/MCP/tool-search rendering", () => {
   it("attaches kit receipts, overriding owner renderers where registered", () => {
     withChrome("1", () => {
@@ -100,8 +131,11 @@ describe("native codemode/MCP/tool-search rendering", () => {
           shouldAttachApexReceipts({ toolName: "codemode", toolDefinition: OWNER_DEF as any }),
           "codemode overrides its owner renderer",
         );
-        // Owner-less native tools attach by exact name.
+        // Owner-less native tools and computer-use tools attach.
         for (const toolName of [
+          "computer_use_get_window_state",
+          "computer_use_click",
+          "computer_use_browser_navigate",
           "tool_search",
           "list_mcp_resources",
           "list_mcp_resource_templates",
@@ -130,6 +164,7 @@ describe("native codemode/MCP/tool-search rendering", () => {
         for (const toolName of [
           "mcp__chrome-devtools__list_pages",
           "codemode",
+          "computer_use_click",
           "tool_search",
           "list_mcp_resources",
           "list_mcp_resource_templates",
@@ -408,6 +443,24 @@ describe("mcp resource receipts", () => {
 });
 
 describe("wrapped native components", () => {
+  it("renders computer-use through the real Pi component", () => {
+    initTheme("dark");
+    withChrome("1", () => {
+      installComputerUseReceipts();
+      const component = new ReceiptToolExecutionComponent(
+        "computer_use_click", "call-computer-1", { pid: 42, element_token: "s00000001:3" },
+        { showImages: false }, { name: "computer_use_click" } as any, stubUi() as any, process.cwd(),
+      );
+      component.markExecutionStarted();
+      component.updateResult({
+        content: [{ type: "text", text: "unverifiable: check the window" }], details: {}, isError: false,
+      });
+      const lines = component.render(100);
+      assert.match(lines.join("\n"), /computer \/ click/);
+      assert.match(lines.join("\n"), /unverifiable: check the window/);
+      assert.ok(lines.every((line: string) => safeVisibleWidth(line) <= 100));
+    });
+  });
   it("renders an mcp proxy through the kit even with owner renderers", () => {
     initTheme("dark");
     withChrome("1", () => {

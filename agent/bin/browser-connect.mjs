@@ -233,6 +233,35 @@ async function ensureClassicCdp(url) {
   return { launched, version: await getCdpVersion() };
 }
 
+async function listPages() {
+  const targets = await requestJson(`${cdpBase}/json/list`);
+  return targets.filter((target) => target.type === "page");
+}
+
+function printPages(pages) {
+  for (const page of pages) {
+    console.log(`[${page.id}] ${page.url}`);
+  }
+}
+
+async function attachUrl(url) {
+  const pages = await listPages();
+  const destination = new URL(url);
+  const matching = pages.find((page) => page.url === destination.href)
+    || (destination.pathname === "/" && !destination.search && !destination.hash
+      ? pages.find((page) => isHttpUrl(page.url) && new URL(page.url).origin === destination.origin)
+      : null);
+
+  // Initial strict attachment creates a blank tab, so select the target before pinning.
+  const selected = await runAgentBrowser([
+    "--no-pin-tab", "tab", ...(matching ? [matching.id] : ["new", url]),
+  ]);
+  const pinned = await runAgentBrowser(["--pin-tab", "tab", "list"]);
+  if (!selected.available || !selected.ok) fail(`Could not select the requested app tab on CDP port ${port}.`);
+  if (!pinned.ok) fail(`Could not pin the requested app tab on CDP port ${port}.`);
+  console.log(matching ? "TAB: reused matching app tab (left open)" : "TAB: opened requested URL in a new tab (left open)");
+}
+
 async function connect(input) {
   const url = isHttpUrl(input) ? input : null;
   if (input && !url) {
@@ -258,13 +287,12 @@ async function connect(input) {
     return;
   }
 
-  if (url && !launched) {
-    const opened = await runAgentBrowser(["open", url]);
-    if (!opened.ok) fail(`agent-browser could not open ${url} on CDP port ${port}.`);
+  if (url) {
+    await attachUrl(url);
+  } else {
+    printPages(await listPages());
+    console.log("No tab selected. Connect with the target HTTP(S) URL before browser actions.");
   }
-
-  const tabs = await runAgentBrowser(["tab", "list"]);
-  if (!tabs.ok) fail(`agent-browser could not verify tabs on CDP port ${port}.`);
   console.log("STATUS: connected");
 }
 
@@ -280,31 +308,17 @@ async function status() {
   console.log("Mode:              classic");
   console.log(`HTTP discovery:    ${versionUrl} (OK)`);
   console.log(`Browser:           ${version.Browser || "unknown"}`);
-  const tabs = await runAgentBrowser(["tab", "list"], { required: false });
-  if (!tabs.available) console.log("agent-browser:     unavailable");
-  else if (!tabs.ok) console.log("agent-browser:     attach failed");
+  printPages(await listPages());
 }
 
 async function tabs() {
   if (!(await getCdpVersion())) fail(`Debug Chrome is not running at ${versionUrl}. Run 'node browser-connect.mjs launch' first.`);
-  const result = await runAgentBrowser(["tab", "list"]);
-  if (!result.available || !result.ok) fail(`Could not list tabs through agent-browser --cdp ${port}.`);
+  printPages(await listPages());
 }
 
 async function openUrl(url) {
   if (!isHttpUrl(url)) fail("Usage: node browser-connect.mjs open <http-or-https-url>", 2);
-  const { launched } = await ensureClassicCdp(url);
-  if (launched) {
-    const verification = await runAgentBrowser(["tab", "list"], { required: false });
-    if (!verification.available) {
-      console.log("agent-browser is unavailable; Chrome was launched directly with the requested URL.");
-    } else if (!verification.ok) {
-      fail(`Chrome opened ${url}, but agent-browser could not verify tabs on CDP port ${port}.`);
-    }
-    return;
-  }
-  const result = await runAgentBrowser(["open", url]);
-  if (!result.available || !result.ok) fail(`Could not open ${url} through agent-browser --cdp ${port}.`);
+  await connect(url);
 }
 
 async function login() {
@@ -313,13 +327,8 @@ async function login() {
   const { launched } = await ensureClassicCdp(google);
   const command = await resolveAgentBrowser();
   if (command) {
-    if (!launched) {
-      const googleResult = await runAgentBrowser(["open", google]);
-      if (!googleResult.ok) fail("Could not open the Google login page.");
-    }
-    const microsoftResult = await runAgentBrowser(["tab", "new", microsoft]);
-    if (!microsoftResult.ok) fail("Could not open the Microsoft login page.");
-    await runAgentBrowser(["tab", "list"]);
+    await attachUrl(google);
+    await attachUrl(microsoft);
   } else if (!launched) {
     fail("agent-browser is unavailable, so login pages cannot be opened in the already-running debug Chrome.");
   }
@@ -330,10 +339,10 @@ function help() {
   console.log(`Usage: node browser-connect.mjs <command> [args]
 
 Commands:
-  connect [url-or-task]  Ensure debug Chrome is running; navigate only for HTTP(S) URLs
-  status                 Show classic CDP status and tabs when available
-  tabs                   List tabs through agent-browser --cdp ${port}
-  open <url>              Open an HTTP(S) URL in the dedicated debug Chrome
+  connect [url-or-task]  Reuse a matching app tab for HTTP(S) URLs; otherwise only list tabs
+  status                 Show classic CDP status and tabs without attaching
+  tabs                   List tabs without attaching or creating a tab
+  open <url>              Reuse a matching app tab, or open the URL in a new tab
   launch                  Launch the dedicated visible debug Chrome
   login                   Open Google and Microsoft login pages
   stop                    Refuse broad killing; close this profile manually

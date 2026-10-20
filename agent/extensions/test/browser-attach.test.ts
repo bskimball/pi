@@ -55,6 +55,11 @@ describe("browser_attach", () => {
     assert.match(text, /\[Connect step\]/);
     assert.match(text, /status: succeeded/);
     assert.match(text, /STATUS: connected/);
+    assert.match(text, /reuses an exact URL match/);
+    assert.match(text, /preserving its route and state/);
+    assert.match(text, /Without a URL it only lists pages/);
+    assert.match(text, /Leave reused and newly opened tabs open/);
+    assert.doesNotMatch(text, /Each session opens a fresh tab|tab close/);
   });
 });
 

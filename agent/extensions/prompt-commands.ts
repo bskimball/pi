@@ -175,7 +175,7 @@ export const FUSION_SYSTEM_BLOCK = `\n\n${readFileSync(join(dirname(fileURLToPat
 export const WORK_SYSTEM_PROMPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "work.md"), "utf8").trim();
 
 export default function (pi: ExtensionAPI): void {
-  // Replace inherited ownership so RPC children never reuse their parent's tab.
+  // Give RPC children their own binding; the helper may select a matching shared app tab.
   process.env.AGENT_BROWSER_SESSION = `pi-${process.pid}-${randomUUID()}`;
   process.env.AGENT_BROWSER_PIN_TAB = "1";
   registerBrowserAttachTool(pi);
