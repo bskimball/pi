@@ -17,6 +17,7 @@ import { installRenderSafety } from "./internal/presentation/render-safety.ts";
 import { installSkillInvocationChrome } from "./internal/presentation/skill-invocation.ts";
 import { installWebSearchReceipts } from "./internal/presentation/web-search-receipt.ts";
 import { installWorktreeReceipts } from "./internal/presentation/worktree-receipt.ts";
+import { installShippingReceipts } from "./internal/presentation/shipping-receipt.ts";
 import { installKitOwnedTools, installBuiltinTools } from "./builtin-tools.ts";
 import { claimSharedTools, resetUiKitOnceForTests, uiKitShared } from "./once.ts";
 
@@ -51,6 +52,7 @@ export function installSharedPresentation(pi: ExtensionAPI): void {
   installPowerShellReceipts();
   installWebSearchReceipts();
   installWorktreeReceipts();
+  installShippingReceipts();
   installBrowserAttachReceipts();
   installBgProcessReceipts(pi);
 }

@@ -11,6 +11,9 @@ import {
   worktreeReceiptRenderers,
 } from "@pi/ui-kit/internal/presentation/worktree-receipt.ts";
 
+import { installSharedPresentation, resetUiKitInstallForTests } from "../install.ts";
+import { shippingReceiptRenderers } from "../internal/presentation/shipping-receipt.ts";
+
 const theme = {
   fg: (_key: string, text: string) => text,
   bg: (_key: string, text: string) => text,
@@ -47,6 +50,66 @@ function withApexUi<T>(value: string, run: () => T): T {
     else process.env.PI_UI_CHROME = previousChrome;
   }
 }
+
+describe("shipping receipts", () => {
+  const summary = {
+    task: "ui-polish", branch: "feature", remote: "origin", target: "main", delivery: "ship", route: "direct",
+    head: "abc123", state: "working", blocker: "Review required", checks: [{ command: "npm", args: ["test"] }],
+    gates: { head: "old123", passed: 1 }, review: { head: "old123", verdict: "pass" }, dirty: [],
+  };
+  function render(details: any, expanded = false, isError = false) {
+    return shippingReceiptRenderers.renderResult(
+      { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details },
+      { expanded, isPartial: false }, theme, context({ operation: "status", task: "ui-polish" }, { isError }),
+    ).render(160).join("\n");
+  }
+
+  it("prioritizes blockers and marks stale verification without implying readiness", () => {
+    const output = render(summary);
+    assert.match(output, /blocked: Review required/);
+    assert.match(output, /origin\/main/);
+    assert.match(output, /checks 1\/1 \(stale\)/);
+    assert.match(output, /review pass \(stale\)/);
+    assert.doesNotMatch(output, /"checks"|"owner"/);
+    assert.match(render(summary, true), /"checks"/);
+    const current = render({ ...summary, gates: { head: "abc123", passed: 1 }, review: { head: "abc123", verdict: "pass" } });
+    assert.doesNotMatch(current, /stale/);
+  });
+
+  it("distinguishes pending merge, landed, checkpoints, and inventory", () => {
+    assert.match(render({ ...summary, state: "pending-merge", next: "Await merge queue" }), /pending-merge/);
+    assert.match(render({ ...summary, state: "pending-merge", next: "Await merge queue" }), /next: Await merge queue/);
+    assert.match(render({ state: "landed", landed: { commit: "abc123" } }), /landed abc123/);
+    assert.match(render({ checkpoint: "abc123", path: "C:/repo", preserved: ["other.ts"] }), /1 paths preserved/);
+    const inventory = render({ tasks: [summary, summary, summary, summary], worktrees: [] });
+    assert.match(inventory, /4 tasks/);
+    assert.match(inventory, /1 more tasks/);
+    assert.match(render({ tasks: [], worktrees: [] }), /No shipping tasks recorded/);
+    assert.match(render("Gate 1/2 failed", false, true), /Gate 1\/2 failed/);
+  });
+
+  it("attaches through the shared installer to Pi components and honors chrome-off", () => {
+    initTheme("dark");
+    withApexUi("1", () => {
+      resetUiKitInstallForTests();
+      try {
+        installSharedPresentation({ registerMessageRenderer() {}, registerToolRenderer() {}, getFlag() {} } as any);
+        const definition = { toolName: "shipping", toolDefinition: { name: "shipping" } };
+        assert.equal(resolveReceiptFor(definition)?.renderCall, shippingReceiptRenderers.renderCall);
+        const component = new ReceiptToolExecutionComponent(
+          "shipping", "shipping-call", { operation: "verify", task: "ui-polish" }, { showImages: false },
+          { name: "shipping" } as any, { requestRender() {} } as any, process.cwd(),
+        );
+        component.markExecutionStarted();
+        component.updateResult({ content: [{ type: "text", text: JSON.stringify(summary) }], details: summary, isError: false });
+        assert.match(component.render(120).join("\n"), /blocked: Review required/);
+        for (const width of [30, 80, 120]) assert.ok(component.render(width).every((line) => safeVisibleWidth(line) <= width));
+        process.env.PI_UI_CHROME = "0";
+        assert.equal(resolveReceiptFor(definition)?.renderCall, undefined);
+      } finally { resetUiKitInstallForTests(); }
+    });
+  });
+});
 
 describe("apex worktree receipt", () => {
   it("renders worktree output as an Apex receipt instead of boxed JSON args", () => {
