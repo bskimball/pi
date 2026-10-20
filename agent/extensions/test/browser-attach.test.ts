@@ -70,7 +70,7 @@ const deployEntryPoints: Array<[string, typeof runDeployCommand]> = [
 for (const [entry, deploy] of deployEntryPoints) describe(`deploy handoff: ${entry}`, () => {
   const cwd = "/project";
   const sha = "a".repeat(40);
-  const mirror = readFileSync(new URL("../../prompts/inactive/deploy.md", import.meta.url), "utf8");
+  const mirror = readFileSync(new URL("../../prompts/inactive/deploy.md", import.meta.url), "utf8").replaceAll("\r\n", "\n");
   const mirrorBody = mirror.slice(mirror.indexOf("\n---\n", 4) + 5).split("\n## Pre-step snapshot")[0].trim();
 
   for (const idle of [true, false]) {
