@@ -98,7 +98,7 @@ Be specific. "We searched the issue tracker for [query1], [query2], [query3] and
 
 ### Sources Consulted
 
-Bulleted list of what was actually searched, so the user can judge coverage and redirect. Format:
+Bulleted list of what was actually searched, so the user can judge coverage and redirect. Categories skipped as irrelevant to a narrow question may share one line with the reason. Format:
 
 - **Source control history**: {file paths}, {number of commits reviewed}, PRs #{numbers}, and code comments searched. Or "Not searched. State whether repository history, PR access, or the required CLI was unavailable."
 - **Issue / ticket tracker**: {ticket IDs and keyword searches}. Or "Not searched. No reachable source available in this environment."

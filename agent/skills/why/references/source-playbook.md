@@ -2,7 +2,7 @@
 
 Use whichever of these sources are reachable (MCP tools via `tool_search` when available, CLIs, `web_search`/`fetch_content`, git history). In Pi, use codemode discovery when native MCP tools are not directly listed. Inspect the real interface before calling it; no service or tool is assumed installed.
 
-The why method searches each reachable evidence category with disjoint read-only source scopes, or inline in Work mode. These playbooks describe evidence, search strategies, and pitfalls that remain useful without a particular MCP. Adapt queries to the discovered interface, and record unavailable sources as coverage gaps.
+The why method searches the reachable categories that bear on the question, in disjoint read-only source scopes, delegated only as the active mode allows or inline. These playbooks describe evidence, search strategies, and pitfalls that remain useful without a particular MCP. Adapt queries to the discovered interface, and record unavailable sources as coverage gaps.
 
 | Category | Playbook | Example source (not a dependency) |
 |---|---|---|

@@ -1,12 +1,9 @@
 ---
 name: why
-description: "Investigate design rationale, historical tradeoffs, regressions, postmortems, and data-backed thresholds. Use for why does X work this way or why we picked Y. Search reachable historical sources and return cited, confidence-calibrated findings. Use how for runtime behavior."
-disable-model-invocation: true
+description: "Investigate why code is shaped as it is: design rationale, historical tradeoffs, regressions, postmortems, data-backed thresholds (\"why does X work this way\", \"why did we pick Y\"). Read-only; searches reachable historical sources and returns cited, confidence-calibrated findings. Not for runtime behavior (how) or change breakage (blast-radius)."
 ---
 
 # Why
-
-Invoke explicitly with `/skill:why`.
 
 Investigate the motivation and intent behind code.
 
@@ -14,7 +11,7 @@ Companion to the `how` skill. `how` answers what the code does and how it works.
 
 ## Pi routing
 
-Dispatch subagents through the active mode's delegation path. Fusion: use `task_start` sidekick units (agent `sidekick`), one per explorer/reviewer/investigator, with disjoint read-only scopes and compact reports; never use other agents unless the user named them. Apex / Pi (regular) / Apex Orchestrate: use `task`, with `scout` for exploration/reading, `oracle` for review/judgment, and `librarian` for external/remote sources; parallel means multiple task calls in one message. Work: spawn no subagents; run the method inline. Subagents use their configured model defaults.
+The active mode owns delegation. Run this method inline unless that mode's own rules call for or permit delegating; this skill never requires fanout. Any delegated investigator gets one disjoint read-only source scope and returns a compact report. This method supplements the active mode and `/poteto` playbooks; it grants no permissions beyond them.
 
 ## Operating Posture
 
@@ -28,7 +25,7 @@ If the target is vague ("why do we do it this way?" with no clear referent), mak
 
 ## Step 2. Establish the Code Anchor
 
-Before spawning investigators, anchor the investigation in concrete code. You need:
+Before investigating, anchor the investigation in concrete code. You need:
 
 - The relevant file path(s) and line range(s)
 - The key symbols (function names, class names, constants)
@@ -57,15 +54,15 @@ Pull PR bodies and discussion via `gh` for any substantive commits:
 gh pr view <number> --json title,body,author,createdAt,mergedAt,labels,closingIssuesReferences,comments,reviews
 ```
 
-Capture this as seed context (file paths, symbols, commits, PR numbers, linked ticket IDs). Pass it to the investigators.
+Capture this as seed context (file paths, symbols, commits, PR numbers, linked ticket IDs). Pass it to any investigators.
 
-## Step 3. Spawn Parallel Investigators (default posture)
+## Step 3. Investigate Sources
 
-**Default to the full parallel investigation.**
+**Scale to the question.** A narrow question (one commit, one threshold, one guard) needs source control plus the one or two categories that plausibly hold the answer. A broad history sweep, regression, or postmortem question warrants every reachable category.
 
 ### Discovery
 
-Before dispatching investigators, discover reachable sources. Use whichever of these sources are reachable (MCP tools via `tool_search` when available, CLIs, `web_search`/`fetch_content`, git history). In Pi, native MCP discovery may instead be available through codemode's `searchTools` and schema inspection. Inspect real tool schemas or CLI help before calling them; do not guess tool names. Record authentication, access, retention, and missing-tool gaps.
+Before searching, discover reachable sources. Use whichever of these sources are reachable (MCP tools via `tool_search` when available, CLIs, `web_search`/`fetch_content`, git history). In Pi, native MCP discovery may instead be available through codemode's `searchTools` and schema inspection. Inspect real tool schemas or CLI help before calling them; do not guess tool names. Record authentication, access, retention, and missing-tool gaps.
 
 Map each reachable source to one evidence category:
 
@@ -79,11 +76,11 @@ Map each reachable source to one evidence category:
 
 Use git history when the target is in a repository, and `gh` for PR context when installed and authenticated. Record a gap if either is unavailable. For the other six, classify using source contents and the discovered interface. If a source could fit more than one category, choose the one matching its primary evidence. Record ambiguous cases in the coverage map.
 
-Aim for a complete **coverage map**, not a minimal one. Document the null, don't skip the search.
+Build a **coverage map** of the categories you searched, with the null results, and name the reachable categories you skipped as irrelevant. Document the null; don't hide it.
 
-Dispatch matching investigators in parallel using Pi routing above, each owning one disjoint source scope. In Work, search those sources inline. All investigation is read-only, including remote queries; access to a tool is not permission to mutate its source.
+Search the chosen categories inline, or delegate one disjoint source scope per investigator per Pi routing above when the active mode allows. All investigation is read-only, including remote queries; access to a tool is not permission to mutate its source.
 
-Each investigator gets:
+Each investigator (or inline pass) gets:
 1. The base prompt from `references/investigator-prompt.md`
 2. The category playbook `references/sources/<source>.md` for the selected source, adapted from the examples in `references/source-playbook.md`
 3. The cross-cutting `references/sources/incident-postmortem.md` **if the target code looks defensive** (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers)
@@ -92,9 +89,9 @@ Each investigator gets:
 
 ### Investigator roster. One per reachable evidence category
 
-Dispatch one investigator per category with reachable evidence. Each owns one source scope, with cross-source leads passed to the lead rather than duplicated.
+Each category owns one source scope, with cross-source leads passed to the lead rather than duplicated.
 
-Each entry names the category and the kind of "why" it uniquely surfaces. Use it to know what to expect back, how to name a gap when a category returns empty, and (only in the rare provably-irrelevant case) to justify a skip.
+Each entry names the category and the kind of "why" it uniquely surfaces. Use it to pick categories, to know what to expect back, and to name a gap when a category returns empty or is skipped.
 
 1. **Source control investigator**. Git history, `gh` for PRs, code comments, tests. Always investigate when repository history is reachable; otherwise record the gap. Best at surfacing *implementation-time rationale captured during review*.
 
@@ -112,19 +109,19 @@ Each entry names the category and the kind of "why" it uniquely surfaces. Use it
 
 ### When to skip an investigator
 
-Only skip with an **explicit, written justification** that goes in the final "Sources Consulted" section. Two valid reasons:
+Every skip gets a written justification in the final "Sources Consulted" section. Two kinds:
 
 - **No source is reachable for that category** in this environment. Flag this as a gap, not a choice. Example: "Real-time team chat skipped. No reachable source available, so the conversational record was not searchable."
-- **The source is provably irrelevant**, not just "probably irrelevant." A high bar. Example: "Error / exception tracking skipped. Target is a build-time script with no runtime code path."
+- **The category cannot bear on this question.** Example: "Error / exception tracking skipped. Target is a build-time script with no runtime code path."
 
-If your scope assessment suggests a single-commit trivial target where the PR description already contains the complete answer, you may answer inline **only after** confirming all seven available category searches would be redundant. Say so explicitly. This should be rare.
+When a PR description or commit already answers a narrow question completely, answer from it and say the other categories were not searched for that reason.
 
 ## Step 4. Synthesize
 
 Synthesize inline or delegate a read-only synthesizer using Pi routing above. Citation checks may use any reachable read-only source.
 
 The synthesizer gets:
-1. The investigator findings, including any null results and any categories skipped with justification
+1. The findings, including any null results and any categories skipped with justification
 2. The code anchor from Step 2 (file paths, symbols, commit hashes, PR numbers, ticket IDs)
 3. The user's original question
 4. The epistemics framework from `references/epistemics.md`
@@ -136,7 +133,7 @@ Take the synthesizer's output and present it to the user. You may lightly edit f
 
 ## Output Format
 
-The output structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per investigator, including the ones that returned nothing or were skipped, with the reason.
+The output structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per category, including the ones that returned nothing or were skipped, with the reason.
 
 After the Sources Consulted block, if the user's `why` question is a precursor to actually changing this code, convert the lineage findings into a Preserve / Change / Avoid / Risk constraint set suitable for planning the change.
 

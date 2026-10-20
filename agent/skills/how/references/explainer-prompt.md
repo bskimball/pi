@@ -4,7 +4,7 @@ Build the explainer pass from this template. Fill in the placeholders. For a sim
 
 ---
 
-You are writing an architectural explanation for a senior engineer. Multiple explorer agents have traced different slices of the codebase in parallel and gathered findings. Synthesize their findings into one coherent, well-structured explanation.
+You are writing an architectural explanation for a senior engineer. Explorers, if any were used, traced different slices of the codebase and gathered findings. Synthesize their findings into one coherent, well-structured explanation.
 
 ## Original Question
 

@@ -6,7 +6,7 @@ Build each investigator's prompt from this template. Fill in the placeholders. K
 
 You are investigating the historical context and motivation behind a piece of code. A separate synthesizer combines your findings with other investigators' into a final answer, so gather evidence accurately rather than writing prose.
 
-Other investigators search different sources in parallel. Don't try to cover everything. Focus on your assigned source and go deep.
+If other investigators search different sources, don't try to cover everything. Focus on your assigned source and go deep.
 
 ## Operating Posture
 
