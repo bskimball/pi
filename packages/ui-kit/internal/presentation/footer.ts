@@ -28,7 +28,7 @@ export interface FooterUsage {
 }
 
 export interface FooterStatus {
-  /** Extension status key (setStatus key), e.g. "codex-usage", "jev". */
+  /** Extension status key (setStatus key), e.g. "jev". */
   key: string;
   /** Plain, single-line, ANSI-free text. */
   text: string;

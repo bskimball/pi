@@ -179,21 +179,22 @@ execute shell commands.
 | `compat` | No | provider `compat` | Model-level override, merged with provider-level. |
 
 This repo's active `agent/models.json` also uses `providers.<id>.modelOverrides`
-(e.g. `cloudflare-workers-ai`) and an `ollama` provider with a local `_launch`
-model-array key that is not part of the documented schema above — treat any
-undocumented key found in the active file as provider/tooling-specific rather
-than assuming it is a typo; verify against the installed docs before editing.
+(e.g. `cloudflare-workers-ai`). Treat any undocumented key found in the active
+file as provider/tooling-specific rather than assuming it is a typo; verify
+against the installed docs before editing.
 
-### Temporary shim: Meta Muse Wonder (remove once pi ships it natively)
+### Temporary shim: Meta Muse Wonder Contributor (remove once pi ships it natively)
 
-The local-only (gitignored) `agent/models.json` currently carries `providers.meta.models`
-entries for `muse-wonder-1.0` and `muse-wonder-1.0-contributor`. Pi 1.1.0's baked-in
-catalog predates Wonder's 2026-10-12 launch, and `pi update --models` only refreshes
-metadata for known models, so it cannot discover the new IDs. Non-`contextWindow`
-fields (`maxTokens`, `thinkingLevelMap`, image limits) were borrowed from
-`muse-spark-1.3`, and `cost` was left unset because Meta has not published Wonder
-pricing yet. Delete the `meta` block from `agent/models.json` (or the whole file if
-it becomes empty) once `pi update` lists Wonder on its own — verify with a fresh
+Pi's catalog now ships `muse-wonder-1.0` natively, but not
+`muse-wonder-1.0-contributor` — even though a live `GET https://api.meta.ai/v1/models`
+for this account returns it (verified 2026-10-21), and `pi update --models` only
+refreshes metadata for known models, so it cannot discover the missing ID. The
+local-only (gitignored) `agent/models.json` therefore carries a single
+`providers.meta.models` entry for `muse-wonder-1.0-contributor`, copying the native
+`muse-wonder-1.0` entry's fields (`api`, `baseUrl`, `contextWindow`, `maxTokens`,
+`thinkingLevelMap`, image limits). `cost` is left unset because Meta has not
+published contributor pricing. Delete the `meta` block from `agent/models.json`
+once `pi update` lists the contributor ID on its own — verify with a fresh
 `GET https://api.meta.ai/v1/models` comparison. `muse-wonder-full-1.0` (1M context
 per Meta dev docs) is intentionally not shimmed: it is Muse Code subscription-only
 (Power/Maximum plans) and absent from the live `GET /v1/models` list for this account,
@@ -307,7 +308,7 @@ optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
-(`gpt-6-sol`), `defaultProvider` (`openai-codex`),
+(`grok-4.7`), `defaultProvider` (`xai`),
 `defaultThinkingLevel`, `lastChangelogVersion`, `packages`
 (`npm:@ff-labs/pi-fff` for FFF fuzzy finding, `npm:pi-intercom` for the
 `intercom` tool), `steeringMode`,
@@ -317,9 +318,12 @@ registration; see the mcp.json section above.
 `enabledModels` is intentionally omitted so `/model` and Ctrl+P see every configured
 provider without a scope allowlist. Compaction is not overridden in this file; Pi-native defaults apply (`reserveTokens` 16384 for summary headroom, `keepRecentTokens` 20000 for the retained recent tail).
 
-The active default and all GPT agent routes use `openai-codex` (for example
-`openai-codex/gpt-6-sol`, `openai-codex/gpt-6-luna`, and
-`openai-codex/gpt-6-astra`). Non-GPT agent routes still use configured providers
+All GPT agent and mode routes use the `openai` provider (for example
+`openai/gpt-6-sol`, `openai/gpt-6-luna`, and `openai/gpt-6-astra`).
+`openai-codex` is legacy: referenced by no active config, and its stored
+credential has been removed (logged out). The context-window
+overrides formerly under its `models.json` block now live under
+`providers.openai.modelOverrides`. Non-GPT agent routes still use configured providers
 such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `antigravity/gemini-3.8-flash`, xAI,
 OpenCode, and Cloudflare Workers AI fallbacks.
 
@@ -367,12 +371,12 @@ Either form works:
 
 ```yaml
 fallbackModels:
-  - openai-codex/gpt-5.6-sol
+  - openai/gpt-5.6-sol
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
 ```
 
 ```yaml
-fallbackModels: [openai-codex/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
+fallbackModels: [openai/gpt-5.6-sol, cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code]
 ```
 
 Both single and double surrounding quotes on individual list items are
