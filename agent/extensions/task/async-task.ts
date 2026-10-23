@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { childToolArgs } from "./runtime/child-process.ts";
 import { Type } from "typebox";
 import {
   SettingsManager,
@@ -1646,8 +1647,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "rpc",
       "--session-dir",
       sessionDir,
-      "--exclude-tools",
-      isFusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS,
+      ...childToolArgs(def, isFusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS),
       "--name",
       `async-${def.name}-${id}`,
     ];
@@ -1672,13 +1672,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
     if (thinking) args.push("--thinking", thinking);
     if (!def.inheritSkills) args.push("--no-skills");
-    if (def.tools) {
-      const tools = def.tools
-        .split(",")
-        .map((tool) => tool.trim())
-        .filter(Boolean);
-      if (tools.length) args.push("--tools", tools.join(","));
-    }
     // Async workers support steering/follow-ups and UI requests; load mode-
     // correct shared norms rather than the fire-and-forget sync preamble.
     const shared = isFusion ? {} : composeSpecialistSharedPrompts("async");

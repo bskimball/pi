@@ -12,6 +12,7 @@ export interface AgentDef {
   fallbackModels: string[];
   thinking?: string;
   tools?: string;
+  apexBrowser?: boolean;
   maxTurns?: number;
   timeoutSec?: number;
   /** Skills are prompt-injected and read via the read tool; false passes --no-skills. */
@@ -71,6 +72,7 @@ export function parseAgentFile(file: string): AgentDef | undefined {
       fallbackModels: getList("fallbackModels"),
       thinking: get("thinking"),
       tools: get("tools"),
+      apexBrowser: get("apexBrowser") === "true",
       maxTurns: get("maxTurns")
         ? Number(get("maxTurns")) || undefined
         : undefined,

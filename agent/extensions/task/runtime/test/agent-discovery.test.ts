@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   modelAttempts,
+  parseAgentFile,
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   resolveAgentThinking,
@@ -19,6 +21,17 @@ function def(partial: Partial<AgentDef> & Pick<AgentDef, "name">): AgentDef {
     ...partial,
   };
 }
+
+describe("apexBrowser opt-in", () => {
+  it("enables inspector but not ordinary specialists", () => {
+    const inspector = parseAgentFile(fileURLToPath(new URL("../../../../agents/inspector.md", import.meta.url)));
+    const oracle = parseAgentFile(fileURLToPath(new URL("../../../../agents/oracle.md", import.meta.url)));
+    assert.ok(inspector);
+    assert.ok(oracle);
+    assert.equal(inspector.apexBrowser, true);
+    assert.equal(oracle.apexBrowser, false);
+  });
+});
 
 describe("modelAttempts", () => {
   const oracle = def({

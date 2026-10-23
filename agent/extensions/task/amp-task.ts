@@ -38,7 +38,7 @@ import {
   workCrewList,
   WORK_CREW_AGENTS,
 } from "./runtime/agent-discovery.ts";
-import { isolatedChildEnv } from "./runtime/child-process.ts";
+import { childToolArgs, isolatedChildEnv } from "./runtime/child-process.ts";
 import { configuredSyncTaskLimit } from "./runtime/sync-concurrency.ts";
 import { missionFromPrompt, shortArgs } from "./presentation/task-view.ts";
 import { writeLastPhase } from "./runtime/last-phase.ts";
@@ -795,8 +795,7 @@ export default function (pi: ExtensionAPI) {
             "--mode",
             "json",
             "--no-session",
-            "--exclude-tools",
-            "task,subagent,wait_for_subagents,wait",
+            ...childToolArgs(def, "task,subagent,wait_for_subagents,wait"),
           ];
           if (model) {
             const slash = model.indexOf("/");
@@ -811,13 +810,6 @@ export default function (pi: ExtensionAPI) {
           }
           if (thinking) args.push("--thinking", thinking);
           if (!def.inheritSkills) args.push("--no-skills");
-          if (def.tools) {
-            const tools = def.tools
-              .split(",")
-              .map((tool) => tool.trim())
-              .filter(Boolean);
-            if (tools.length) args.push("--tools", tools.join(","));
-          }
           // Children are fire-and-forget: there is no mid-flight channel back
           // to the orchestrator, so agent prompts must escalate via their
           // final report rather than a live supervisor tool.
