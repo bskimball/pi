@@ -1,6 +1,6 @@
 ---
 name: chrome-devtools
-description: Uses Chrome DevTools via MCP for efficient debugging, troubleshooting and browser automation. Use when debugging web pages, automating browser interactions, analyzing performance, or inspecting network requests. This skill does not apply to `--slim` mode (MCP configuration).
+description: Uses Chrome DevTools via MCP for debugging and troubleshooting the dedicated debug Chrome. Use for network requests, console messages, performance traces, Lighthouse, and heap snapshots, or as a fallback when agent-browser cannot act. Not for Apex extension-shared or preview tabs; use the host browser_* tools from `browser_tabs` for those. This skill does not apply to `--slim` mode (MCP configuration).
 ---
 
 ## Core Concepts

@@ -1,6 +1,6 @@
 ---
 name: inspector
-description: Fast, cheap read-only browser verification for live interaction, screenshots, responsive checks, and focused visual regression analysis. Live-page checks route here in regular and orchestrate modes.
+description: Fast, cheap read-only browser verification for live interaction, screenshots, responsive checks, and focused visual regression analysis. Live-page checks route here in regular and orchestrate modes, including Apex shared/preview tabs.
 model: antigravity/gemini-3.8-flash
 fallbackModels:
   - openai/gpt-6-luna
@@ -9,6 +9,7 @@ fallbackModels:
 thinking: medium
 tools: read, bash, jev, browser_attach, codemode, tool_search, mcp__chrome_devtools__click, mcp__chrome_devtools__close_page, mcp__chrome_devtools__drag, mcp__chrome_devtools__emulate, mcp__chrome_devtools__evaluate_script, mcp__chrome_devtools__fill, mcp__chrome_devtools__fill_form, mcp__chrome_devtools__get_console_message, mcp__chrome_devtools__get_network_request, mcp__chrome_devtools__handle_dialog, mcp__chrome_devtools__hover, mcp__chrome_devtools__lighthouse_audit, mcp__chrome_devtools__list_console_messages, mcp__chrome_devtools__list_network_requests, mcp__chrome_devtools__list_pages, mcp__chrome_devtools__navigate_page, mcp__chrome_devtools__new_page, mcp__chrome_devtools__performance_analyze_insight, mcp__chrome_devtools__performance_start_trace, mcp__chrome_devtools__performance_stop_trace, mcp__chrome_devtools__press_key, mcp__chrome_devtools__resize_page, mcp__chrome_devtools__select_page, mcp__chrome_devtools__take_heapsnapshot, mcp__chrome_devtools__take_screenshot, mcp__chrome_devtools__take_snapshot, mcp__chrome_devtools__type_text, mcp__chrome_devtools__upload_file, mcp__chrome_devtools__wait_for
 inheritSkills: false
+apexBrowser: true
 maxTurns: 60
 timeoutSec: 600
 ---
@@ -16,6 +17,8 @@ timeoutSec: 600
 You are the Inspector, a fast read-only browser verification specialist. Exercise completed interfaces in the live browser and return a compact, evidence-backed verdict. You are read-only: do not modify project files and do not launch subagents.
 
 ## Attach
+
+Inside Apex, call `browser_tabs` first and use `browser_*` tools on matching shared/preview tabs. Default to screenshots, `browser_read_page`, and read-only `browser_evaluate`. Coordinate with the lead: per-tab serialization prevents interleaved input, not logical interference. Use `browser_attach` / debug Chrome only when no tab fits or the user asks.
 
 Use the CDP endpoint the work order names. Two branches:
 

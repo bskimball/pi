@@ -523,9 +523,9 @@ export function registerBrowserAttachTool(pi: ExtensionAPI): void {
     name: "browser_attach",
     label: "Browser Attach",
     description:
-      "Attach to the dedicated authenticated debug Chrome and return the custom browser handoff prompt. Use this FIRST for natural-language requests that require live-page interaction, clicks, form filling, login state, screenshots, or browser inspection. Do not invoke agent-browser directly before this tool. A prompt that already contains a successful [Connect step] is already attached. In Apex Orchestrate mode, live-page verification routes to the inspector specialist instead of the lead attaching.",
+      "Attach to the dedicated authenticated debug Chrome and return the custom browser handoff prompt. When the host exposes `browser_tabs` (Apex), call it first and act on the extension-shared or preview tabs it returns with the host `browser_*` tools; use this tool only when no such tab fits or the user asks for the dedicated debug browser. Otherwise use it before agent-browser for live-page interaction, clicks, form filling, login state, screenshots, or browser inspection. A prompt that already contains a successful [Connect step] is already attached. In Apex Orchestrate mode, live-page verification (shared/preview tabs or debug Chrome) routes to the inspector specialist, which has the same browser tools.",
     promptSnippet:
-      "For live-page browser work, call browser_attach first; then follow its returned custom browser prompt. In Apex Orchestrate, dispatch inspector instead.",
+      "Browser routing: if `browser_tabs` exists, list it first and use the host browser_* tools on the user's shared/preview tabs. Only when none fits, or the user asks for the debug browser, call browser_attach and follow its returned prompt. In Apex Orchestrate, dispatch the inspector for live-page checks instead of doing them yourself. chrome-devtools MCP is a fallback for network/console/performance inspection; computer_use_* tools only for native input no page-level tool can perform.",
     parameters: Type.Object({
       task: Type.Optional(Type.String({
         description: "The browser task or HTTP(S) URL from the user.",

@@ -50,7 +50,7 @@ Route automatically by deliverable; full scopes are in the \`task\` description:
 |---|---|
 | scout | Broad local reconnaissance; direct symbol/path lookups stay inline with ffgrep/fffind |
 | librarian | Web and external library/repository/docs research, source discovery, synthesis, retries; only one already-known URL may be fetched inline |
-| inspector | Live rendered surface only; source diagnosis/review → Oracle; Artisan restriction above applies |
+| inspector | Live rendered surface, including Apex shared/preview tabs: call \`browser_tabs\` first, use matching tabs read-only, coordinate with lead; debug Chrome only if none fit or user asks. Source diagnosis/review → Oracle; Artisan restriction above applies |
 | scribe | Prose deliverables, regardless of extension |
 | picasso | Generated image files, never Artisan's substitute |
 | machinist | Independent separable non-visual implementation only |
@@ -116,7 +116,7 @@ New implementation/investigation: first tool call MUST be \`todo_write\`, one it
 | Situation | First action |
 |---|---|
 | Unfamiliar code, >~2 reads, "how does X work" | scout slice pack |
-| Live page/screenshots/browser | inspector; NEVER lead agent-browser/browser_attach |
+| Live page/screenshots/browser | inspector: inside Apex call \`browser_tabs\` first, use matching shared/preview tabs read-only; browser_attach/debug Chrome only if none fit or user asks. NEVER lead agent-browser/browser_attach |
 | Gates | fresh stevedore after writers settle |
 | Non-visual code/config/tests | machinist |
 | Visual/UI | artisan |
