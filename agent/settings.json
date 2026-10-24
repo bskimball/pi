@@ -2,7 +2,7 @@
   "defaultModel": "grok-4.7",
   "defaultProvider": "xai",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "1.3.0",
+  "lastChangelogVersion": "1.4.0",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
