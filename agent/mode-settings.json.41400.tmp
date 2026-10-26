@@ -1,0 +1,49 @@
+{
+  "mode": "apex",
+  "models": {
+    "fusion": {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "thinking": "xhigh"
+    },
+    "pi": {
+      "provider": "openai",
+      "modelId": "gpt-6.1-sol",
+      "thinking": "medium"
+    },
+    "apex": {
+      "provider": "meta",
+      "modelId": "muse-wonder-1.0-contributor",
+      "thinking": "medium"
+    },
+    "work": {
+      "provider": "xai",
+      "modelId": "grok-4.7",
+      "thinking": "medium"
+    },
+    "apex-orchestrate": {
+      "provider": "meta",
+      "modelId": "muse-wonder-1.0-contributor",
+      "thinking": "max"
+    }
+  },
+  "ui": "apex",
+  "themes": {
+    "pi": "dark",
+    "apex": "apex-dark",
+    "claude": "claude-dark",
+    "hal": "hal-dark"
+  },
+  "fusion": {
+    "lead": {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "thinking": "xhigh"
+    },
+    "sidekick": {
+      "provider": "openai",
+      "modelId": "gpt-6.1-sol",
+      "thinking": "medium"
+    }
+  }
+}
