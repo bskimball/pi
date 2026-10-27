@@ -1,9 +1,9 @@
 ---
 name: artisan
 description: Visual design and UI specialist for substantial frontend, redesign, design-system, or interaction-polish work requiring separate creative judgment, plus diagrams, slides, and data visualization. Ordinary frontend implementation stays with the lead in regular mode.
-model: claude-bridge/claude-opus-5-5
+model: antigravity/gemini-4-argon
 fallbackModels:
-  - antigravity/gemini-4-argon
+  - claude-bridge/claude-opus-5-5
   - meta/muse-wonder-1.0
   - openai/gpt-6-astra
 thinking: high
