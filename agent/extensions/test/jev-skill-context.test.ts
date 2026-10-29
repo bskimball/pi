@@ -343,9 +343,9 @@ describe("hydra turn signal", () => {
     assert.equal(q[HYDRA_DOMAIN_ID]?.type, "choice");
   });
 
-  it("parses depth and domain answers and clamps out-of-range depth", () => {
+  it("parses 0-based Jev score [0..3] into 1-based depth [1..4] and floors low-confidence coding/research", () => {
     const parsed = parseHydraSignal({
-      [HYDRA_DEPTH_ID]: { type: "score", score: 3.6, confidence: 0.88, legend: [], probabilities: {} },
+      [HYDRA_DEPTH_ID]: { type: "score", score: 2.6, confidence: 0.88, legend: [], probabilities: {} },
       [HYDRA_DOMAIN_ID]: { type: "choice", choice: "reasoning", confidence: 0.91, probabilities: {} },
     });
     assert.deepEqual(parsed, {
@@ -356,13 +356,34 @@ describe("hydra turn signal", () => {
     });
     assert.equal(parseHydraSignal({}), undefined);
 
-    // Low-confidence coding prompt (e.g. symptom description) floors at 2.2 so it never drops into Level 1 fast_edit/Haiku.
+    // 0-based score 0.4 -> 1.4 on [1..4]; low-confidence coding prompt floors at 2.2 so it never drops into Level 1 fast_edit/Haiku.
     const lowConfCoding = parseHydraSignal({
-      [HYDRA_DEPTH_ID]: { type: "score", score: 1.4, confidence: 0.48, legend: [], probabilities: {} },
+      [HYDRA_DEPTH_ID]: { type: "score", score: 0.4, confidence: 0.48, legend: [], probabilities: {} },
       [HYDRA_DOMAIN_ID]: { type: "choice", choice: "coding", confidence: 0.52, probabilities: {} },
     });
     assert.equal(lowConfCoding?.reasoningDepth, 2.2);
     assert.equal(lowConfCoding?.domain, "coding");
+
+    // 0-based score 1.4 (HAL screenshot prompt) -> 2.4 on [1..4] (mid-to-complex coding).
+    const screenshotCoding = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 1.4, confidence: 0.48, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "coding", confidence: 0.52, probabilities: {} },
+    });
+    assert.equal(screenshotCoding?.reasoningDepth, 2.4);
+
+    // High-confidence Level 1 lookup (0-based score 0.749 -> 1.749 < 1.75, domain="research", conf=0.84) stays unrounded below 1.75.
+    const quickLookup = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 0.749, confidence: 0.83, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "research", confidence: 0.84, probabilities: {} },
+    });
+    assert.ok(quickLookup && Math.abs(quickLookup.reasoningDepth - 1.749) < 1e-9 && quickLookup.reasoningDepth < 1.75);
+
+    // Low-confidence research (e.g. domainConfidence 0.28 on an integration/feature prompt) floors at 2.2.
+    const ambiguousResearch = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 0.0, confidence: 0.69, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "research", confidence: 0.28, probabilities: {} },
+    });
+    assert.equal(ambiguousResearch?.reasoningDepth, 2.2);
   });
 
   it("extracts recent assistant context for short follow-up prompts like 'implement both steps'", () => {

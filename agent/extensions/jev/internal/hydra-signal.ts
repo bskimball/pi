@@ -32,12 +32,12 @@ export function buildHydraQuestions(): Record<string, JevQuestion> {
     [HYDRA_DEPTH_ID]: {
       type: "score",
       instructions:
-        "Rate the reasoning depth and technical difficulty required to satisfy the user's request (including any referenced plan in the prior assistant context).",
+        "Rate the reasoning depth and technical difficulty required to satisfy the user's request (including any referenced plan or bug context in the prior assistant turn).",
       criteria: [
-        "Level 1 (Trivial/Mechanical): Pure status check, single-line typo or config tweak, git commit/push command, or simple direct question requiring no code investigation or multi-step edits.",
-        "Level 2 (Standard Coding/Diagnosis): Investigating a bug symptom across files, implementing a feature or UI behavior, wiring an API/IPC handler, or updating tests.",
-        "Level 3 (Complex Multi-File/Architecture): Cross-module implementation across multiple files/processes, state/IPC coordination, non-obvious debugging, or careful refactoring.",
-        "Level 4 (Frontier Architecture/Invariants): Deep architectural design, subtle race/concurrency/security invariant analysis, or ambiguous high-stakes system trade-offs.",
+        "Level 1 (Quick/Single Lookup): Greeting, git commit/push, single-line text/config tweak, or a one-step factual lookup (e.g. 'where is X stored?').",
+        "Level 2 (Standard Implementation or Multi-Step Investigation): Implementing or updating a localized feature/test, or investigating a ticket, contract, or codebase behavior across multiple reads/commands.",
+        "Level 3 (Complex Multi-File Coding or Cross-System Diagnosis): Multi-file feature implementation across processes/IPC/UI, diagnosing why an integration or workflow failed end-to-end, or probing external API/schema constraints to design a change.",
+        "Level 4 (Frontier Architecture or Subtle Invariants): Deep architectural design, subtle concurrency/race/security invariant analysis, or ambiguous high-stakes system trade-offs.",
       ],
     },
     [HYDRA_DOMAIN_ID]: {
@@ -45,10 +45,10 @@ export function buildHydraQuestions(): Record<string, JevQuestion> {
       instructions:
         "Select the primary execution domain that best characterizes the user's request (accounting for any prior assistant context it approves or continues).",
       criteria: {
-        coding: "Investigating bugs in code, writing, refactoring, or fixing application/extension code, UI components, IPC, tests, or scripts.",
-        reasoning: "Deep debugging of subtle defects, code review, architectural planning, or trade-off analysis.",
-        fast_edit: "Quick shell/git command execution, trivial one-line config/text tweak, or simple direct question with no code investigation.",
-        research: "Exploring documentation, summarizing existing behavior, or gathering external information without editing code.",
+        coding: "Writing, refactoring, or fixing application/extension code, UI components, IPC, tests, scripts, or designing how a requested product change should be built.",
+        reasoning: "Diagnosing non-obvious system/integration failures, deep debugging, code review, architectural planning, or trade-off analysis.",
+        fast_edit: "Quick shell/git command execution, trivial one-line config/text tweak, or single-step factual lookup.",
+        research: "Multi-step lookup or verification across external systems, tickets, contracts, documentation, or codebase files without editing code.",
       },
     },
   };
@@ -61,9 +61,11 @@ export function parseHydraSignal(
 ): HydraTurnSignal | undefined {
   const depthAns = answers[HYDRA_DEPTH_ID];
   const domainAns = answers[HYDRA_DOMAIN_ID];
+  // Jev's Score primitive returns a 0-based index on [0 .. criteria.length - 1] ([0..3] for 4 levels).
+  // Convert [0..3] -> [1..4] so Level 1 = 1.0, Level 2 = 2.0, Level 3 = 3.0, Level 4 = 4.0.
   const rawDepth =
     depthAns?.type === "score" && Number.isFinite(depthAns.score)
-      ? Math.max(1, Math.min(4, depthAns.score))
+      ? Math.max(1, Math.min(4, depthAns.score + 1))
       : undefined;
   const domain =
     domainAns?.type === "choice" && VALID_DOMAINS.has(domainAns.choice as HydraTaskDomain)
@@ -80,12 +82,14 @@ export function parseHydraSignal(
   let reasoningDepth = rawDepth ?? 2.2;
   // Coding and reasoning turns require real code investigation or multi-step edits:
   // never let an uncertain or symptom-phrased coding prompt collapse below Level 2 (2.0),
-  // and floor low-confidence coding depth at 2.2 so it routes to a mid-tier coding model.
+  // and floor low-confidence coding/research prompts at 2.2 so they route to a capable model.
   if (effectiveDomain === "coding") {
     const floor = depthConfidence < 0.65 ? 2.2 : 2.0;
     reasoningDepth = Math.max(floor, reasoningDepth);
   } else if (effectiveDomain === "reasoning") {
-    reasoningDepth = Math.max(2.8, reasoningDepth);
+    reasoningDepth = Math.max(2.85, reasoningDepth);
+  } else if (effectiveDomain === "research" && domainConfidence < 0.55) {
+    reasoningDepth = Math.max(2.2, reasoningDepth);
   }
 
   return {

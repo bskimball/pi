@@ -273,9 +273,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           if (activeChoice) {
             activeChoice.thinking = actualThinking;
             persist();
-            publishPair(ctx);
           }
         }
+        publishPair(ctx);
         const actualThinking = pi.getThinkingLevel();
         outcome = {
           summary: `${activeKey} (${actualThinking}, score ${activeScore.toFixed(2)})`,

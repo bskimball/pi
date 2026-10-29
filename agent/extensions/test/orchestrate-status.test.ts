@@ -888,9 +888,23 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(lowPayload.switchedModel, true);
     assert.match(notices.at(-1) ?? "", /Jev Hydra \(high\): local-proxy\/claude-haiku-5-5 \(low\)/, "emits visible UI notification on Jev Hydra turn routing");
 
+    // High-confidence shallow research lookup (depth 1.749 < 1.75, domainConfidence 0.84) routes to fast model (Haiku / low),
+    // while low-confidence research (domainConfidence 0.28) floors to mid-tier workhorse (gpt-6.1-sol / medium).
+    await commands.mode("hydra standard", ctx);
+    const shallowResearchPayload: any = { reasoningDepth: 1.749, depthConfidence: 0.83, domain: "research", domainConfidence: 0.84, ctx };
+    pi.events.emit("pi:jev:turn-signal", shallowResearchPayload);
+    await shallowResearchPayload.promise;
+    assert.equal(ctx.model.id, "claude-haiku-5-5", "shallow high-confidence research lookup selects fast model");
+    assert.equal(currentThinking, "low");
+
+    const ambiguousResearchPayload: any = { reasoningDepth: 1.0, depthConfidence: 0.69, domain: "research", domainConfidence: 0.28, ctx };
+    pi.events.emit("pi:jev:turn-signal", ambiguousResearchPayload);
+    await ambiguousResearchPayload.promise;
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "low-confidence research prompt floors to mid-tier model");
+    assert.equal(currentThinking, "medium");
+
     // Coding domain with underscored depth (1.4, low confidence 0.48) must NOT pick Haiku/low;
     // it floors to mid-difficulty coding (gpt-6.1-sol / medium in this catalog).
-    await commands.mode("hydra standard", ctx);
     const codingPayload: any = { reasoningDepth: 1.4, depthConfidence: 0.48, domain: "coding", domainConfidence: 0.52, ctx };
     pi.events.emit("pi:jev:turn-signal", codingPayload);
     await codingPayload.promise;

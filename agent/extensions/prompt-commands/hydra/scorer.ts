@@ -122,7 +122,10 @@ function effectiveSignalDepth(
     return Math.max(signal.depthConfidence < 0.65 ? 2.2 : 2.0, raw);
   }
   if (signal.domain === "reasoning") {
-    return Math.max(2.8, raw);
+    return Math.max(2.85, raw);
+  }
+  if (signal.domain === "research" && signal.domainConfidence < 0.55) {
+    return Math.max(2.2, raw);
   }
   return raw;
 }
@@ -138,19 +141,20 @@ export function selectThinkingForModel(
 ): string {
   const depth = effectiveSignalDepth(tier, signal);
   const domain = signal?.domain ?? "coding";
+  const isFastLookup = (domain === "fast_edit" || domain === "research") && depth < 1.75;
   let desired: string;
   if (tier === "standard") {
-    if (domain === "fast_edit" && depth < 1.8) desired = "low";
+    if (isFastLookup) desired = "low";
     else if (depth < 2.85) desired = "medium";
     else desired = "high";
   } else if (tier === "high") {
-    if (domain === "fast_edit" && depth < 1.8) desired = "low";
+    if (isFastLookup) desired = "low";
     else if (depth < 2.65) desired = "medium";
     else if (depth < 3.45) desired = "high";
     else desired = "xhigh";
   } else {
     // max tier
-    if (domain === "fast_edit" && depth < 1.8) desired = "medium";
+    if (isFastLookup) desired = "medium";
     else if (depth < 2.5) desired = "high";
     else if (depth < 3.45) desired = "xhigh";
     else desired = "max";
@@ -180,18 +184,19 @@ export function computeAaUtility(
 
   const domain = signal?.domain ?? "coding";
   const depth = effectiveSignalDepth(tier, signal);
+  const isFastLookup = (domain === "fast_edit" || domain === "research") && depth < 1.75;
 
   let utility: number;
-  if (domain === "fast_edit" && depth < 1.8) {
-    // Trivial mechanical edits / quick commands: favor high-throughput, low-cost models (Haiku 5.5, Flash, Terra).
+  if (isFastLookup) {
+    // Trivial mechanical edits or single-step lookups: favor high-throughput, low-cost models (Haiku 5.5, Flash, Terra).
     utility = tier === "max"
       ? 0.35 * codingNorm + 0.25 * intelNorm + 0.30 * speedNorm + 0.10 * costEfficiency
       : 0.25 * codingNorm + 0.45 * speedNorm + 0.30 * costEfficiency;
   } else if (depth < 2.85 && domain !== "reasoning" && tier !== "max") {
-    // Mid-difficulty coding / research (Level 2): favor strong mid-tier coding + fast throughput (Sonnet 5.5, GPT-6.1 Sol/Terra).
+    // Mid-difficulty coding / multi-step research (Level 2): favor strong mid-tier coding + fast throughput (Sonnet 5.5, GPT-6.1 Sol/Terra).
     utility = 0.42 * codingNorm + 0.13 * intelNorm + 0.20 * speedNorm + 0.25 * costEfficiency;
   } else if (tier !== "max" && (domain === "reasoning" || depth >= 2.85)) {
-    // Complex multi-file coding or reasoning (Level 3+): frontier intelligence & coding dominate (Opus 5.5, Carbon, Astra).
+    // Complex multi-file coding, deep research, or reasoning (Level 3+): frontier intelligence & coding dominate (Opus 5.5, Carbon, Astra).
     utility = 0.50 * codingNorm + 0.40 * intelNorm + 0.06 * speedNorm + 0.04 * costEfficiency;
   } else if (tier === "max") {
     utility = domain === "reasoning"
@@ -202,8 +207,8 @@ export function computeAaUtility(
   }
 
   // Capability floor: lightweight models (codingScore < 48, e.g. Haiku, Flash, Luna) must not
-  // outrank mid/frontier coding models on coding or reasoning tasks solely due to speed/price.
-  if ((domain === "coding" || domain === "reasoning") && (aa.codingScore ?? 0) < 48) {
+  // outrank mid/frontier coding models on coding, reasoning, or non-trivial research tasks.
+  if (!isFastLookup && (aa.codingScore ?? 0) < 48) {
     utility *= 0.55;
   }
 
