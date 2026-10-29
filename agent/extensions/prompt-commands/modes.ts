@@ -659,6 +659,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         rec.score = res.score;
         rec.switchedModel = res.switchedModel;
         rec.summary = res.summary;
+        try {
+          rec.ctx?.ui?.notify?.(
+            `Jev Hydra (${tier}): ${res.model} (${res.thinking}) · depth ${rec.reasoningDepth.toFixed(1)} ${rec.domain}${typeof res.score === "number" ? ` (score ${res.score.toFixed(2)})` : ""}`,
+            "info",
+          );
+        } catch {
+          // Cosmetic notification must never interrupt turn routing.
+        }
       }
     });
   });

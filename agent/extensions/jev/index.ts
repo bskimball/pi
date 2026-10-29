@@ -9,7 +9,7 @@ import { noteWait, pollAdvisory, readWaitObservation, readWaitResult, reportStat
 import { looksSecretish, buildMemoryTriageQuestions, collectMemoryTriageFindings, formatMemoryState, formatMemoryTriageAdvisory, parseMemoryEntry } from "./internal/memory-triage.ts";
 import { buildOracleTriggerQuestions, collectOracleTriggerFindings, formatOracleTriggerAdvisory } from "./internal/oracle-trigger.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
-import { buildHydraQuestions, formatHydraAdvisory, isHydraActive, parseHydraSignal } from "./internal/hydra-signal.ts";
+import { buildHydraQuestions, extractRecentAssistantContext, isHydraActive, MIN_HYDRA_PROMPT_CHARS, parseHydraSignal } from "./internal/hydra-signal.ts";
 import { buildTodoEvidenceQuestions, collectTodoEvidenceFindings, diffTodoTransitions, formatTodoEvidenceAdvisory, formatTodoState, nextTodoStatusMap, snapshotTodos } from "./internal/todo-evidence.ts";
 import { BREADTH_ID, buildSkillBreadthQuestion, buildSkillQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SuggestedSkill } from "./internal/skill-router.ts";
 import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
@@ -293,7 +293,8 @@ export default function (pi: ExtensionAPI): void {
     if (!config.skillRouter.enabled && !config.routingAdvisory.enabled && !hydraActive) return undefined;
 
     const prompt = event.prompt?.trim() ?? "";
-    if (prompt.length < MIN_PROMPT_CHARS) {
+    const minChars = hydraActive ? MIN_HYDRA_PROMPT_CHARS : MIN_PROMPT_CHARS;
+    if (prompt.length < minChars) {
       logTelemetry({
         event: "evaluation",
         sessionId,
@@ -309,6 +310,7 @@ export default function (pi: ExtensionAPI): void {
       return undefined;
     }
     const trimmed = prompt.length > MAX_PROMPT_CHARS ? prompt.slice(0, MAX_PROMPT_CHARS) : prompt;
+    const allowFullAdvisory = prompt.length >= MIN_PROMPT_CHARS;
 
     // Skills that opt out of model invocation are never auto-suggested.
     const candidates: SkillCandidate[] = (event.systemPromptOptions?.skills ?? [])
@@ -321,7 +323,7 @@ export default function (pi: ExtensionAPI): void {
       .slice(0, MAX_ROUTED_SKILLS);
 
     const questions: Record<string, JevQuestion> = Object.create(null);
-    const routeSkills = config.skillRouter.enabled && candidates.length > 0;
+    const routeSkills = allowFullAdvisory && config.skillRouter.enabled && candidates.length > 0;
     if (routeSkills) {
       try {
         questions.skill = buildSkillQuestion(candidates);
@@ -330,7 +332,7 @@ export default function (pi: ExtensionAPI): void {
         // A malformed catalog disables routing for this turn, never the turn itself.
       }
     }
-    if (config.routingAdvisory.enabled) Object.assign(questions, buildRoutingQuestions());
+    if (allowFullAdvisory && config.routingAdvisory.enabled) Object.assign(questions, buildRoutingQuestions());
     if (hydraActive) Object.assign(questions, buildHydraQuestions());
     if (Object.keys(questions).length === 0) {
       logTelemetry({
@@ -349,12 +351,12 @@ export default function (pi: ExtensionAPI): void {
     }
 
     const sources = [
-      ...turnSources(config).filter((source) => source !== "skill-router" || !!questions.skill),
+      ...(allowFullAdvisory ? turnSources(config).filter((source) => source !== "skill-router" || !!questions.skill) : []),
       ...(hydraActive ? ["hydra-router"] : []),
     ];
     const deadlineMs = Math.max(
       questions.skill ? config.skillRouter.deadlineMs : 0,
-      config.routingAdvisory.enabled ? config.routingAdvisory.deadlineMs : 0,
+      allowFullAdvisory && config.routingAdvisory.enabled ? config.routingAdvisory.deadlineMs : 0,
       hydraActive ? CLASSIFIER_DEADLINE_MS : 0,
     );
     // Bare request plus the host workflow index: which project skills own which
@@ -365,9 +367,18 @@ export default function (pi: ExtensionAPI): void {
     const workflowIndex = questions.skill
       ? extractWorkflowIndex(event.systemPromptOptions?.contextFiles, ctx.cwd)
       : undefined;
-    const state = workflowIndex
-      ? `User request:\n${trimmed}\n\n${workflowIndex}`
-      : trimmed;
+    const recentAssistant = hydraActive
+      ? extractRecentAssistantContext(ctx.sessionManager?.getBranch?.())
+      : undefined;
+    const stateParts: string[] = [];
+    if (recentAssistant) stateParts.push(recentAssistant);
+    if (workflowIndex || recentAssistant) {
+      stateParts.push(`User request:\n${trimmed}`);
+      if (workflowIndex) stateParts.push(workflowIndex);
+    } else {
+      stateParts.push(trimmed);
+    }
+    const state = stateParts.join("\n\n");
     const epoch = sessionEpoch;
     const firstStartedAt = Date.now();
     const result = await evaluateAdvisory(state, questions, deadlineMs, ctx.signal, ctx.modelRegistry);
@@ -487,7 +498,6 @@ export default function (pi: ExtensionAPI): void {
           score,
           switchedModel,
         };
-        lines.push(formatHydraAdvisory(hydraSignal, hydraDetails));
         const shortModel = selectedModel?.includes("/")
           ? selectedModel.slice(selectedModel.indexOf("/") + 1)
           : selectedModel;
@@ -498,7 +508,7 @@ export default function (pi: ExtensionAPI): void {
         );
       }
     }
-    const evaluationStatus = lines.length > 0 ? "success" : "no-match";
+    const evaluationStatus = lines.length > 0 || hydraDetails !== undefined ? "success" : "no-match";
     logTelemetry({
       event: "evaluation",
       sessionId,
@@ -538,7 +548,21 @@ export default function (pi: ExtensionAPI): void {
       contextIncluded: questions.skill ? workflowIndex !== undefined : undefined,
     });
     publishStatus(ctx, advisoryMeter, result, notes.length > 0 ? notes.join(" · ") : "quiet");
-    if (lines.length === 0) return undefined;
+    if (lines.length === 0) {
+      if (hydraDetails) {
+        // Record a display-only receipt entry for TUI without injecting a custom_message
+        // into the LLM prompt stream (which GUI hosts concatenate onto user messages).
+        try {
+          pi.appendEntry<JevSuggestionDetails>(JEV_SUGGESTION_TYPE, {
+            kind: "turn",
+            skills: [],
+            findings: [],
+            hydra: hydraDetails,
+          });
+        } catch {}
+      }
+      return undefined;
+    }
 
     const suggestionId = nextEphemeralId("suggestion");
     for (const { skill } of suggested) {

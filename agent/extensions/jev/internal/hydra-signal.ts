@@ -24,28 +24,31 @@ export function isHydraActive(envValue = process.env.PI_HYDRA_TIER): boolean {
   return envValue === "standard" || envValue === "high" || envValue === "max";
 }
 
+export const MIN_HYDRA_PROMPT_CHARS = 6;
+export const MAX_RECENT_ASSISTANT_CHARS = 1_500;
+
 export function buildHydraQuestions(): Record<string, JevQuestion> {
   return {
     [HYDRA_DEPTH_ID]: {
       type: "score",
       instructions:
-        "Rate the reasoning depth and technical difficulty required to satisfy the user's request.",
+        "Rate the reasoning depth and technical difficulty required to satisfy the user's request (including any referenced plan in the prior assistant context).",
       criteria: [
-        "Level 1 (Quick/Mechanical): Simple lookup, status check, single-line typo fix, formatting, or straightforward question.",
-        "Level 2 (Standard Implementation): Routine single-file or localized feature implementation, test update, or clear bug fix.",
-        "Level 3 (Complex Multi-File/Debugging): Cross-module implementation, non-obvious bug diagnosis, state synchronization, or careful refactoring.",
+        "Level 1 (Trivial/Mechanical): Pure status check, single-line typo or config tweak, git commit/push command, or simple direct question requiring no code investigation or multi-step edits.",
+        "Level 2 (Standard Coding/Diagnosis): Investigating a bug symptom across files, implementing a feature or UI behavior, wiring an API/IPC handler, or updating tests.",
+        "Level 3 (Complex Multi-File/Architecture): Cross-module implementation across multiple files/processes, state/IPC coordination, non-obvious debugging, or careful refactoring.",
         "Level 4 (Frontier Architecture/Invariants): Deep architectural design, subtle race/concurrency/security invariant analysis, or ambiguous high-stakes system trade-offs.",
       ],
     },
     [HYDRA_DOMAIN_ID]: {
       type: "choice",
       instructions:
-        "Select the primary execution domain that best characterizes the user's request.",
+        "Select the primary execution domain that best characterizes the user's request (accounting for any prior assistant context it approves or continues).",
       criteria: {
-        coding: "Writing, refactoring, or fixing application/extension code, tests, or scripts.",
-        reasoning: "Deep debugging, code review, architectural planning, or trade-off analysis.",
-        fast_edit: "Quick command execution, small config tweak, formatting, or simple direct answer.",
-        research: "Exploring codebases, reading documentation, or gathering external information.",
+        coding: "Investigating bugs in code, writing, refactoring, or fixing application/extension code, UI components, IPC, tests, or scripts.",
+        reasoning: "Deep debugging of subtle defects, code review, architectural planning, or trade-off analysis.",
+        fast_edit: "Quick shell/git command execution, trivial one-line config/text tweak, or simple direct question with no code investigation.",
+        research: "Exploring documentation, summarizing existing behavior, or gathering external information without editing code.",
       },
     },
   };
@@ -58,7 +61,7 @@ export function parseHydraSignal(
 ): HydraTurnSignal | undefined {
   const depthAns = answers[HYDRA_DEPTH_ID];
   const domainAns = answers[HYDRA_DOMAIN_ID];
-  const reasoningDepth =
+  const rawDepth =
     depthAns?.type === "score" && Number.isFinite(depthAns.score)
       ? Math.max(1, Math.min(4, depthAns.score))
       : undefined;
@@ -66,13 +69,67 @@ export function parseHydraSignal(
     domainAns?.type === "choice" && VALID_DOMAINS.has(domainAns.choice as HydraTaskDomain)
       ? (domainAns.choice as HydraTaskDomain)
       : undefined;
-  if (reasoningDepth === undefined && domain === undefined) return undefined;
+  if (rawDepth === undefined && domain === undefined) return undefined;
+
+  const effectiveDomain: HydraTaskDomain = domain ?? "coding";
+  const depthConfidence =
+    depthAns?.type === "score" && Number.isFinite(depthAns.confidence) ? depthAns.confidence : 0;
+  const domainConfidence =
+    domainAns?.type === "choice" && Number.isFinite(domainAns.confidence) ? domainAns.confidence : 0;
+
+  let reasoningDepth = rawDepth ?? 2.2;
+  // Coding and reasoning turns require real code investigation or multi-step edits:
+  // never let an uncertain or symptom-phrased coding prompt collapse below Level 2 (2.0),
+  // and floor low-confidence coding depth at 2.2 so it routes to a mid-tier coding model.
+  if (effectiveDomain === "coding") {
+    const floor = depthConfidence < 0.65 ? 2.2 : 2.0;
+    reasoningDepth = Math.max(floor, reasoningDepth);
+  } else if (effectiveDomain === "reasoning") {
+    reasoningDepth = Math.max(2.8, reasoningDepth);
+  }
+
   return {
-    reasoningDepth: reasoningDepth ?? 2,
-    depthConfidence: depthAns?.type === "score" && Number.isFinite(depthAns.confidence) ? depthAns.confidence : 0,
-    domain: domain ?? "coding",
-    domainConfidence: domainAns?.type === "choice" && Number.isFinite(domainAns.confidence) ? domainAns.confidence : 0,
+    reasoningDepth,
+    depthConfidence,
+    domain: effectiveDomain,
+    domainConfidence,
   };
+}
+
+/**
+ * Extract bounded text from the most recent assistant message in the session branch
+ * so short follow-up prompts ("implement both steps", "do option 2") carry the plan
+ * or diagnosis they refer to when Jev classifies the turn.
+ */
+export function extractRecentAssistantContext(
+  entries: readonly unknown[] | undefined,
+  maxChars = MAX_RECENT_ASSISTANT_CHARS,
+): string | undefined {
+  if (!Array.isArray(entries) || entries.length === 0 || maxChars <= 0) return undefined;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i] as {
+      type?: unknown;
+      message?: { role?: unknown; content?: unknown };
+    } | undefined;
+    if (!entry || entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const content = entry.message.content;
+    if (!Array.isArray(content)) continue;
+    const textParts: string[] = [];
+    for (const block of content) {
+      if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+        const text = (block as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim()) textParts.push(text.trim());
+      }
+    }
+    if (textParts.length === 0) continue;
+    const combined = textParts.join("\n\n").trim();
+    if (!combined) continue;
+    const sliced = combined.length > maxChars
+      ? `…${combined.slice(combined.length - (maxChars - 1))}`
+      : combined;
+    return `Prior assistant context (the turn immediately preceding this user request):\n${sliced}`;
+  }
+  return undefined;
 }
 
 export function formatHydraAdvisory(

@@ -110,6 +110,23 @@ function providerQualityBonus(provider: string): number {
   return 0;
 }
 
+function effectiveSignalDepth(
+  tier: ActiveHydraTier,
+  signal?: HydraTurnSignalInput,
+): number {
+  if (!signal) {
+    return tier === "standard" ? 2.2 : tier === "high" ? 3.1 : 3.8;
+  }
+  const raw = signal.reasoningDepth;
+  if (signal.domain === "coding") {
+    return Math.max(signal.depthConfidence < 0.65 ? 2.2 : 2.0, raw);
+  }
+  if (signal.domain === "reasoning") {
+    return Math.max(2.8, raw);
+  }
+  return raw;
+}
+
 /**
  * Map Hydra tier + Jev reasoning depth (1..4) to a desired Pi thinking level,
  * then clamp to what the chosen model actually supports.
@@ -119,21 +136,23 @@ export function selectThinkingForModel(
   tier: ActiveHydraTier,
   signal?: HydraTurnSignalInput,
 ): string {
-  const depth = signal?.reasoningDepth ?? (tier === "standard" ? 2 : tier === "high" ? 3 : 4);
+  const depth = effectiveSignalDepth(tier, signal);
+  const domain = signal?.domain ?? "coding";
   let desired: string;
   if (tier === "standard") {
-    if (depth < 1.75) desired = "low";
+    if (domain === "fast_edit" && depth < 1.8) desired = "low";
     else if (depth < 2.85) desired = "medium";
     else desired = "high";
   } else if (tier === "high") {
-    if (depth < 1.6) desired = "low";
-    else if (depth < 2.5) desired = "medium";
-    else if (depth < 3.4) desired = "high";
+    if (domain === "fast_edit" && depth < 1.8) desired = "low";
+    else if (depth < 2.65) desired = "medium";
+    else if (depth < 3.45) desired = "high";
     else desired = "xhigh";
   } else {
     // max tier
-    if (depth < 2.2) desired = "high";
-    else if (depth < 3.4) desired = "xhigh";
+    if (domain === "fast_edit" && depth < 1.8) desired = "medium";
+    else if (depth < 2.5) desired = "high";
+    else if (depth < 3.45) desired = "xhigh";
     else desired = "max";
   }
 
@@ -157,47 +176,38 @@ export function computeAaUtility(
   const codingNorm = clamp01(((aa.codingScore ?? 30) - 20) / 45);      // 20..65 -> 0..1
   const speedNorm = clamp01(Math.min(aa.outputSpeedTps ?? 80, 260) / 260);
   const price = aa.blendedPricePer1m ?? 2.5;
-  const costEfficiency = clamp01(1 - Math.min(price, 10) / 10);
+  const costEfficiency = clamp01(1 - Math.min(price, 3.0) / 3.0);
 
   const domain = signal?.domain ?? "coding";
-  const depth = signal?.reasoningDepth ?? (tier === "standard" ? 2 : tier === "high" ? 3 : 4);
+  const depth = effectiveSignalDepth(tier, signal);
 
-  // When Jev provides a concrete turn signal, weight speed & cost-efficiency
-  // higher on routine/fast turns so Hydra selects nimble workhorse models
-  // (e.g. Sonnet 5.5, GPT-6.1 Sol/Terra, Haiku 5.5) instead of locking onto
-  // heavy frontier models for every turn.
-  if (signal) {
-    if (domain === "fast_edit" || depth < 1.8) {
-      return tier === "max"
-        ? 0.35 * codingNorm + 0.25 * intelNorm + 0.30 * speedNorm + 0.10 * costEfficiency
-        : 0.25 * codingNorm + 0.45 * speedNorm + 0.30 * costEfficiency;
-    }
-    if (depth < 2.75 && domain !== "reasoning") {
-      return tier === "max"
-        ? 0.45 * codingNorm + 0.30 * intelNorm + 0.18 * speedNorm + 0.07 * costEfficiency
-        : 0.40 * codingNorm + 0.15 * intelNorm + 0.28 * speedNorm + 0.17 * costEfficiency;
-    }
+  let utility: number;
+  if (domain === "fast_edit" && depth < 1.8) {
+    // Trivial mechanical edits / quick commands: favor high-throughput, low-cost models (Haiku 5.5, Flash, Terra).
+    utility = tier === "max"
+      ? 0.35 * codingNorm + 0.25 * intelNorm + 0.30 * speedNorm + 0.10 * costEfficiency
+      : 0.25 * codingNorm + 0.45 * speedNorm + 0.30 * costEfficiency;
+  } else if (depth < 2.85 && domain !== "reasoning" && tier !== "max") {
+    // Mid-difficulty coding / research (Level 2): favor strong mid-tier coding + fast throughput (Sonnet 5.5, GPT-6.1 Sol/Terra).
+    utility = 0.42 * codingNorm + 0.13 * intelNorm + 0.20 * speedNorm + 0.25 * costEfficiency;
+  } else if (tier !== "max" && (domain === "reasoning" || depth >= 2.85)) {
+    // Complex multi-file coding or reasoning (Level 3+): frontier intelligence & coding dominate (Opus 5.5, Carbon, Astra).
+    utility = 0.50 * codingNorm + 0.40 * intelNorm + 0.06 * speedNorm + 0.04 * costEfficiency;
+  } else if (tier === "max") {
+    utility = domain === "reasoning"
+      ? 0.60 * intelNorm + 0.35 * codingNorm + 0.05 * speedNorm
+      : 0.45 * intelNorm + 0.50 * codingNorm + 0.05 * speedNorm;
+  } else {
+    utility = 0.55 * codingNorm + 0.25 * intelNorm + 0.12 * speedNorm + 0.08 * costEfficiency;
   }
 
-  if (tier === "standard") {
-    if (domain === "fast_edit" || depth < 1.7) {
-      return 0.35 * codingNorm + 0.40 * speedNorm + 0.25 * costEfficiency;
-    }
-    return 0.45 * codingNorm + 0.20 * intelNorm + 0.20 * speedNorm + 0.15 * costEfficiency;
+  // Capability floor: lightweight models (codingScore < 48, e.g. Haiku, Flash, Luna) must not
+  // outrank mid/frontier coding models on coding or reasoning tasks solely due to speed/price.
+  if ((domain === "coding" || domain === "reasoning") && (aa.codingScore ?? 0) < 48) {
+    utility *= 0.55;
   }
 
-  if (tier === "high") {
-    if (domain === "reasoning" || depth >= 3.3) {
-      return 0.45 * codingNorm + 0.40 * intelNorm + 0.10 * speedNorm + 0.05 * costEfficiency;
-    }
-    return 0.55 * codingNorm + 0.25 * intelNorm + 0.12 * speedNorm + 0.08 * costEfficiency;
-  }
-
-  // max tier: frontier intelligence & coding dominate
-  if (domain === "reasoning") {
-    return 0.60 * intelNorm + 0.35 * codingNorm + 0.05 * speedNorm;
-  }
-  return 0.45 * intelNorm + 0.50 * codingNorm + 0.05 * speedNorm;
+  return utility;
 }
 
 export interface RankModelsOptions {

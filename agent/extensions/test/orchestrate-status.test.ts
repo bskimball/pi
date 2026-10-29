@@ -886,6 +886,24 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(lowPayload.selectedModel, "local-proxy/claude-haiku-5-5", "turn-signal payload reports selected model for Jev receipt");
     assert.equal(lowPayload.selectedThinking, "low", "turn-signal payload reports selected thinking level");
     assert.equal(lowPayload.switchedModel, true);
+    assert.match(notices.at(-1) ?? "", /Jev Hydra \(high\): local-proxy\/claude-haiku-5-5 \(low\)/, "emits visible UI notification on Jev Hydra turn routing");
+
+    // Coding domain with underscored depth (1.4, low confidence 0.48) must NOT pick Haiku/low;
+    // it floors to mid-difficulty coding (gpt-6.1-sol / medium in this catalog).
+    await commands.mode("hydra standard", ctx);
+    const codingPayload: any = { reasoningDepth: 1.4, depthConfidence: 0.48, domain: "coding", domainConfidence: 0.52, ctx };
+    pi.events.emit("pi:jev:turn-signal", codingPayload);
+    await codingPayload.promise;
+    assert.notEqual(ctx.model.id, "claude-haiku-5-5", "coding domain never selects Haiku when mid/frontier coding models are available");
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "mid-difficulty coding selects capable coding workhorse model");
+    assert.equal(currentThinking, "medium", "coding domain uses at least medium thinking");
+
+    // Complex coding (depth >= 2.85) in hydra:standard escalates from mid-tier Sol up to frontier Opus 5.5 (high).
+    const complexCodingPayload: any = { reasoningDepth: 2.85, depthConfidence: 0.9, domain: "coding", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", complexCodingPayload);
+    await complexCodingPayload.promise;
+    assert.equal(ctx.model.id, "claude-opus-5-5", "complex coding (depth >= 2.85) escalates to frontier model even in standard tier");
+    assert.equal(currentThinking, "high", "complex coding in standard tier escalates thinking to high");
 
     // Subagent Hydra routing via pi:hydra:subagent-route selects fast models for inspector and frontier for oracle.
     const inspectorRoute: any = { agent: "inspector", ctx };

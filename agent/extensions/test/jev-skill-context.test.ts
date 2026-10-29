@@ -4,7 +4,7 @@ import type { JevAnswer } from "../jev/internal/client.ts";
 import { buildSkillBreadthQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SkillRouterPolicy } from "../jev/internal/skill-router.ts";
 import { collectFindings } from "../jev/internal/code-judge.ts";
 import { extractWorkflowIndex } from "../jev/internal/workflow-index.ts";
-import { buildHydraQuestions, formatHydraAdvisory, HYDRA_DEPTH_ID, HYDRA_DOMAIN_ID, isHydraActive, parseHydraSignal } from "../jev/internal/hydra-signal.ts";
+import { buildHydraQuestions, extractRecentAssistantContext, formatHydraAdvisory, HYDRA_DEPTH_ID, HYDRA_DOMAIN_ID, isHydraActive, MIN_HYDRA_PROMPT_CHARS, parseHydraSignal } from "../jev/internal/hydra-signal.ts";
 import { registerSuggestionReceipt } from "../jev/internal/suggestion-receipt.ts";
 
 const WORK_AGENTS = `stuff before
@@ -355,6 +355,36 @@ describe("hydra turn signal", () => {
       domainConfidence: 0.91,
     });
     assert.equal(parseHydraSignal({}), undefined);
+
+    // Low-confidence coding prompt (e.g. symptom description) floors at 2.2 so it never drops into Level 1 fast_edit/Haiku.
+    const lowConfCoding = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 1.4, confidence: 0.48, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "coding", confidence: 0.52, probabilities: {} },
+    });
+    assert.equal(lowConfCoding?.reasoningDepth, 2.2);
+    assert.equal(lowConfCoding?.domain, "coding");
+  });
+
+  it("extracts recent assistant context for short follow-up prompts like 'implement both steps'", () => {
+    assert.ok("implement both steps".length >= MIN_HYDRA_PROMPT_CHARS);
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "Why does screenshot say captured without saving?" }] } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "checking files" },
+            { type: "text", text: "Two steps are needed:\n1. Persist PNG to disk in main/screenshots.ts.\n2. Render thumbnail + Save/Copy in renderer/process-trace.tsx." },
+          ],
+        },
+      },
+    ];
+    const ctxText = extractRecentAssistantContext(branch);
+    assert.ok(ctxText);
+    assert.match(ctxText!, /Prior assistant context/);
+    assert.match(ctxText!, /Persist PNG to disk/);
+    assert.equal(extractRecentAssistantContext([]), undefined);
   });
 
   it("formats hydra advisory and renders hydra row in jev-suggestion receipt even when no skill or guard fires", () => {
