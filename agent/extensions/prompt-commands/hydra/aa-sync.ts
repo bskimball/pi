@@ -34,7 +34,32 @@ export interface AaModelMetrics {
   cacheHitPricePer1m: number | null;
   contextWindowTokens: number | null;
   isReasoning: boolean;
+  // Broader AA measurements; absent or null when AA has not evaluated the model.
+  /** AA-Omniscience hallucination rate on [0..1]; lower is better. */
+  hallucinationRate?: number | null;
+  /** GDPval-AA Elo: agentic real-world work tasks. */
+  gdpvalElo?: number | null;
+  /** AA-Briefcase presentation Elo. */
+  presentationElo?: number | null;
+  /** AA-3D Elo: interactive 3D experiences built in code. */
+  aa3dElo?: number | null;
+  /** Code2Video-AA Elo: product and brand videos designed in code. */
+  code2videoElo?: number | null;
+  /** AA-PersonalityBench index percentiles on [0..100]; `slop` is higher-is-worse. */
+  personality?: Partial<Record<AaPersonalityIndex, number>>;
 }
+
+export const AA_PERSONALITY_INDEXES = [
+  "expressiveness",
+  "organization",
+  "informativeness",
+  "transparency",
+  "warmth",
+  "conviction",
+  "imagination",
+  "slop",
+] as const;
+export type AaPersonalityIndex = (typeof AA_PERSONALITY_INDEXES)[number];
 
 export interface AaCatalogSnapshot {
   schema: 1;
@@ -65,6 +90,40 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.2,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+  },
+  {
+    // Not on the /models listing page; captured from artificialanalysis.ai/models/gemini-4-argon.
+    slug: "gemini-4-argon",
+    name: "Gemini 4 Argon (High)",
+    creatorSlug: "google",
+    intelligenceIndex: 50.4,
+    engineeringIndex: 57.3,
+    frontierCode20: 0.257,
+    terminalBench40: 0.571,
+    codingScore: 47.77,
+    outputSpeedTps: 82.9,
+    ttftSeconds: null,
+    blendedPricePer1m: 8.0,
+    inputPricePer1m: 4.0,
+    outputPricePer1m: 20.0,
+    cacheHitPricePer1m: 0.2,
+    contextWindowTokens: 1_000_000,
+    isReasoning: true,
+    hallucinationRate: 0.043,
+    gdpvalElo: 1631.1,
+    presentationElo: 1305.2,
+    aa3dElo: 1152.6,
+    code2videoElo: 1259.4,
+    personality: {
+      expressiveness: 82.7,
+      organization: 48.0,
+      informativeness: 80.2,
+      transparency: 15.9,
+      warmth: 75.3,
+      conviction: 57.9,
+      imagination: 43.1,
+      slop: 70.3,
+    },
   },
   {
     slug: "claude-opus-5-5",
@@ -383,10 +442,7 @@ export function computeCodingScore(input: {
   return Number((parts.reduce((sum, p) => sum + p.value * p.weight, 0) / totalWeight).toFixed(2));
 }
 
-/**
- * Parse the `initialModels` array from Artificial Analysis's `/models` HTML.
- */
-export function parseAaModelsHtml(html: string): AaModelMetrics[] {
+function decodeRscPayload(html: string): string {
   const parts = html.split('self.__next_f.push([1,"');
   let full = "";
   for (let i = 1; i < parts.length; i++) {
@@ -399,18 +455,68 @@ export function parseAaModelsHtml(html: string): AaModelMetrics[] {
       }
     }
   }
-  const payload = full || html;
-  const marker = '"initialModels":[';
-  const pos = payload.indexOf(marker);
-  if (pos === -1) return [];
+  return full || html;
+}
 
-  const arrStart = pos + marker.length - 1;
+function recordToMetrics(rec: Record<string, unknown>): AaModelMetrics | undefined {
+  const slug = typeof rec.slug === "string" ? rec.slug.trim() : "";
+  if (!slug) return undefined;
+  const name = typeof rec.name === "string" ? rec.name.trim() : slug;
+  const obj = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  const release = obj(rec.release);
+  const creator = obj(rec.creator);
+  const capabilities = obj(rec.capabilities);
+  const timescale = obj(rec.timescaleData);
+  const briefcase = obj(rec.briefcaseBreakdown);
+  const indexScores = obj(obj(rec.personalityBench)?.indexScores);
+
+  const intelligenceIndex = finiteOrNull(rec.intelligenceIndex);
+  const engineeringIndex = finiteOrNull(capabilities?.engineering);
+  const frontierCode20 = finiteOrNull(rec.frontierCode20 ?? rec.frontierCode);
+  const terminalBench40 = finiteOrNull(rec.terminalBench40 ?? rec.terminalBench21);
+  const codingScore = computeCodingScore({ intelligenceIndex, engineeringIndex, frontierCode20, terminalBench40 });
+
+  let personality: AaModelMetrics["personality"];
+  for (const key of AA_PERSONALITY_INDEXES) {
+    const value = finiteOrNull(indexScores?.[key]);
+    if (value !== null) (personality ??= {})[key] = value;
+  }
+
+  return {
+    slug,
+    name,
+    releaseSlug: typeof release?.slug === "string" ? release.slug : undefined,
+    creatorSlug: typeof creator?.slug === "string" ? creator.slug : undefined,
+    intelligenceIndex,
+    engineeringIndex,
+    frontierCode20,
+    terminalBench40,
+    codingScore,
+    outputSpeedTps: finiteOrNull(timescale?.medianOutputSpeed),
+    ttftSeconds: finiteOrNull(timescale?.medianTimeToFirstChunk),
+    blendedPricePer1m: finiteOrNull(rec.price1mBlended7To2To1 ?? rec.price1mBlended0To3To1),
+    inputPricePer1m: finiteOrNull(rec.price1mInputTokens),
+    outputPricePer1m: finiteOrNull(rec.price1mOutputTokens),
+    cacheHitPricePer1m: finiteOrNull(rec.cacheHitPrice),
+    contextWindowTokens: finiteOrNull(rec.contextWindowTokens),
+    isReasoning: rec.isReasoning !== false,
+    hallucinationRate: finiteOrNull(rec.omniscienceHallucinationRate),
+    gdpvalElo: finiteOrNull(rec.gdpval),
+    presentationElo: finiteOrNull(obj(briefcase?.presentation)?.elo),
+    aa3dElo: finiteOrNull(rec.aa3dElo),
+    code2videoElo: finiteOrNull(rec.code2videoElo),
+    personality,
+  };
+}
+
+/** Extract the JSON value (object or array) that opens at `start`. */
+function sliceJsonValue(payload: string, start: number): string | undefined {
   let depth = 0;
   let inStr = false;
   let esc = false;
-  let end = arrStart;
-  for (; end < payload.length; end++) {
-    const ch = payload[end];
+  for (let i = start; i < payload.length; i++) {
+    const ch = payload[i];
     if (esc) {
       esc = false;
       continue;
@@ -423,21 +529,72 @@ export function parseAaModelsHtml(html: string): AaModelMetrics[] {
       inStr = !inStr;
       continue;
     }
-    if (!inStr) {
-      if (ch === "[") depth++;
-      else if (ch === "]") {
-        depth--;
-        if (depth === 0) {
-          end++;
-          break;
-        }
-      }
+    if (inStr) continue;
+    if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) return payload.slice(start, i + 1);
     }
   }
+  return undefined;
+}
 
+/**
+ * Parse one model's record from its `artificialanalysis.ai/models/<slug>` page.
+ * Used for models AA omits from the `/models` listing.
+ */
+export function parseAaModelPage(html: string, slug: string): AaModelMetrics | undefined {
+  const payload = decodeRscPayload(html);
+  const needle = `"slug":"${slug}"`;
+  // One string-aware forward pass: remember the innermost open object at each slug key.
+  const owners: number[] = [];
+  const stack: number[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < payload.length; i++) {
+    const ch = payload[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      if (stack.length && payload.startsWith(needle, i)) owners.push(stack[stack.length - 1]!);
+      inStr = true;
+    } else if (ch === "{") stack.push(i);
+    else if (ch === "}") stack.pop();
+  }
+
+  let best: Record<string, unknown> | undefined;
+  for (const open of owners) {
+    const text = sliceJsonValue(payload, open);
+    if (!text) continue;
+    try {
+      const rec = JSON.parse(text) as Record<string, unknown>;
+      if (finiteOrNull(rec.intelligenceIndex) === null) continue;
+      if (!best || Object.keys(rec).length > Object.keys(best).length) best = rec;
+    } catch {
+      // Not a standalone JSON object; keep scanning.
+    }
+  }
+  return best ? recordToMetrics(best) : undefined;
+}
+
+/**
+ * Parse the `initialModels` array from Artificial Analysis's `/models` HTML.
+ */
+export function parseAaModelsHtml(html: string): AaModelMetrics[] {
+  const payload = decodeRscPayload(html);
+  const marker = '"initialModels":[';
+  const pos = payload.indexOf(marker);
+  if (pos === -1) return [];
+
+  const text = sliceJsonValue(payload, pos + marker.length - 1);
+  if (!text) return [];
   let rawList: unknown;
   try {
-    rawList = JSON.parse(payload.slice(arrStart, end));
+    rawList = JSON.parse(text);
   } catch {
     return [];
   }
@@ -446,45 +603,8 @@ export function parseAaModelsHtml(html: string): AaModelMetrics[] {
   const models: AaModelMetrics[] = [];
   for (const item of rawList) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const slug = typeof rec.slug === "string" ? rec.slug.trim() : "";
-    if (!slug) continue;
-    const name = typeof rec.name === "string" ? rec.name.trim() : slug;
-    const release = rec.release && typeof rec.release === "object" ? (rec.release as Record<string, unknown>) : undefined;
-    const creator = rec.creator && typeof rec.creator === "object" ? (rec.creator as Record<string, unknown>) : undefined;
-    const capabilities = rec.capabilities && typeof rec.capabilities === "object" ? (rec.capabilities as Record<string, unknown>) : undefined;
-    const timescale = rec.timescaleData && typeof rec.timescaleData === "object" ? (rec.timescaleData as Record<string, unknown>) : undefined;
-
-    const intelligenceIndex = finiteOrNull(rec.intelligenceIndex);
-    const engineeringIndex = finiteOrNull(capabilities?.engineering);
-    const frontierCode20 = finiteOrNull(rec.frontierCode20 ?? rec.frontierCode);
-    const terminalBench40 = finiteOrNull(rec.terminalBench40 ?? rec.terminalBench21);
-    const codingScore = computeCodingScore({
-      intelligenceIndex,
-      engineeringIndex,
-      frontierCode20,
-      terminalBench40,
-    });
-
-    models.push({
-      slug,
-      name,
-      releaseSlug: typeof release?.slug === "string" ? release.slug : undefined,
-      creatorSlug: typeof creator?.slug === "string" ? creator.slug : undefined,
-      intelligenceIndex,
-      engineeringIndex,
-      frontierCode20,
-      terminalBench40,
-      codingScore,
-      outputSpeedTps: finiteOrNull(timescale?.medianOutputSpeed),
-      ttftSeconds: finiteOrNull(timescale?.medianTimeToFirstChunk),
-      blendedPricePer1m: finiteOrNull(rec.price1mBlended7To2To1 ?? rec.price1mBlended0To3To1),
-      inputPricePer1m: finiteOrNull(rec.price1mInputTokens),
-      outputPricePer1m: finiteOrNull(rec.price1mOutputTokens),
-      cacheHitPricePer1m: finiteOrNull(rec.cacheHitPrice),
-      contextWindowTokens: finiteOrNull(rec.contextWindowTokens),
-      isReasoning: rec.isReasoning !== false,
-    });
+    const metrics = recordToMetrics(item as Record<string, unknown>);
+    if (metrics) models.push(metrics);
   }
   return models;
 }
@@ -494,11 +614,14 @@ export function readAaCatalog(path = defaultAaCatalogPath()): AaCatalogSnapshot 
     if (existsSync(path)) {
       const raw = JSON.parse(readFileSync(path, "utf8"));
       if (raw && typeof raw === "object" && Array.isArray(raw.models) && raw.models.length > 0) {
+        const models = raw.models as AaModelMetrics[];
+        // Seeds added after the last sync still need to be scoreable.
+        const known = new Set(models.map((m) => m.slug));
         return {
           schema: 1,
           updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
           source: raw.source === "live" ? "live" : "seed",
-          models: raw.models as AaModelMetrics[],
+          models: [...models, ...SEED_AA_MODELS.filter((s) => !known.has(s.slug))],
         };
       }
     }
@@ -548,6 +671,25 @@ export async function syncAaCatalog(options?: {
     for (const seed of SEED_AA_MODELS) bySlug.set(seed.slug, seed);
     for (const live of parsed) bySlug.set(live.slug, live);
 
+    // Seeded models AA leaves off the listing (e.g. Gemini 4 Argon) still have full
+    // records on their own pages; refresh them so every AA measurement is current.
+    const listed = new Set(parsed.map((m) => m.slug));
+    await Promise.all(
+      SEED_AA_MODELS.filter((seed) => !listed.has(seed.slug)).map(async (seed) => {
+        try {
+          const page = await fetchFn(`${url}/${seed.slug}`, {
+            signal: controller.signal,
+            headers: { Accept: "text/html,application/xhtml+xml" },
+          });
+          if (!page.ok) return;
+          const metrics = parseAaModelPage(await page.text(), seed.slug);
+          if (metrics) bySlug.set(seed.slug, metrics);
+        } catch {
+          // Keep the seed baseline for this model.
+        }
+      }),
+    );
+
     const snapshot: AaCatalogSnapshot = {
       schema: 1,
       updatedAt: Date.now(),
@@ -586,6 +728,7 @@ const EXPLICIT_ALIASES: Record<string, string> = {
   "gpt-6-luna": "gpt-6-luna",
   "grok-4-7": "grok-4-7",
   "gemini-4-carbon": "gemini-4-carbon",
+  "gemini-4-argon": "gemini-4-argon",
   "gemini-3-8-flash-high": "gemini-3-8-flash",
   "gemini-3-8-flash": "gemini-3-8-flash",
   "muse-wonder-1-0": "muse-wonder",

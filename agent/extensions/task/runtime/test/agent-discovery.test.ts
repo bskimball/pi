@@ -8,6 +8,7 @@ import {
   orchestrateAgentParamDescription,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
+  scopeRebindAttempts,
   stripRegularModeCarveout,
   type AgentDef,
 } from "../agent-discovery.ts";
@@ -138,6 +139,93 @@ describe("resolveAgentThinking", () => {
     } finally {
       if (saved === undefined) delete process.env.PI_HYDRA_TIER;
       else process.env.PI_HYDRA_TIER = saved;
+    }
+  });
+
+  it("restricts Hydra attempts to the active scope and fails closed when nothing is in scope", () => {
+    const inspector = def({
+      name: "inspector",
+      model: "antigravity/gemini-3.8-flash",
+      fallbackModels: ["openai/gpt-6.1-terra", "claude-bridge/claude-haiku-5-5"],
+      thinking: "medium",
+    });
+    const scout = def({
+      name: "scout",
+      model: "antigravity/gemini-3.8-flash",
+      fallbackModels: ["claude-bridge/claude-haiku-5-5"],
+      thinking: "medium",
+    });
+    const savedTier = process.env.PI_HYDRA_TIER;
+    const savedScope = process.env.PI_HYDRA_SCOPE;
+    process.env.PI_HYDRA_TIER = "high";
+    process.env.PI_HYDRA_SCOPE = "openai";
+    try {
+      const routed = resolveSubagentModelsAndThinking({
+        def: inspector,
+        ctx: {},
+        emitEvent: (_ev, payload: any) => {
+          payload.models = ["claude-bridge/claude-sonnet-5-5", "openai/gpt-6.1-sol"];
+          payload.scope = "openai";
+          payload.thinking = "low";
+        },
+      });
+      assert.deepEqual(routed.attempts, ["openai/gpt-6.1-sol", "openai/gpt-6.1-terra"], "static fallbacks are filtered to the scope");
+      assert.equal(routed.error, undefined);
+
+      const staticOnly = resolveSubagentModelsAndThinking({
+        def: inspector,
+        ctx: {},
+        emitEvent: (_ev, payload: any) => {
+          payload.models = [];
+          payload.scope = "openai";
+          payload.scopeExhausted = true;
+        },
+      });
+      assert.deepEqual(staticOnly.attempts, ["openai/gpt-6.1-terra"], "in-scope static fallback still runs when Hydra ranking is exhausted");
+
+      const blocked = resolveSubagentModelsAndThinking({
+        def: scout,
+        ctx: {},
+        emitEvent: (_ev, payload: any) => {
+          payload.models = [];
+          payload.scope = "openai";
+          payload.scopeExhausted = true;
+        },
+      });
+      assert.deepEqual(blocked.attempts, []);
+      assert.match(blocked.error ?? "", /refusing out-of-scope fallback/);
+    } finally {
+      if (savedTier === undefined) delete process.env.PI_HYDRA_TIER;
+      else process.env.PI_HYDRA_TIER = savedTier;
+      if (savedScope === undefined) delete process.env.PI_HYDRA_SCOPE;
+      else process.env.PI_HYDRA_SCOPE = savedScope;
+    }
+  });
+});
+
+describe("scopeRebindAttempts", () => {
+  const chain = ["openai/gpt-6.1-sol", "local-proxy/claude-opus-5-5", "openai-codex/gpt-6-astra", "xai/grok-4.7"];
+
+  it("filters a rebind fallback chain to the active scope", () => {
+    assert.deepEqual(scopeRebindAttempts(chain, "oracle", "openai").attempts, [
+      "openai/gpt-6.1-sol",
+      "openai-codex/gpt-6-astra",
+    ]);
+  });
+
+  it("fails closed when no rebind candidate is in scope", () => {
+    const blocked = scopeRebindAttempts(["local-proxy/claude-opus-5-5"], "oracle", "openai");
+    assert.deepEqual(blocked.attempts, []);
+    assert.match(blocked.error ?? "", /refusing out-of-scope rebind/);
+  });
+
+  it("leaves the chain unchanged without a scope", () => {
+    const saved = process.env.PI_HYDRA_SCOPE;
+    delete process.env.PI_HYDRA_SCOPE;
+    try {
+      assert.deepEqual(scopeRebindAttempts(chain, "oracle").attempts, chain);
+    } finally {
+      if (saved !== undefined) process.env.PI_HYDRA_SCOPE = saved;
     }
   });
 });

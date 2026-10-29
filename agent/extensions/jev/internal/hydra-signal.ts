@@ -10,7 +10,7 @@ import type { JevAnswer, JevQuestion } from "./client.ts";
 export const HYDRA_DEPTH_ID = "hydra_reasoning_depth";
 export const HYDRA_DOMAIN_ID = "hydra_task_domain";
 
-export type HydraTaskDomain = "coding" | "reasoning" | "fast_edit" | "research";
+export type HydraTaskDomain = "coding" | "reasoning" | "fast_edit" | "research" | "writing" | "conversation";
 
 export interface HydraTurnSignal {
   /** Score on [1..4] from Jev's ordered levels (1=quick/trivial, 4=frontier reasoning). */
@@ -46,15 +46,17 @@ export function buildHydraQuestions(): Record<string, JevQuestion> {
         "Select the primary execution domain that best characterizes the user's request (accounting for any prior assistant context it approves or continues).",
       criteria: {
         coding: "Writing, refactoring, or fixing application/extension code, UI components, IPC, tests, scripts, or designing how a requested product change should be built.",
-        reasoning: "Diagnosing non-obvious system/integration failures, deep debugging, code review, architectural planning, or trade-off analysis.",
+        reasoning: "Diagnosing why something failed, was rejected, or behaved unexpectedly (system, integration, tool, or workflow), deep debugging, code review, architectural planning, or trade-off analysis.",
         fast_edit: "Quick shell/git command execution, trivial one-line config/text tweak, or single-step factual lookup.",
-        research: "Multi-step lookup or verification across external systems, tickets, contracts, documentation, or codebase files without editing code.",
+        research: "Multi-step lookup or verification across external systems, tickets, contracts, documentation, or codebase files without editing code or diagnosing a failure.",
+        writing: "Creative or prose work: drafting docs, emails, posts, copy, or stories; brainstorming, naming, or ideation; visual, UI, or brand design direction.",
+        conversation: "Discussion, explanation, advice, or planning conversation with the user that needs no code edits or multi-step tool investigation.",
       },
     },
   };
 }
 
-const VALID_DOMAINS = new Set<HydraTaskDomain>(["coding", "reasoning", "fast_edit", "research"]);
+const VALID_DOMAINS = new Set<HydraTaskDomain>(["coding", "reasoning", "fast_edit", "research", "writing", "conversation"]);
 
 export function parseHydraSignal(
   answers: Record<string, JevAnswer | undefined>,

@@ -7,7 +7,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
 import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
-import { matchAaMetrics, parseAaModelsHtml, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
+import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
 import { parseCredentialsResponse, quotaMultiplierForModel } from "../prompt-commands/hydra/quota-sync.ts";
 import { rankModelsForHydra } from "../prompt-commands/hydra/scorer.ts";
 
@@ -750,6 +750,13 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(parsedHtml.length, 1);
     assert.equal(parsedHtml[0]?.slug, "claude-opus-5-5");
 
+    // Individual model pages (for models AA leaves off the listing) carry the full measurement set.
+    const pageHtml = `<script>self.__next_f.push([1,"{\\"model\\":{\\"description\\":\\"braces } { in text\\",\\"slug\\":\\"gemini-4-argon\\",\\"name\\":\\"Gemini 4 Argon\\",\\"intelligenceIndex\\":50.4,\\"omniscienceHallucinationRate\\":0.04,\\"gdpval\\":1631,\\"aa3dElo\\":1152,\\"personalityBench\\":{\\"indexScores\\":{\\"expressiveness\\":82.7,\\"slop\\":70.3}}}}"])</script>`;
+    const argonPage = parseAaModelPage(pageHtml, "gemini-4-argon");
+    assert.equal(argonPage?.hallucinationRate, 0.04);
+    assert.equal(argonPage?.gdpvalElo, 1631);
+    assert.deepEqual(argonPage?.personality, { expressiveness: 82.7, slop: 70.3 });
+
     // 2. Quota & circuit filtering (including mixed disabled + cooldown credentials)
     const creds = parseCredentialsResponse({
       files: [
@@ -764,6 +771,21 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(quotaMultiplierForModel("xai", "grok-4.7", "high", new Set(), quotaSnap).multiplier, 0, "mixed disabled + cooling-down credentials cannot manufacture a healthy provider");
     assert.equal(quotaMultiplierForModel("openai", "gpt-6-astra", "high", new Set(["openai/gpt-6-astra"]), quotaSnap).multiplier, 0, "open circuit is skipped");
     assert.equal(quotaMultiplierForModel("openai", "gpt-6.1-sol", "high", new Set(), quotaSnap).multiplier, 1);
+
+    // Real CPA shape: provider names like "claude", quota under quota.signals, unavailable flag.
+    const cpaCreds = parseCredentialsResponse({
+      files: [
+        { provider: "claude", quota: { signals: { weekly: { remaining_percent: 30 } } }, cooldowns: [], disabled: false, success: 3, failed: 1 },
+        { provider: "xai", quota: { signals: {} }, cooldowns: [], disabled: false, unavailable: true, success: 0, failed: 0 },
+      ],
+    });
+    assert.equal(cpaCreds.anthropic?.remainingPercent, 30, "reads remaining percent from CPA quota signals");
+    const cpaExhausted = parseCredentialsResponse({
+      files: [{ provider: "claude", quota: { signals: { weekly: { remaining_percent: 1 } } }, cooldowns: [], disabled: false, success: 3, failed: 1 }],
+    });
+    assert.equal(cpaExhausted.anthropic?.remainingPercent, 1, "nested remaining_percent keeps percent semantics below 5");
+    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "standard", new Set(), { schema: 1, updatedAt: 0, source: "live", providers: cpaExhausted }).multiplier, 0, "exhausted signal quota excludes the family");
+    assert.equal(cpaCreds.xai?.inCooldown, true, "unavailable credential counts as cooling down");
 
     const catalogModels: any[] = [
       { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5 (API)", reasoning: true },
@@ -789,6 +811,37 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       "excludes anthropic, google, github-copilot, and opencode API/excluded providers",
     );
     assert.equal(rankedWithAnthropicExhausted[0]?.key, "openai/gpt-6-astra", "falls over to healthy OpenAI frontier when Anthropic quota is exhausted");
+
+    // Subscription balancing: frontier coding prefers Opus with no history, then cycles to the
+    // larger OpenAI subscription once Anthropic carries more than its capacity share of recent turns.
+    const frontierSignal = { reasoningDepth: 2.6, depthConfidence: 0.9, domain: "coding" as const, domainConfidence: 0.9 };
+    const healthyQuota = { schema: 1 as const, updatedAt: 0, source: "none" as const, providers: {} };
+    const balanceBase = { models: catalogModels, catalog: SEED_AA_MODELS, quota: healthyQuota, openCircuits: new Set<string>(), tier: "standard" as const, signal: frontierSignal };
+    assert.equal(rankModelsForHydra(balanceBase)[0]?.key, "claude-bridge/claude-opus-5-5", "frontier coding picks the strongest model without usage history");
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, usage: { anthropic: 40, openai: 4 } })[0]?.model.provider,
+      "openai",
+      "over-used Anthropic subscription cycles frontier work to OpenAI",
+    );
+    // Quota tilt: with Anthropic at 45% and OpenAI at 95%, the most-quota good-enough model wins;
+    // with Anthropic exhausted (3%), bridge models drop out of the ranking entirely.
+    const entry = (provider: string, remainingPercent: number) => ({ provider, remainingPercent, inCooldown: false, disabled: false, successCount: 9, failureCount: 0 });
+    const quotaTilt = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 45), openai: entry("openai", 95) } };
+    assert.equal(rankModelsForHydra({ ...balanceBase, quota: quotaTilt })[0]?.key, "openai/gpt-6-astra", "most-quota family wins the tilt among good-enough models");
+    const quotaExhausted = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 3), openai: entry("openai", 95) } };
+    assert.equal(rankModelsForHydra({ ...balanceBase, quota: quotaExhausted }).some(r => r.model.provider === "claude-bridge"), false, "exhausted family is excluded, not just deprioritized");
+
+    const withArgon = [...catalogModels, { provider: "antigravity", id: "gemini-4-argon", name: "Gemini 4 Argon", reasoning: true }];
+    assert.equal(
+      rankModelsForHydra({
+        ...balanceBase,
+        models: withArgon,
+        signal: { reasoningDepth: 2.2, depthConfidence: 0.7, domain: "research", domainConfidence: 0.7 },
+        usage: { anthropic: 20, openai: 20 },
+      })[0]?.key,
+      "antigravity/gemini-4-argon",
+      "an unused large subscription is not starved once others carry recent turns",
+    );
 
     // 3. End-to-end /mode hydra command & Jev turn signal routing
     const commands: Record<string, any> = {};
@@ -889,7 +942,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.match(notices.at(-1) ?? "", /Jev Hydra \(high\): local-proxy\/claude-haiku-5-5 \(low\)/, "emits visible UI notification on Jev Hydra turn routing");
 
     // High-confidence shallow research lookup (depth 1.749 < 1.75, domainConfidence 0.84) routes to fast model (Haiku / low),
-    // while low-confidence research (domainConfidence 0.28) floors to mid-tier workhorse (gpt-6.1-sol / medium).
+    // while low-confidence research (domainConfidence 0.28) floors above the fast tier (capable model / medium).
     await commands.mode("hydra standard", ctx);
     const shallowResearchPayload: any = { reasoningDepth: 1.749, depthConfidence: 0.83, domain: "research", domainConfidence: 0.84, ctx };
     pi.events.emit("pi:jev:turn-signal", shallowResearchPayload);
@@ -900,23 +953,23 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     const ambiguousResearchPayload: any = { reasoningDepth: 1.0, depthConfidence: 0.69, domain: "research", domainConfidence: 0.28, ctx };
     pi.events.emit("pi:jev:turn-signal", ambiguousResearchPayload);
     await ambiguousResearchPayload.promise;
-    assert.equal(ctx.model.id, "gpt-6.1-sol", "low-confidence research prompt floors to mid-tier model");
+    assert.notEqual(ctx.model.id, "claude-haiku-5-5", "low-confidence research prompt floors above the fast model");
     assert.equal(currentThinking, "medium");
 
     // Coding domain with underscored depth (1.4, low confidence 0.48) must NOT pick Haiku/low;
-    // it floors to mid-difficulty coding (gpt-6.1-sol / medium in this catalog).
+    // it floors to a capable coding model at medium thinking.
     const codingPayload: any = { reasoningDepth: 1.4, depthConfidence: 0.48, domain: "coding", domainConfidence: 0.52, ctx };
     pi.events.emit("pi:jev:turn-signal", codingPayload);
     await codingPayload.promise;
     assert.notEqual(ctx.model.id, "claude-haiku-5-5", "coding domain never selects Haiku when mid/frontier coding models are available");
-    assert.equal(ctx.model.id, "gpt-6.1-sol", "mid-difficulty coding selects capable coding workhorse model");
     assert.equal(currentThinking, "medium", "coding domain uses at least medium thinking");
 
-    // Complex coding (depth >= 2.85) in hydra:standard escalates from mid-tier Sol up to frontier Opus 5.5 (high).
+    // Complex coding (depth >= 2.85) in hydra:standard runs on a frontier model (high); a warm cache
+    // may hold an already-selected frontier model when the leader's margin is below the switch threshold.
     const complexCodingPayload: any = { reasoningDepth: 2.85, depthConfidence: 0.9, domain: "coding", domainConfidence: 0.9, ctx };
     pi.events.emit("pi:jev:turn-signal", complexCodingPayload);
     await complexCodingPayload.promise;
-    assert.equal(ctx.model.id, "claude-opus-5-5", "complex coding (depth >= 2.85) escalates to frontier model even in standard tier");
+    assert.ok(["claude-opus-5-5", "gpt-6-astra"].includes(ctx.model.id), "complex coding (depth >= 2.85) runs on a frontier model even in standard tier");
     assert.equal(currentThinking, "high", "complex coding in standard tier escalates thinking to high");
 
     // Subagent Hydra routing via pi:hydra:subagent-route selects fast models for inspector and frontier for oracle.
@@ -1005,6 +1058,42 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     ctx.modelRegistry.find = origFind;
     allowFusionAck = true;
     await commands.mode("hydra max", ctx); // successful /mode hydra clears recoveryBlocked
+
+    // /jippity restricts Hydra (lead and subagents) to OpenAI models; /jippity off restores every subscription.
+    await commands.jippity("on", ctx);
+    assert.equal(ctx.model.provider, "openai", "jippity routes the lead to an OpenAI model");
+    assert.equal(statuses.get("hydra"), "hydra:max·jippity");
+    assert.equal(process.env.PI_HYDRA_SCOPE, "openai", "jippity publishes its scope for worker routing");
+    const scopedModeEntry = [...entries].reverse().find((e: any) => e.customType === "behavior-mode");
+    assert.equal(scopedModeEntry?.data.fusion.sidekick.provider, "openai", "jippity reconfigures an out-of-scope Fusion sidekick");
+    const jippityOracle: any = { agent: "oracle", ctx };
+    pi.events.emit("pi:hydra:subagent-route", jippityOracle);
+    assert.ok(jippityOracle.models?.length && jippityOracle.models.every((key: string) => key.startsWith("openai/")), "jippity limits subagent routes to OpenAI");
+    await commands.jippity("off", ctx);
+    assert.equal(statuses.get("hydra"), "hydra:max");
+    assert.equal(process.env.PI_HYDRA_SCOPE, undefined);
+
+    // An empty OpenAI pool rejects activation instead of advertising a scope the lead cannot satisfy.
+    const origGetAvailable = ctx.modelRegistry.getAvailable;
+    ctx.modelRegistry.getAvailable = () => catalogModels.filter((m: any) => m.provider !== "openai");
+    await commands.jippity("on", ctx);
+    assert.match(notices.at(-1) ?? "", /Jippity unavailable/);
+    assert.equal(statuses.get("hydra"), "hydra:max", "failed jippity activation does not advertise the scope");
+    assert.equal(process.env.PI_HYDRA_SCOPE, undefined);
+    ctx.modelRegistry.getAvailable = origGetAvailable;
+
+    // A routing failure during activation (Fusion configure not acknowledged) rolls the
+    // scope back too: status, env, and the serving lead must not claim OpenAI-only routing.
+    allowFusionAck = false;
+    await commands.jippity("on", ctx);
+    allowFusionAck = true;
+    assert.match(notices.at(-1) ?? "", /Jippity activation failed/);
+    assert.notEqual(ctx.model.provider, "openai", "failed activation restores the pre-activation lead");
+    assert.equal(statuses.get("hydra"), "hydra:max", "failed activation does not advertise the scope");
+    assert.equal(process.env.PI_HYDRA_SCOPE, undefined);
+    const allOracle: any = { agent: "oracle", ctx };
+    pi.events.emit("pi:hydra:subagent-route", allOracle);
+    assert.ok(allOracle.models?.some((key: string) => !key.startsWith("openai/")), "jippity off restores all subscriptions");
 
     await commands.mode("hydra status", ctx);
     assert.match(notices.at(-1) ?? "", /Hydra: max/);

@@ -663,6 +663,24 @@ export default function (pi: ExtensionAPI) {
       });
       const thinking = resolved.thinking;
       const attempts = resolved.attempts;
+      if (resolved.error) {
+        const text = resolved.error;
+        return {
+          content: [{ type: "text", text }],
+          isError: true,
+          details: {
+            agent: def.name,
+            mission,
+            status: "failed",
+            startedAt,
+            duration: Date.now() - startedAt,
+            activities: [],
+            attemptedModels: [],
+            attemptFailures: [text],
+            turns: 0,
+          } satisfies TaskDetails,
+        };
+      }
 
       const ledger = new ActivityLedger({ maxActivities: 400 });
       const attemptedModels: string[] = [];

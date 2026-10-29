@@ -146,15 +146,31 @@ export function parseCredentialsResponse(payload: unknown): Record<string, Provi
     const family = normalizeProviderFamily(providerRaw);
     const disabled = rec.disabled === true;
     const cooldowns = Array.isArray(rec.cooldowns) ? rec.cooldowns : [];
-    const inCooldown = cooldowns.length > 0;
+    const inCooldown = cooldowns.length > 0 || rec.unavailable === true;
     const usable = !disabled && !inCooldown;
     const successCount = typeof rec.success === "number" && Number.isFinite(rec.success) ? rec.success : 0;
     const failureCount = typeof rec.failed === "number" && Number.isFinite(rec.failed) ? rec.failed : 0;
     const remainingRaw = rec.remaining_percent ?? rec.remainingPercent;
-    const remainingPercent =
+    let remainingPercent =
       usable && typeof remainingRaw === "number" && Number.isFinite(remainingRaw)
         ? Math.max(0, Math.min(100, remainingRaw))
         : null;
+    // CPA builds without a top-level percent report per-credential quota signals
+    // (quota.signals.<name>.*remaining*percent*); the most binding signal wins.
+    if (remainingPercent === null && usable) {
+      const quota = rec.quota && typeof rec.quota === "object" ? (rec.quota as Record<string, unknown>) : undefined;
+      const signals = quota?.signals && typeof quota.signals === "object" ? Object.values(quota.signals as Record<string, unknown>) : [];
+      for (const signal of signals) {
+        if (!signal || typeof signal !== "object") continue;
+        for (const [key, value] of Object.entries(signal as Record<string, unknown>)) {
+          if (!/remaining/i.test(key) || !/percent|pct/i.test(key)) continue;
+          if (typeof value !== "number" || !Number.isFinite(value)) continue;
+          // The field name declares the unit: percent on [0..100], at every magnitude.
+          const pct = Math.max(0, Math.min(100, value));
+          remainingPercent = remainingPercent === null ? pct : Math.min(remainingPercent, pct);
+        }
+      }
+    }
 
     const prev = out[family];
     if (!prev) {
@@ -242,6 +258,15 @@ export function inferModelFamily(provider: string, modelId: string): string {
   if (combined.includes("glm") || combined.includes("zai")) return "zai";
   if (combined.includes("deepseek")) return "deepseek";
   return provider.toLowerCase();
+}
+
+/** Remaining quota percent for a model's family, or null when CPA has not reported it. */
+export function quotaRemainingForModel(
+  provider: string,
+  modelId: string,
+  quota: QuotaSnapshot,
+): number | null {
+  return quota.providers[inferModelFamily(provider, modelId)]?.remainingPercent ?? null;
 }
 
 /**

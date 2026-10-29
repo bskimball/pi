@@ -16,6 +16,49 @@ export function modelAttempts(
 export interface HydraSubagentResolution {
   attempts: Array<string | undefined>;
   thinking: string | undefined;
+  /** Set when an active Hydra scope leaves no in-scope model; callers must fail rather than spawn. */
+  error?: string;
+}
+
+/** Hydra provider scopes, duplicated per extension owner (mirrors prompt-commands' scorer). */
+const HYDRA_SCOPE_PROVIDERS: Readonly<Record<string, ReadonlySet<string>>> = {
+  openai: new Set(["openai", "openai-codex"]),
+};
+
+export function hydraScopeProviders(scope?: string | null): ReadonlySet<string> | undefined {
+  return scope ? HYDRA_SCOPE_PROVIDERS[scope] : undefined;
+}
+
+/**
+ * Scope-filter a rebind's reconstructed fallback chain (rebinds bypass the
+ * Hydra resolver). No active scope returns the chain unchanged.
+ */
+export function scopeAttemptChain(
+  attempts: Array<string | undefined>,
+  agentName: string,
+  scope?: string | null,
+): { attempts: Array<string | undefined>; error?: string } {
+  const effectiveScope = scope ?? process.env.PI_HYDRA_SCOPE;
+  if (!hydraScopeProviders(effectiveScope)) return { attempts };
+  const filtered = attempts.filter((m) => modelInHydraScope(m, effectiveScope));
+  if (filtered.length === 0) {
+    return {
+      attempts: [],
+      error: `Hydra scope "${effectiveScope}" has no in-scope model in the rebind chain for ${agentName}; refusing out-of-scope rebind. Run /jippity off or restore OpenAI availability.`,
+    };
+  }
+  return { attempts: filtered };
+}
+
+/** Backwards-compatible name: rebind chains are one scope-filtered chain. */
+export const scopeRebindAttempts = scopeAttemptChain;
+
+export function modelInHydraScope(model: string | undefined, scope?: string | null): boolean {
+  const allowed = hydraScopeProviders(scope ?? process.env.PI_HYDRA_SCOPE);
+  if (!allowed) return true;
+  if (!model) return false;
+  const slash = model.indexOf("/");
+  return slash > 0 && allowed.has(model.slice(0, slash));
 }
 
 /**
@@ -42,11 +85,41 @@ export function resolveSubagentModelsAndThinking(options: {
       ctx: unknown;
       models?: string[];
       thinking?: string;
+      scope?: string;
+      scopeExhausted?: boolean;
     } = { agent: def.name, ctx };
     try {
       emitEvent("pi:hydra:subagent-route", req);
     } catch {
       // Fall back to static frontmatter if event listener throws.
+    }
+    const scope = req.scope ?? process.env.PI_HYDRA_SCOPE;
+    const allowed = hydraScopeProviders(scope);
+    if (allowed) {
+      // Scope is exclusive: Hydra's ranked models and the agent's static
+      // fallbacks are both filtered, and an empty remainder fails closed
+      // instead of spawning an out-of-scope (or default) model.
+      const inScope = (m: string) => modelInHydraScope(m, scope);
+      const hydraModels = Array.isArray(req.models) ? req.models.filter(inScope) : [];
+      const staticAttempts = modelAttempts(def, undefined, allowFallback).filter(
+        (m): m is string => typeof m === "string" && m.length > 0 && inScope(m),
+      );
+      const merged = allowFallback
+        ? [...new Set([...hydraModels.slice(0, 3), ...staticAttempts])]
+        : hydraModels.length > 0
+          ? [hydraModels[0]!]
+          : staticAttempts.slice(0, 1);
+      if (merged.length === 0) {
+        return {
+          attempts: [],
+          thinking: fallbackThinking,
+          error: `Hydra scope "${scope}" has no available model for ${def.name}; refusing out-of-scope fallback. Run /jippity off or restore OpenAI availability.`,
+        };
+      }
+      return {
+        attempts: merged,
+        thinking: hydraModels.length > 0 ? req.thinking ?? fallbackThinking : fallbackThinking,
+      };
     }
     if (Array.isArray(req.models) && req.models.length > 0) {
       const staticAttempts = modelAttempts(def, undefined, allowFallback).filter(

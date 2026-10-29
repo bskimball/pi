@@ -6,7 +6,8 @@ import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
 import { QUOTA_STALE_MS, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
-import { HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
+import { HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
+import { readUsageCounts, recordHydraUsage } from "./hydra/usage.ts";
 
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
@@ -57,6 +58,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (usesPersistentSidekick(state.mode)) latest.fusion = structuredClone(state.fusion);
     if (state.hydra && state.hydra !== "off") latest.hydra = state.hydra;
     else delete latest.hydra;
+    if (latest.hydra && state.hydraScope) latest.hydraScope = state.hydraScope;
+    else delete latest.hydraScope;
     synchronizeFusionModel(latest);
     if (setDefault && state.mode !== "apex-orchestrate") latest.mode = state.mode;
     savePreferences(preferencePath, latest);
@@ -69,7 +72,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   const publishPair = (ctx: ExtensionContext) => {
     const tier = activeHydra();
     if (ctx.hasUI) {
-      ctx.ui.setStatus("hydra", tier ? `hydra:${tier}` : undefined);
+      const scope = tier && state.hydraScope === "openai" ? "\u00b7jippity" : "";
+      ctx.ui.setStatus("hydra", tier ? `hydra:${tier}${scope}` : undefined);
     }
     if (ctx.mode === "tui") return;
     ctx.ui.setStatus("fusion-pair", usesPersistentSidekick(state.mode) && state.fusion ? JSON.stringify(state.fusion) : undefined);
@@ -79,7 +83,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     const tier = activeHydra();
     if (tier) process.env.PI_HYDRA_TIER = tier;
     else delete process.env.PI_HYDRA_TIER;
-    pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra });
+    if (tier && state.hydraScope) process.env.PI_HYDRA_SCOPE = state.hydraScope;
+    else delete process.env.PI_HYDRA_SCOPE;
+    pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra, hydraScope: state.hydraScope });
   };
   const idle = (ctx: ExtensionContext) => {
     const query = { busy: !ctx.isIdle() || changing };
@@ -143,7 +149,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     signal?: HydraTurnSignalInput,
     cacheWarm = false,
   ) {
-    const models = ctx.modelRegistry?.getAvailable?.() ?? [];
+    const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
+    const available = ctx.modelRegistry?.getAvailable?.() ?? [];
+    const models = scopeProviders ? available.filter((m) => scopeProviders.has(m.provider)) : available;
     const scopedKeys = new Set(
       (ctx.scopedModels ?? []).map(({ model }: any) => `${model.provider}/${model.id}`),
     );
@@ -161,6 +169,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       signal,
       currentModelKey: currentKey,
       cacheWarm,
+      usage: readUsageCounts(),
     });
   }
   let hydraRouteChain: Promise<void> = Promise.resolve();
@@ -221,13 +230,18 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
               false,
             );
             const sidekickWinner = sidekickRanked[0] ?? winner;
+            const existingSidekick = state.fusion?.sidekick;
+            const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
             const nextPair: FusionPair = {
               lead: choice,
-              sidekick: state.fusion?.sidekick ?? {
-                provider: sidekickWinner.model.provider,
-                modelId: sidekickWinner.model.id,
-                thinking: sidekickWinner.recommendedThinking,
-              },
+              // Keep an existing sidekick only while it satisfies the active Hydra scope.
+              sidekick: existingSidekick && (!scopeProviders || scopeProviders.has(existingSidekick.provider))
+                ? existingSidekick
+                : {
+                  provider: sidekickWinner.model.provider,
+                  modelId: sidekickWinner.model.id,
+                  thinking: sidekickWinner.recommendedThinking,
+                },
             };
             const request: {
               fusion: FusionPair;
@@ -272,6 +286,43 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           const activeChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
           if (activeChoice) {
             activeChoice.thinking = actualThinking;
+            persist();
+          }
+        }
+        // The lead held, but an active Hydra scope may still invalidate the Fusion sidekick.
+        if (usesPersistentSidekick(state.mode) && state.fusion) {
+          const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
+          if (scopeProviders && !scopeProviders.has(state.fusion.sidekick.provider)) {
+            const sidekickRanked = rankForCurrentScope(
+              ctx,
+              "standard",
+              { reasoningDepth: 2, depthConfidence: 1, domain: "coding", domainConfidence: 1 },
+              false,
+            );
+            const sidekickWinner = sidekickRanked[0] ?? winner;
+            const nextPair: FusionPair = {
+              lead: { provider: activeModel.provider, modelId: activeModel.id, thinking: pi.getThinkingLevel() },
+              sidekick: {
+                provider: sidekickWinner.model.provider,
+                modelId: sidekickWinner.model.id,
+                thinking: sidekickWinner.recommendedThinking,
+              },
+            };
+            const request: {
+              fusion: FusionPair;
+              acknowledged?: boolean;
+              error?: string;
+              promise?: Promise<void>;
+              rollback?: () => Promise<void>;
+            } = { fusion: structuredClone(nextPair) };
+            pi.events.emit("pi:fusion:configure", request);
+            if (!request.acknowledged) {
+              throw new Error(`${labels[state.mode]} runtime did not acknowledge sidekick configuration.`);
+            }
+            rollback = request.rollback;
+            if (request.promise) await request.promise;
+            if (request.error) throw new Error(request.error);
+            state.fusion = nextPair;
             persist();
           }
         }
@@ -348,6 +399,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     nextState.mode = mode;
     nextState.fusion = structuredClone(nextFusion);
     delete nextState.hydra;
+    delete nextState.hydraScope;
     const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : nextState.models[mode];
     let persisted = false;
     let rollback: (() => Promise<void>) | undefined;
@@ -414,6 +466,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           latest.mode = prevPrefs.mode;
           if (prevPrefs.hydra && prevPrefs.hydra !== "off") latest.hydra = prevPrefs.hydra;
           else delete latest.hydra;
+          if (latest.hydra && prevPrefs.hydraScope) latest.hydraScope = prevPrefs.hydraScope;
+          else delete latest.hydraScope;
           if (prevPrefs.models[mode] !== undefined) latest.models[mode] = structuredClone(prevPrefs.models[mode]) as ModelChoice;
           else delete latest.models[mode];
           if (usesPersistentSidekick(mode)) {
@@ -472,8 +526,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const top = ranked.slice(0, 4).map((r, idx) =>
         `${idx + 1}. ${r.key} (${r.recommendedThinking}) score=${r.finalScore.toFixed(2)} [code=${r.aa.codingScore.toFixed(0)} intel=${(r.aa.intelligenceIndex ?? 0).toFixed(0)} tps=${(r.aa.outputSpeedTps ?? 0).toFixed(0)} $${(r.aa.blendedPricePer1m ?? 0).toFixed(2)}${r.quotaReason ? ` ${r.quotaReason}` : ""}]`
       );
-      const header = `Hydra: ${state.hydra ?? "off"} (previewing tier=${tier}, AA=${aaSnap.source} ${aaSnap.models.length} models, quota=${quotaSnap.source}, openCircuits=${openCircuits.size})`;
-      ctx.ui.notify([header, ...(top.length ? top : ["No matching AA models in current provider scope."])].join("\n"), "info");
+      const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} ${aaSnap.models.length} models, quota=${quotaSnap.source}, openCircuits=${openCircuits.size})`;
+      const usage = Object.entries(readUsageCounts()).sort((a, b) => b[1] - a[1]);
+      const usageLine = `24h turns: ${usage.length ? usage.map(([family, n]) => `${family} ${n}`).join(", ") : "none"}`;
+      ctx.ui.notify([header, usageLine, ...(top.length ? top : ["No matching AA models in current provider scope."])].join("\n"), "info");
       return;
     }
     if (sub === "on" || sub === "toggle") {
@@ -491,6 +547,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
     const nextTier: HydraTier = sub;
     state.hydra = nextTier === "off" ? undefined : nextTier;
+    if (nextTier === "off") delete state.hydraScope;
     persist();
     announce();
     publishPair(ctx);
@@ -574,6 +631,62 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       }
       if (!isMode(value)) { ctx.ui.notify("Usage: /mode [pi|apex|apex-orchestrate|fusion|work|hydra|configure]", "warning"); return; }
       await switchMode(value, ctx);
+    },
+  });
+  pi.registerCommand("jippity", {
+    description: "Hydra routing restricted to OpenAI (ChatGPT) models: /jippity [on|off]",
+    handler: async (args, ctx) => {
+      if (!idle(ctx)) return;
+      const value = args.trim().toLowerCase();
+      if (!["", "toggle", "on", "off"].includes(value)) { ctx.ui.notify("Usage: /jippity [on|off]", "warning"); return; }
+      const enable = value === "on" || ((value === "" || value === "toggle") && state.hydraScope !== "openai");
+      try {
+        readPreferences(preferencePath);
+      } catch (prefsError) {
+        ctx.ui.notify(`Mode preferences unreadable (${prefsError instanceof Error ? prefsError.message : String(prefsError)}); switch aborted before any change.`, "error");
+        return;
+      }
+      let activationPrev: { hydra: HydraTier | undefined; hydraScope: HydraScope | undefined } | undefined;
+      if (enable) {
+        const tier = activeHydra() ?? "high";
+        // Reject activation when the OpenAI pool is empty: enabling first and
+        // keeping the current model would silently run out of scope.
+        const prevHydra = state.hydra;
+        const prevScope = state.hydraScope;
+        activationPrev = { hydra: prevHydra, hydraScope: prevScope };
+        state.hydra = tier;
+        state.hydraScope = "openai";
+        const ranked = rankForCurrentScope(ctx, tier, undefined, false);
+        if (ranked.length === 0) {
+          state.hydra = prevHydra;
+          if (prevScope) state.hydraScope = prevScope;
+          else delete state.hydraScope;
+          ctx.ui.notify("Jippity unavailable: no OpenAI model is available to Hydra (check ChatGPT sign-in, quota, or open circuits). Scope not enabled; current routing unchanged.", "error");
+          return;
+        }
+      } else {
+        delete state.hydraScope;
+      }
+      persist();
+      announce();
+      publishPair(ctx);
+      const tier = activeHydra();
+      const picked = tier ? await routeWithHydra(ctx, tier, undefined, true) : undefined;
+      if (enable && !picked && activationPrev) {
+        // Routing failed and rolled the model/pair back: undo the scope
+        // activation too, so status, env, and preferences never advertise
+        // OpenAI-only routing while an out-of-scope model serves.
+        state.hydra = activationPrev.hydra;
+        if (activationPrev.hydraScope) state.hydraScope = activationPrev.hydraScope;
+        else delete state.hydraScope;
+        persist();
+        announce();
+        publishPair(ctx);
+        ctx.ui.notify("Jippity activation failed; scope not enabled and previous routing restored. See the Hydra routing error above.", "error");
+        return;
+      }
+      const label = enable ? `Jippity: Hydra ${tier} on OpenAI models only.` : `Jippity off: Hydra ${tier ?? "off"} across all subscriptions.`;
+      ctx.ui.notify(`${label}${picked ? ` Selected ${picked.summary}.` : tier ? " No matching OpenAI model available; keeping active model." : ""}`, "info");
     },
   });
   pi.registerCommand("orchestrate", {
@@ -679,8 +792,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       signal?: HydraTurnSignalInput;
       models?: string[];
       thinking?: string;
+      scope?: string;
+      scopeExhausted?: boolean;
     };
     if (!req.agent || !req.ctx) return;
+    req.scope = state.hydraScope;
     const profile = subagentHydraProfile(req.agent, tier);
     const effectiveSignal: HydraTurnSignalInput = req.signal ?? (
       (req.agent === "machinist" || req.agent === "artisan") && lastJevTurnSignal
@@ -688,9 +804,16 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         : profile.signal
     );
     const ranked = rankForCurrentScope(req.ctx, profile.tier, effectiveSignal, false);
-    if (ranked.length === 0) return;
+    if (ranked.length === 0) {
+      // Signal exhaustion explicitly so workers fail closed under a scope
+      // instead of falling back to out-of-scope static models.
+      req.models = [];
+      req.scopeExhausted = true;
+      return;
+    }
     req.models = ranked.map((r) => r.key);
     req.thinking = ranked[0]!.recommendedThinking;
+    recordHydraUsage(ranked[0]!.model.provider, ranked[0]!.model.id);
   });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
@@ -723,6 +846,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (tier && ctx && !jevRoutedThisTurn && !isSessionCacheWarm(ctx)) {
       await routeWithHydra(ctx, tier, undefined, false);
     }
+    if (tier && ctx?.model) recordHydraUsage(ctx.model.provider, ctx.model.id);
     jevRoutedThisTurn = false;
     lastTurnAt = Date.now();
     const options = event.systemPromptOptions;

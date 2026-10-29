@@ -38,7 +38,7 @@ agent/extensions/
 ├── powershell.ts    + powershell/         direct PowerShell child process
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
-├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate
+├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate, /jippity
 ├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
 ├── read-guard.ts                          duplicate-image + downscale guard
 ├── toolchain-guard.ts                   blocks Node runtime/pin changes

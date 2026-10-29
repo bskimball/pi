@@ -27,10 +27,13 @@ import {
   isFusionOnlyAgent,
   isWorkCrewAgent,
   modelAttempts,
+  modelInHydraScope,
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
+  scopeAttemptChain,
+  hydraScopeProviders,
   stderrDiagnostic,
   workCrewList,
   WORK_CREW_AGENTS,
@@ -368,6 +371,8 @@ interface Worker extends RuntimeEventWorker {
   allowFallback?: boolean;
   modelAttempts: Array<string | undefined>;
   modelAttemptIndex: number;
+  /** Spawned from an explicit user model override: exempt from Hydra scope enforcement. */
+  explicitModel?: boolean;
   /** Attempt index whose qualifying failure was already persisted. */
   circuitFailureAttempt?: number;
   fallbackReplaySafe: boolean;
@@ -1122,6 +1127,24 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
   };
 
+  /**
+   * Reconcile a retained worker with the active Hydra scope before a new
+   * generation: filter its fallback chain and refuse an out-of-scope current
+   * model. Returns a rejection reason, or undefined when continuation may run.
+   */
+  const reconcileWorkerScope = (worker: Worker): string | undefined => {
+    if (worker.fusion || worker.explicitModel || !hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) return undefined;
+    const scoped = scopeAttemptChain(worker.modelAttempts, worker.agent);
+    if (scoped.error) return scoped.error;
+    if (!modelInHydraScope(worker.model)) {
+      return `${worker.id} is running ${worker.model ?? "default model"}, outside Hydra scope "${process.env.PI_HYDRA_SCOPE}"; close it or run /jippity off before continuing.`;
+    }
+    worker.modelAttempts = scoped.attempts;
+    const idx = worker.model ? scoped.attempts.indexOf(worker.model) : -1;
+    if (idx >= 0) worker.modelAttemptIndex = idx;
+    return undefined;
+  };
+
   const retryModelFallback = async (
     worker: Worker,
   ): Promise<ModelFallbackResult> => {
@@ -1140,6 +1163,17 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       worker.client.isClosed
     ) {
       return "exhausted";
+    }
+
+    // Backstop: a generation started before scope activation must never
+    // retry into an out-of-scope model; drop those attempts in place.
+    if (!worker.fusion && !worker.explicitModel && hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) {
+      const currentAttempt = worker.modelAttempts[worker.modelAttemptIndex];
+      const filtered = worker.modelAttempts.filter((m) => modelInHydraScope(m));
+      if (filtered.length === 0) return "exhausted";
+      worker.modelAttempts = filtered;
+      const idx = currentAttempt !== undefined ? filtered.indexOf(currentAttempt) : -1;
+      worker.modelAttemptIndex = idx >= 0 ? idx : -1;
     }
 
     // Count the clean failure against the model we are leaving, then consult
@@ -1569,12 +1603,23 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           emitEvent: (ev, payload) => pi.events.emit(ev, payload),
         })
       : undefined;
+    if (resolved?.error) return { error: resolved.error };
+    if (isFusion && !modelInHydraScope(forcedFusionModel)) {
+      return { error: `Hydra scope "${process.env.PI_HYDRA_SCOPE}" excludes the configured Fusion sidekick (${forcedFusionModel ?? "none"}); refusing out-of-scope spawn. Run /jippity off or reconfigure the pair.` };
+    }
     const thinking = isFusion
       ? fusionLifecycle.configured?.sidekick.thinking
       : params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
-    const attempts = isFusion
+    let attempts = isFusion
       ? [forcedFusionModel]
       : resolved?.attempts ?? modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
+    // Rebinds bypass the Hydra resolver, so scope-filter their reconstructed
+    // fallback chain here; an empty remainder fails closed.
+    if (!isFusion && params.rebind) {
+      const scoped = scopeAttemptChain(attempts, def.name);
+      if (scoped.error) return { error: scoped.error };
+      attempts = scoped.attempts;
+    }
     // Fusion has exactly one configured model and deliberately bypasses the
     // circuit/fallback chain; preserving its transcript matters more than retry.
     const initial = isFusion
@@ -1595,6 +1640,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       allowFallback: params.rebind?.allowFallback ?? params.allowFallback,
       modelAttempts: attempts,
       modelAttemptIndex: initial.index,
+      explicitModel: Boolean(params.modelOverride),
       circuitFailureAttempt: undefined,
       modelAttemptUsedTools: false,
       fallbackReplaySafe: true,
@@ -2886,6 +2932,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             sendDetails("rejected", `worker is ${worker.lifecycle}; prompt needs settled`),
           );
         }
+        const scopeBlock = reconcileWorkerScope(worker);
+        if (scopeBlock) {
+          return textResult(scopeBlock, true, sendDetails("rejected", scopeBlock));
+        }
         try {
           worker.initialPrompt = message;
           worker.mission = missionFromPrompt(message);
@@ -2980,6 +3030,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
 
       // follow_up
+      const followUpScopeBlock = reconcileWorkerScope(worker);
+      if (followUpScopeBlock) {
+        return textResult(followUpScopeBlock, true, sendDetails("rejected", followUpScopeBlock));
+      }
       try {
         const response = await worker.client.request(
           { type: "follow_up", message },
