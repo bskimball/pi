@@ -5,7 +5,6 @@ model: claude-bridge/claude-opus-5-5
 fallbackModels:
   - xai/grok-4.7
   - openai/gpt-6-astra
-  - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high
 tools: read, ffgrep, fffind, ls, edit, write, task, jev

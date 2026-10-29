@@ -9,6 +9,7 @@ import { noteWait, pollAdvisory, readWaitObservation, readWaitResult, reportStat
 import { looksSecretish, buildMemoryTriageQuestions, collectMemoryTriageFindings, formatMemoryState, formatMemoryTriageAdvisory, parseMemoryEntry } from "./internal/memory-triage.ts";
 import { buildOracleTriggerQuestions, collectOracleTriggerFindings, formatOracleTriggerAdvisory } from "./internal/oracle-trigger.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
+import { buildHydraQuestions, isHydraActive, parseHydraSignal } from "./internal/hydra-signal.ts";
 import { buildTodoEvidenceQuestions, collectTodoEvidenceFindings, diffTodoTransitions, formatTodoEvidenceAdvisory, formatTodoState, nextTodoStatusMap, snapshotTodos } from "./internal/todo-evidence.ts";
 import { BREADTH_ID, buildSkillBreadthQuestion, buildSkillQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SuggestedSkill } from "./internal/skill-router.ts";
 import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
@@ -288,7 +289,8 @@ export default function (pi: ExtensionAPI): void {
     if (event.messageType === "custom") return undefined;
     workspaceId = workspaceIdForCwd(ctx.cwd);
     const config = loadFeatureConfig();
-    if (!config.skillRouter.enabled && !config.routingAdvisory.enabled) return undefined;
+    const hydraActive = isHydraActive();
+    if (!config.skillRouter.enabled && !config.routingAdvisory.enabled && !hydraActive) return undefined;
 
     const prompt = event.prompt?.trim() ?? "";
     if (prompt.length < MIN_PROMPT_CHARS) {
@@ -329,6 +331,7 @@ export default function (pi: ExtensionAPI): void {
       }
     }
     if (config.routingAdvisory.enabled) Object.assign(questions, buildRoutingQuestions());
+    if (hydraActive) Object.assign(questions, buildHydraQuestions());
     if (Object.keys(questions).length === 0) {
       logTelemetry({
         event: "evaluation",
@@ -345,8 +348,15 @@ export default function (pi: ExtensionAPI): void {
       return undefined;
     }
 
-    const sources = turnSources(config).filter((source) => source !== "skill-router" || !!questions.skill);
-    const deadlineMs = Math.max(questions.skill ? config.skillRouter.deadlineMs : 0, config.routingAdvisory.enabled ? config.routingAdvisory.deadlineMs : 0);
+    const sources = [
+      ...turnSources(config).filter((source) => source !== "skill-router" || !!questions.skill),
+      ...(hydraActive ? ["hydra-router"] : []),
+    ];
+    const deadlineMs = Math.max(
+      questions.skill ? config.skillRouter.deadlineMs : 0,
+      config.routingAdvisory.enabled ? config.routingAdvisory.deadlineMs : 0,
+      hydraActive ? CLASSIFIER_DEADLINE_MS : 0,
+    );
     // Bare request plus the host workflow index: which project skills own which
     // workflows. Case 16:511 needed this ("missed work-wise" named none of
     // mail/calendar/Teams, but AGENTS.md maps those workflows to m365).
@@ -435,6 +445,26 @@ export default function (pi: ExtensionAPI): void {
             probability: finding.probability,
           })),
         );
+      }
+    }
+    if (hydraActive) {
+      const hydraSignal = parseHydraSignal(result.answers);
+      if (hydraSignal) {
+        notes.push(`hydra=d${hydraSignal.reasoningDepth.toFixed(1)}/${hydraSignal.domain}`);
+        try {
+          const payload: {
+            reasoningDepth: number;
+            depthConfidence: number;
+            domain: typeof hydraSignal.domain;
+            domainConfidence: number;
+            ctx: typeof ctx;
+            promise?: Promise<void>;
+          } = { ...hydraSignal, ctx };
+          pi.events.emit("pi:jev:turn-signal", payload);
+          if (payload.promise) await payload.promise;
+        } catch {
+          // Never let an event listener failure interrupt the turn.
+        }
       }
     }
     const evaluationStatus = lines.length > 0 ? "success" : "no-match";

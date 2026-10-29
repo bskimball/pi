@@ -4,6 +4,7 @@ import type { JevAnswer } from "../jev/internal/client.ts";
 import { buildSkillBreadthQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SkillRouterPolicy } from "../jev/internal/skill-router.ts";
 import { collectFindings } from "../jev/internal/code-judge.ts";
 import { extractWorkflowIndex } from "../jev/internal/workflow-index.ts";
+import { buildHydraQuestions, HYDRA_DEPTH_ID, HYDRA_DOMAIN_ID, isHydraActive, parseHydraSignal } from "../jev/internal/hydra-signal.ts";
 
 const WORK_AGENTS = `stuff before
 
@@ -325,5 +326,33 @@ describe("collectFindings", () => {
       0.8,
     );
     assert.equal(findings.length, 0);
+  });
+});
+
+describe("hydra turn signal", () => {
+  it("detects active hydra env tiers and builds score+choice questions", () => {
+    assert.equal(isHydraActive(undefined), false);
+    assert.equal(isHydraActive("off"), false);
+    assert.equal(isHydraActive("standard"), true);
+    assert.equal(isHydraActive("high"), true);
+    assert.equal(isHydraActive("max"), true);
+
+    const q = buildHydraQuestions();
+    assert.equal(q[HYDRA_DEPTH_ID]?.type, "score");
+    assert.equal(q[HYDRA_DOMAIN_ID]?.type, "choice");
+  });
+
+  it("parses depth and domain answers and clamps out-of-range depth", () => {
+    const parsed = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 3.6, confidence: 0.88, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "reasoning", confidence: 0.91, probabilities: {} },
+    });
+    assert.deepEqual(parsed, {
+      reasoningDepth: 3.6,
+      depthConfidence: 0.88,
+      domain: "reasoning",
+      domainConfidence: 0.91,
+    });
+    assert.equal(parseHydraSignal({}), undefined);
   });
 });

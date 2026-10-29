@@ -4,7 +4,6 @@ description: Work business-productivity strategist (Eddie, elephant from another
 model: claude-bridge/claude-opus-5-5
 fallbackModels:
   - openai/gpt-6-astra
-  - opencode/muse-spark-1.3-contributor-free
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh
 tools: read, ffgrep, fffind, ls, edit, write, task, jev

@@ -32,6 +32,7 @@ Global defaults live in `agent/mode-settings.json`; session choices use `behavio
 
 Event contracts:
 - `pi:modes:query-busy`: mutable `{ busy }`, synchronously augmented by task listeners.
-- `pi:modes:changed`: `{ mode, fusion }`, updates task policy and parks settled sidekicks when leaving Work or Fusion.
+- `pi:modes:changed`: `{ mode, fusion, hydra }`, updates task policy and parks settled sidekicks when leaving Work or Fusion.
 - `pi:fusion:configure`: `{ fusion, acknowledged?, promise?, error?, rollback? }`; Fusion's transactional sidekick configuration handshake.
+- `pi:jev:turn-signal`: `{ reasoningDepth, depthConfidence, domain, domainConfidence, ctx }`, piggybacked Jev turn classification consumed by Hydra (`/mode hydra [off|standard|high|max|status|sync]`) to adjust thinking effort and select AA + quota-ranked models across cache boundaries.
 - `pi:ui:changed`: `{ ui, ctx }`, updates presentation without restarting the session.

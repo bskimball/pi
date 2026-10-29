@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
+import { isHydraTier, type HydraTier } from "./hydra/scorer.ts";
 
 export const MODES = ["pi", "apex", "apex-orchestrate", "fusion", "work"] as const;
 export type Mode = typeof MODES[number];
 export type ModelChoice = { provider: string; modelId: string; thinking: string };
 export type FusionPair = { lead: ModelChoice; sidekick: ModelChoice };
-export type ModeState = { mode: Mode; models: Partial<Record<Mode, ModelChoice>>; fusion?: FusionPair };
+export type ModeState = { mode: Mode; models: Partial<Record<Mode, ModelChoice>>; fusion?: FusionPair; hydra?: HydraTier };
 export type UiPresentation = "pi" | "apex" | "claude" | "hal";
 export type Preferences = ModeState & { ui: UiPresentation; themes: { pi: string; apex: string; claude: string; hal: string } };
 export const isMode = (value: unknown): value is Mode => MODES.includes(value as Mode);
@@ -16,7 +17,8 @@ export function readPreferences(path: string): Preferences {
   try {
     const data = JSON.parse(readFileSync(path, "utf8"));
     if (!isMode(data.mode) || !data.models || !["pi", "apex", "claude", "hal"].includes(data.ui)) throw new Error("Invalid mode preferences");
-    return { ...initialPreferences(), ...data, mode: data.mode === "apex-orchestrate" ? "apex" : data.mode, themes: { ...initialPreferences().themes, ...data.themes } };
+    const hydra = isHydraTier(data.hydra) ? data.hydra : undefined;
+    return { ...initialPreferences(), ...data, ...(hydra ? { hydra } : {}), mode: data.mode === "apex-orchestrate" ? "apex" : data.mode, themes: { ...initialPreferences().themes, ...data.themes } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return initialPreferences();
     throw error;
@@ -64,7 +66,7 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
       trailingThinking = undefined;
     }
   }
-  const restored = structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion });
+  const restored = structuredClone(saved ?? { mode: fresh ? defaults.mode : legacy ? "apex-orchestrate" : "apex", models: defaults.models, fusion: defaults.fusion, ...(defaults.hydra ? { hydra: defaults.hydra } : {}) });
   if (!fresh && (trailingModel || trailingThinking)) {
     const current = restored.mode === "fusion" ? restored.fusion?.lead : restored.models[restored.mode];
     const provider = trailingModel?.provider ?? current?.provider;

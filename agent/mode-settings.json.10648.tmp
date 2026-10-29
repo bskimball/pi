@@ -1,0 +1,49 @@
+{
+  "mode": "apex",
+  "models": {
+    "fusion": {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "thinking": "xhigh"
+    },
+    "pi": {
+      "provider": "openai",
+      "modelId": "gpt-6.1-sol",
+      "thinking": "medium"
+    },
+    "apex": {
+      "provider": "claude-bridge",
+      "modelId": "claude-opus-5-5",
+      "thinking": "medium"
+    },
+    "work": {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "thinking": "xhigh"
+    },
+    "apex-orchestrate": {
+      "provider": "antigravity",
+      "modelId": "gemini-4-argon",
+      "thinking": "medium"
+    }
+  },
+  "ui": "apex",
+  "themes": {
+    "pi": "dark",
+    "apex": "apex-dark",
+    "claude": "claude-dark",
+    "hal": "hal-dark"
+  },
+  "fusion": {
+    "lead": {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "thinking": "xhigh"
+    },
+    "sidekick": {
+      "provider": "openai",
+      "modelId": "gpt-6.1-sol",
+      "thinking": "medium"
+    }
+  }
+}

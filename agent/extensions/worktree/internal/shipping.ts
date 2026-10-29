@@ -77,12 +77,14 @@ function mustIncludeTarget(t: Task, sha: string, target: string): void {
 }
 type PullRequest = {
   number: number; url: string; state: string; isDraft: boolean; headRefOid: string;
-  headRefName: string; baseRefName: string; headRepository: { nameWithOwner: string } | null;
+  headRefName: string; baseRefName: string; headRepository: { nameWithOwner?: string; name?: string } | null;
+  headRepositoryOwner?: { login: string } | null;
   mergeCommit: { oid: string } | null;
 };
-const PR_FIELDS = "number,url,state,isDraft,headRefOid,headRefName,baseRefName,headRepository,mergeCommit";
+const PR_FIELDS = "number,url,state,isDraft,headRefOid,headRefName,baseRefName,headRepository,headRepositoryOwner,mergeCommit";
 function validPR(t: Task, pr: PullRequest, sha: string): void {
-  if (pr.headRefOid !== sha || pr.headRefName !== t.branch || pr.baseRefName !== t.target || pr.headRepository?.nameWithOwner.toLowerCase() !== t.repo?.toLowerCase()) throw new Error("PR identity/head differs from this task's approved repository, branch, base or revision.");
+  const repository = pr.headRepository?.nameWithOwner || (pr.headRepositoryOwner?.login && pr.headRepository?.name ? `${pr.headRepositoryOwner.login}/${pr.headRepository.name}` : undefined);
+  if (pr.headRefOid !== sha || pr.headRefName !== t.branch || pr.baseRefName !== t.target || !repository || repository.toLowerCase() !== t.repo?.toLowerCase()) throw new Error("PR identity/head differs from this task's approved repository, branch, base or revision.");
 }
 async function readPR(exec: Exec, t: Task, signal?: AbortSignal): Promise<PullRequest> {
   return JSON.parse(await run(exec, t, "gh", ["pr", "view", String(required(t.pr, "PR").number), "--repo", t.repo!, "--json", PR_FIELDS], signal));

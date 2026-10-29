@@ -7,6 +7,9 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
 import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
+import { matchAaMetrics, parseAaModelsHtml, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
+import { parseCredentialsResponse, quotaMultiplierForModel } from "../prompt-commands/hydra/quota-sync.ts";
+import { rankModelsForHydra } from "../prompt-commands/hydra/scorer.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
@@ -723,4 +726,234 @@ test("non-Work modes scope project-context Work crew routing to Work mode", () =
   assert.match(FUSION_SYSTEM_BLOCK, /applies only in Work mode/);
   assert.match(FUSION_SYSTEM_BLOCK, /HAL Desktop UI/);
   assert.match(WORK_SYSTEM_PROMPT, /researcher \(Oscar\)/);
+});
+
+test("Hydra stats scorer ranks AA models, respects quota/circuit health, and switches or holds cache-sticky models via /mode hydra", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-hydra-"));
+  const saved = {
+    dir: process.env.PI_CODING_AGENT_DIR,
+    sub: process.env.PI_SUBAGENT,
+    mode: process.env.PI_BEHAVIOR_MODE,
+    hydra: process.env.PI_HYDRA_TIER,
+  };
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_SUBAGENT;
+  try {
+    // 1. AA metrics matching & HTML extraction (preserves generation identity)
+    assert.equal(matchAaMetrics("claude-opus-5-5", SEED_AA_MODELS)?.slug, "claude-opus-5-5");
+    assert.equal(matchAaMetrics("claude-opus-4-6", SEED_AA_MODELS), undefined, "does not alias older generation onto Opus 5.5 metrics");
+    assert.equal(matchAaMetrics("gpt-6.1-sol", SEED_AA_MODELS)?.slug, "gpt-6-1-sol");
+    assert.equal(matchAaMetrics("@cf/zai-org/glm-5.3", SEED_AA_MODELS)?.slug, "glm-5-3");
+
+    const sampleHtml = `<script>self.__next_f.push([1,"{\\"initialModels\\":[{\\"slug\\":\\"claude-opus-5-5\\",\\"name\\":\\"Claude Opus 5.5\\",\\"intelligenceIndex\\":58.4,\\"capabilities\\":{\\"engineering\\":64.6},\\"frontierCode20\\":0.46,\\"terminalBench40\\":0.60,\\"timescaleData\\":{\\"medianOutputSpeed\\":98.3,\\"medianTimeToFirstChunk\\":688},\\"price1mBlended7To2To1\\":2.94,\\"contextWindowTokens\\":1000000,\\"isReasoning\\":true}]}"])</script>`;
+    const parsedHtml = parseAaModelsHtml(sampleHtml);
+    assert.equal(parsedHtml.length, 1);
+    assert.equal(parsedHtml[0]?.slug, "claude-opus-5-5");
+
+    // 2. Quota & circuit filtering (including mixed disabled + cooldown credentials)
+    const creds = parseCredentialsResponse({
+      files: [
+        { quota_provider: "anthropic", remaining_percent: 3, cooldowns: [], disabled: false, success: 10, failed: 0 },
+        { quota_provider: "openai", remaining_percent: 85, cooldowns: [], disabled: false, success: 12, failed: 0 },
+        { quota_provider: "xai", remaining_percent: 85, cooldowns: [], disabled: true, success: 5, failed: 0 },
+        { quota_provider: "xai", remaining_percent: 0, cooldowns: [{ reason: "quota" }], disabled: false, success: 5, failed: 2 },
+      ],
+    });
+    const quotaSnap = { schema: 1 as const, updatedAt: Date.now(), source: "live" as const, providers: creds };
+    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "high", new Set(), quotaSnap).multiplier, 0, "exhausted (<5%) quota is skipped");
+    assert.equal(quotaMultiplierForModel("xai", "grok-4.7", "high", new Set(), quotaSnap).multiplier, 0, "mixed disabled + cooling-down credentials cannot manufacture a healthy provider");
+    assert.equal(quotaMultiplierForModel("openai", "gpt-6-astra", "high", new Set(["openai/gpt-6-astra"]), quotaSnap).multiplier, 0, "open circuit is skipped");
+    assert.equal(quotaMultiplierForModel("openai", "gpt-6.1-sol", "high", new Set(), quotaSnap).multiplier, 1);
+
+    const catalogModels: any[] = [
+      { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5 (API)", reasoning: true },
+      { provider: "google", id: "gemini-4-carbon", name: "Gemini 4 Carbon (API)", reasoning: true },
+      { provider: "github-copilot", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5 (Copilot)", reasoning: true },
+      { provider: "opencode", id: "claude-opus-5-5", name: "Claude Opus 5.5 (OpenCode)", reasoning: true },
+      { provider: "claude-bridge", id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: true },
+      { provider: "openai", id: "gpt-6-astra", name: "GPT-6 Astra", reasoning: true },
+      { provider: "openai", id: "gpt-6.1-sol", name: "GPT-6.1 Sol", reasoning: true },
+      { provider: "local-proxy", id: "claude-haiku-5-5", name: "Claude Haiku 5.5", reasoning: true },
+    ];
+
+    const rankedWithAnthropicExhausted = rankModelsForHydra({
+      models: catalogModels,
+      catalog: SEED_AA_MODELS,
+      quota: quotaSnap,
+      openCircuits: new Set(),
+      tier: "max",
+    });
+    assert.equal(
+      rankedWithAnthropicExhausted.some(r => ["anthropic", "google", "github-copilot", "opencode"].includes(r.model.provider)),
+      false,
+      "excludes anthropic, google, github-copilot, and opencode API/excluded providers",
+    );
+    assert.equal(rankedWithAnthropicExhausted[0]?.key, "openai/gpt-6-astra", "falls over to healthy OpenAI frontier when Anthropic quota is exhausted");
+
+    // 3. End-to-end /mode hydra command & Jev turn signal routing
+    const commands: Record<string, any> = {};
+    const handlers: Record<string, any[]> = {};
+    const eventListeners: Record<string, any[]> = {};
+    const entries: any[] = [];
+    const notices: string[] = [];
+    const statuses = new Map<string, string | undefined>();
+    let currentThinking = "medium";
+    let allowFusionAck = true;
+    let setModelDelayMs = 0;
+    const haikuModel = catalogModels.find(m => m.id === "claude-haiku-5-5")!;
+    const solModel = catalogModels.find(m => m.id === "gpt-6.1-sol")!;
+    const ctx: any = {
+      cwd: dir,
+      mode: "tui",
+      hasUI: true,
+      isIdle: () => true,
+      model: haikuModel, // start on haiku 5.5
+      scopedModels: [],
+      modelRegistry: {
+        getAvailable: () => catalogModels,
+        find: (provider: string, id: string) => catalogModels.find(m => m.provider === provider && m.id === id),
+      },
+      sessionManager: { getEntries: () => entries, getBranch: () => entries },
+      ui: {
+        theme: { name: "apex-dark" },
+        setStatus: (key: string, text: string | undefined) => { statuses.set(key, text); },
+        notify: (text: string) => notices.push(text),
+        setTheme(name: string) { this.theme.name = name; return { success: true }; },
+      },
+    };
+    const pi: any = {
+      registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; },
+      registerTool() {},
+      registerShortcut() {},
+      on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
+      events: {
+        on: (name: string, fn: any) => { (eventListeners[name] ??= []).push(fn); },
+        emit: (name: string, data: any) => {
+          if (name === "pi:fusion:configure" && allowFusionAck) {
+            data.acknowledged = true;
+            data.promise = Promise.resolve();
+          }
+          for (const fn of eventListeners[name] ?? []) fn(data);
+        },
+      },
+      appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+      getAllTools: () => [{ name: "read" }],
+      getActiveTools: () => ["read"],
+      setActiveTools() {},
+      getThinkingLevel: () => currentThinking,
+      setThinkingLevel: (lvl: string) => { currentThinking = lvl; },
+      setModel: async (m: any) => {
+        if (setModelDelayMs > 0) await new Promise(r => setTimeout(r, setModelDelayMs));
+        ctx.model = m;
+        return true;
+      },
+    };
+    promptCommands(pi);
+    for (const h of handlers.session_start ?? []) await h({ reason: "new" }, ctx);
+
+    await commands.mode("hydra max", ctx);
+    assert.equal(process.env.PI_HYDRA_TIER, "max");
+    assert.equal(statuses.get("hydra"), "hydra:max");
+    assert.equal(ctx.model.id, "claude-opus-5-5", "Hydra max selects top AA intelligence/coding model");
+
+    // Simulate warm session cache: add a recent message entry, then emit a low-depth Jev signal via sync emit + payload.promise.
+    entries.push({ type: "message", role: "user", content: "hi", timestamp: Date.now() });
+    const lowPayload: any = { reasoningDepth: 1.2, depthConfidence: 0.9, domain: "fast_edit", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", lowPayload);
+    await lowPayload.promise;
+    assert.equal(ctx.model.id, "claude-opus-5-5", "warm session cache holds the lead model on a quick turn");
+    assert.equal(currentThinking, "high", "max tier clamps low-depth turn to high thinking without dropping lead cache");
+
+    // Delayed setModel via pi:jev:turn-signal must finish before payload.promise resolves.
+    ctx.model = haikuModel; // haiku 5.5
+    setModelDelayMs = 25;
+    const upgradePayload: any = { reasoningDepth: 3.9, depthConfidence: 0.95, domain: "reasoning", domainConfidence: 0.95, ctx };
+    pi.events.emit("pi:jev:turn-signal", upgradePayload);
+    assert.ok(upgradePayload.promise instanceof Promise, "listener attaches promise to event payload");
+    await upgradePayload.promise;
+    setModelDelayMs = 0;
+    assert.equal(ctx.model.id, "claude-opus-5-5", "delayed setModel completes before turn-signal promise resolves");
+
+    // Resumed session with recent ISO message timestamp (<30m old) stays cache-warm; expired ISO timestamp (>30m old) re-routes.
+    ctx.model = haikuModel; // haiku 5.5
+    entries.splice(0, entries.length, {
+      type: "message",
+      role: "user",
+      content: "recent turn",
+      timestamp: new Date(Date.now() - 5 * 60_000).toISOString(),
+    }, {
+      type: "custom",
+      customType: "behavior-mode",
+      data: { mode: "apex", models: { apex: { provider: "local-proxy", modelId: "claude-haiku-5-5", thinking: "low" } }, hydra: "max" },
+    });
+    for (const h of handlers.session_start ?? []) await h({ reason: "resume" }, ctx);
+    assert.equal(ctx.model.id, "claude-haiku-5-5", "recent ISO timestamp keeps resumed session cache-warm");
+
+    entries.splice(0, entries.length, {
+      type: "message",
+      role: "user",
+      content: "old turn",
+      timestamp: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+    }, {
+      type: "custom",
+      customType: "behavior-mode",
+      data: { mode: "apex", models: { apex: { provider: "local-proxy", modelId: "claude-haiku-5-5", thinking: "low" } }, hydra: "max" },
+    });
+    for (const h of handlers.session_start ?? []) await h({ reason: "resume" }, ctx);
+    assert.equal(ctx.model.id, "claude-opus-5-5", "resumed session with expired ISO timestamp re-routes on session_start");
+
+    // Fusion unacknowledged sidekick configure rolls back the live lead model during Hydra routing,
+    // and incomplete rollback blocks input until a later /mode succeeds.
+    await commands.mode("hydra off", ctx);
+    ctx.mode = "rpc";
+    ctx.ui.select = async () => "high";
+    ctx.modelRegistry.getAvailable = () => catalogModels;
+    ctx.model = solModel;
+    entries.push({
+      type: "custom",
+      customType: "behavior-mode",
+      data: {
+        mode: "fusion",
+        models: { fusion: { provider: "openai", modelId: "gpt-6.1-sol", thinking: "high" } },
+        fusion: {
+          lead: { provider: "openai", modelId: "gpt-6.1-sol", thinking: "high" },
+          sidekick: { provider: "local-proxy", modelId: "claude-haiku-5-5", thinking: "low" },
+        },
+      },
+    });
+    for (const h of handlers.session_start ?? []) await h({ reason: "resume" }, ctx);
+    assert.equal(ctx.model.id, "gpt-6.1-sol");
+    allowFusionAck = false;
+    await commands.mode("hydra max", ctx);
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "unacknowledged Fusion sidekick configuration rolls back the live lead model");
+
+    // Now simulate model restore failure during rollback -> input must be blocked by recoveryBlocked.
+    const origFind = ctx.modelRegistry.find;
+    ctx.modelRegistry.find = (provider: string, id: string) =>
+      id === "gpt-6.1-sol" ? undefined : origFind(provider, id);
+    await commands.mode("hydra max", ctx);
+    let inputResult: any;
+    for (const h of handlers.input ?? []) inputResult = await h({ text: "hello" }, ctx);
+    assert.deepEqual(inputResult, { action: "handled" }, "incomplete Hydra rollback blocks input");
+    ctx.modelRegistry.find = origFind;
+    allowFusionAck = true;
+    await commands.mode("apex", ctx); // successful /mode clears recoveryBlocked
+
+    await commands.mode("hydra status", ctx);
+    assert.match(notices.at(-1) ?? "", /Hydra: max/);
+
+    await commands.mode("hydra off", ctx);
+    assert.equal(process.env.PI_HYDRA_TIER, undefined);
+    assert.equal(statuses.get("hydra"), undefined);
+  } finally {
+    for (const [key, value] of Object.entries({
+      PI_CODING_AGENT_DIR: saved.dir,
+      PI_SUBAGENT: saved.sub,
+      PI_BEHAVIOR_MODE: saved.mode,
+      PI_HYDRA_TIER: saved.hydra,
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

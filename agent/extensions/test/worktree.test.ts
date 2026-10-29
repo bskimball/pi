@@ -306,6 +306,14 @@ test("PR publication is idempotent, uses exact fork/head, and PR-only never gran
   await f.begin({ route: "pr", repo: "test/fork", delivery: "pr" }); f.change(); await f.prove();
   const publish: ShippingInput = { operation: "publish", task: "demo", expectedHead: head(f.root), title: "feat: test", body: "## Verification\nTests passed", confirm: true };
   await f.call(publish, gh.exec); await f.call(publish, gh.exec);
+  gh.getPR().headRepository = { nameWithOwner: "", name: "fork" };
+  gh.getPR().headRepositoryOwner = { login: "test" };
+  await f.call(publish, gh.exec);
+  gh.getPR().headRepositoryOwner.login = "other";
+  await assert.rejects(f.call(publish, gh.exec), /PR identity/);
+  gh.getPR().headRepositoryOwner = null;
+  await assert.rejects(f.call(publish, gh.exec), /PR identity/);
+  gh.getPR().headRepositoryOwner = { login: "test" };
   assert.equal(gh.calls.filter(c => c.command === "gh" && c.args[1] === "create").length, 1);
   await assert.rejects(f.call({ operation: "land", task: "demo", expectedHead: head(f.root), confirm: true }, gh.exec), /ship authorization/);
   await f.call({ operation: "authorize", task: "demo", delivery: "ship", confirm: true });
