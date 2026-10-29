@@ -23,6 +23,56 @@ export interface HydraTurnSignalInput {
   domainConfidence: number;
 }
 
+export type SubagentHydraRole = {
+  tier?: ActiveHydraTier;
+  signal: HydraTurnSignalInput;
+};
+
+/**
+ * Default Hydra task signal and tier profile for a specialist subagent role.
+ */
+export function subagentHydraProfile(
+  agentName: string,
+  parentTier: ActiveHydraTier,
+): { tier: ActiveHydraTier; signal: HydraTurnSignalInput } {
+  const name = agentName.toLowerCase();
+  if (name === "oracle" || name === "advisor" || name === "strategist") {
+    return {
+      tier: parentTier === "max" ? "max" : "high",
+      signal: { reasoningDepth: 3.8, depthConfidence: 1, domain: "reasoning", domainConfidence: 1 },
+    };
+  }
+  if (name === "artisan" || name === "machinist") {
+    return {
+      tier: parentTier,
+      signal: {
+        reasoningDepth: name === "artisan" ? 3.2 : 2.6,
+        depthConfidence: 1,
+        domain: "coding",
+        domainConfidence: 1,
+      },
+    };
+  }
+  if (name === "librarian" || name === "researcher") {
+    return {
+      tier: parentTier === "max" ? "high" : "standard",
+      signal: { reasoningDepth: 2.6, depthConfidence: 1, domain: "research", domainConfidence: 1 },
+    };
+  }
+  if (name === "scribe" || name === "author") {
+    return {
+      tier: parentTier === "max" ? "high" : "standard",
+      signal: { reasoningDepth: 2.3, depthConfidence: 1, domain: "coding", domainConfidence: 1 },
+    };
+  }
+  // inspector, scout, stevedore, clerk, picasso, etc.: fast execution/verification
+  return {
+    tier: "standard",
+    signal: { reasoningDepth: 1.5, depthConfidence: 1, domain: "fast_edit", domainConfidence: 1 },
+  };
+}
+
+
 export interface RankedModelCandidate {
   model: Model<Api>;
   key: string;
@@ -112,6 +162,23 @@ export function computeAaUtility(
   const domain = signal?.domain ?? "coding";
   const depth = signal?.reasoningDepth ?? (tier === "standard" ? 2 : tier === "high" ? 3 : 4);
 
+  // When Jev provides a concrete turn signal, weight speed & cost-efficiency
+  // higher on routine/fast turns so Hydra selects nimble workhorse models
+  // (e.g. Sonnet 5.5, GPT-6.1 Sol/Terra, Haiku 5.5) instead of locking onto
+  // heavy frontier models for every turn.
+  if (signal) {
+    if (domain === "fast_edit" || depth < 1.8) {
+      return tier === "max"
+        ? 0.35 * codingNorm + 0.25 * intelNorm + 0.30 * speedNorm + 0.10 * costEfficiency
+        : 0.25 * codingNorm + 0.45 * speedNorm + 0.30 * costEfficiency;
+    }
+    if (depth < 2.75 && domain !== "reasoning") {
+      return tier === "max"
+        ? 0.45 * codingNorm + 0.30 * intelNorm + 0.18 * speedNorm + 0.07 * costEfficiency
+        : 0.40 * codingNorm + 0.15 * intelNorm + 0.28 * speedNorm + 0.17 * costEfficiency;
+    }
+  }
+
   if (tier === "standard") {
     if (domain === "fast_edit" || depth < 1.7) {
       return 0.35 * codingNorm + 0.40 * speedNorm + 0.25 * costEfficiency;
@@ -186,11 +253,11 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
 
     const rawUtility = computeAaUtility(aa, tier, signal) + providerQualityBonus(model.provider);
     // Cache stickiness bonus: when the session transcript already has warm tokens on
-    // `currentModelKey`, add a stickiness margin so we only switch lead models mid-session
-    // on a decisive capability gap (e.g. upgrading from a fast/standard model to a frontier
-    // model when Jev detects a high-depth reasoning turn).
+    // `currentModelKey`, add a stickiness margin when no explicit Jev signal is present
+    // (or a lighter tie-breaker when Jev classified the turn) so Hydra switches models
+    // when Jev detects a meaningful shift in task depth/domain while avoiding churn on ties.
     const isCurrent = currentModelKey !== undefined && key === currentModelKey;
-    const cacheBonus = isCurrent && cacheWarm ? 0.14 : 0;
+    const cacheBonus = isCurrent && cacheWarm ? (signal ? 0.025 : 0.14) : 0;
     const finalScore = Number((rawUtility * quotaMultiplier + cacheBonus).toFixed(4));
 
     candidates.push({

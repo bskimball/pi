@@ -4,7 +4,8 @@ import type { JevAnswer } from "../jev/internal/client.ts";
 import { buildSkillBreadthQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SkillRouterPolicy } from "../jev/internal/skill-router.ts";
 import { collectFindings } from "../jev/internal/code-judge.ts";
 import { extractWorkflowIndex } from "../jev/internal/workflow-index.ts";
-import { buildHydraQuestions, HYDRA_DEPTH_ID, HYDRA_DOMAIN_ID, isHydraActive, parseHydraSignal } from "../jev/internal/hydra-signal.ts";
+import { buildHydraQuestions, formatHydraAdvisory, HYDRA_DEPTH_ID, HYDRA_DOMAIN_ID, isHydraActive, parseHydraSignal } from "../jev/internal/hydra-signal.ts";
+import { registerSuggestionReceipt } from "../jev/internal/suggestion-receipt.ts";
 
 const WORK_AGENTS = `stuff before
 
@@ -354,5 +355,57 @@ describe("hydra turn signal", () => {
       domainConfidence: 0.91,
     });
     assert.equal(parseHydraSignal({}), undefined);
+  });
+
+  it("formats hydra advisory and renders hydra row in jev-suggestion receipt even when no skill or guard fires", () => {
+    const signal = {
+      reasoningDepth: 1.4,
+      depthConfidence: 0.92,
+      domain: "fast_edit" as const,
+      domainConfidence: 0.89,
+    };
+    const text = formatHydraAdvisory(signal, {
+      model: "claude-bridge/claude-sonnet-5-5",
+      thinking: "low",
+      score: 0.78,
+      switchedModel: true,
+    });
+    assert.equal(text, "Jev Hydra route: claude-bridge/claude-sonnet-5-5 (low) [depth=1.4, domain=fast_edit, score=0.78].");
+
+    let entryRenderer: any;
+    registerSuggestionReceipt({
+      registerMessageRenderer() {},
+      registerEntryRenderer(_type: string, fn: any) {
+        entryRenderer = fn;
+      },
+    } as any);
+    const savedChrome = process.env.PI_UI_CHROME;
+    process.env.PI_UI_CHROME = "0";
+    try {
+      const comp = entryRenderer(
+        {
+          data: {
+            kind: "turn",
+            skills: [],
+            findings: [],
+            hydra: {
+              ...signal,
+              model: "claude-bridge/claude-sonnet-5-5",
+              thinking: "low",
+              score: 0.78,
+              switchedModel: true,
+            },
+          },
+        },
+        { expanded: false },
+        {},
+      );
+      assert.ok(comp, "renders component when only hydra details are present");
+      const rendered = comp.render(100).join("\n");
+      assert.match(rendered, /hydra: claude-bridge\/claude-sonnet-5-5 \(low\) \(d=1\.4\/fast_edit · score=0\.78\)/);
+    } finally {
+      if (savedChrome === undefined) delete process.env.PI_UI_CHROME;
+      else process.env.PI_UI_CHROME = savedChrome;
+    }
   });
 });

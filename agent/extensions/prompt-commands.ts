@@ -17,6 +17,7 @@ import {
 } from "./prompt-commands/featured-commands.ts";
 
 import { registerModes } from "./prompt-commands/modes.ts";
+import { EXCLUDED_HYDRA_PROVIDERS } from "./prompt-commands/hydra/scorer.ts";
 
 export const REGULAR_SYSTEM_BLOCK = `
 
@@ -178,6 +179,15 @@ export default function (pi: ExtensionAPI): void {
   // Give RPC children their own binding; the helper may select a matching shared app tab.
   process.env.AGENT_BROWSER_SESSION = `pi-${process.pid}-${randomUUID()}`;
   process.env.AGENT_BROWSER_PIN_TAB = "1";
+  if (typeof pi.registerProvider === "function") {
+    for (const providerId of EXCLUDED_HYDRA_PROVIDERS) {
+      try {
+        pi.registerProvider(providerId, { models: [] });
+      } catch {
+        // Ignore providers without a built-in auth definition in minimal test harnesses.
+      }
+    }
+  }
   registerBrowserAttachTool(pi);
   registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK);
 

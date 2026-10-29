@@ -821,8 +821,10 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
         setTheme(name: string) { this.theme.name = name; return { success: true }; },
       },
     };
+    const registeredProviders = new Map<string, any>();
     const pi: any = {
       registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; },
+      registerProvider: (name: string, config: any) => { registeredProviders.set(name, config); },
       registerTool() {},
       registerShortcut() {},
       on: (name: string, handler: any) => { (handlers[name] ??= []).push(handler); },
@@ -849,6 +851,9 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       },
     };
     promptCommands(pi);
+    for (const excluded of ["anthropic", "google", "google-gemini-cli", "github-copilot", "opencode"]) {
+      assert.deepEqual(registeredProviders.get(excluded), { models: [] }, `suppresses built-in models for excluded provider ${excluded}`);
+    }
     for (const h of handlers.session_start ?? []) await h({ reason: "new" }, ctx);
 
     await commands.mode("hydra max", ctx);
@@ -856,15 +861,45 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(statuses.get("hydra"), "hydra:max");
     assert.equal(ctx.model.id, "claude-opus-5-5", "Hydra max selects top AA intelligence/coding model");
 
-    // Simulate warm session cache: add a recent message entry, then emit a low-depth Jev signal via sync emit + payload.promise.
+    // Fresh session (no message entries in branch yet): Jev turn-signal runs before prompt-commands'
+    // before_agent_start handler and its model/thinking choice must not be overwritten by the fallback check.
+    await commands.mode("hydra high", ctx);
+    assert.equal(ctx.model.id, "claude-opus-5-5");
+    const firstTurnPayload: any = { reasoningDepth: 1.2, depthConfidence: 0.9, domain: "fast_edit", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", firstTurnPayload);
+    await firstTurnPayload.promise;
+    for (const h of handlers.before_agent_start ?? []) {
+      await h({ prompt: "quick status check", systemPromptOptions: {} }, ctx);
+    }
+    assert.equal(ctx.model.id, "claude-haiku-5-5", "prompt-commands before_agent_start preserves Jev's first-turn selection on an empty branch");
+    assert.equal(currentThinking, "low");
+
+    // Simulate warm session cache: add a recent message entry, then emit a low-depth Jev signal in hydra:high.
+    // Hydra should dynamically down-shift from frontier Opus to a faster workhorse model and populate payload outcome fields.
+    ctx.model = catalogModels.find(m => m.id === "claude-opus-5-5")!;
+    currentThinking = "high";
     entries.push({ type: "message", role: "user", content: "hi", timestamp: Date.now() });
     const lowPayload: any = { reasoningDepth: 1.2, depthConfidence: 0.9, domain: "fast_edit", domainConfidence: 0.9, ctx };
     pi.events.emit("pi:jev:turn-signal", lowPayload);
     await lowPayload.promise;
-    assert.equal(ctx.model.id, "claude-opus-5-5", "warm session cache holds the lead model on a quick turn");
-    assert.equal(currentThinking, "high", "max tier clamps low-depth turn to high thinking without dropping lead cache");
+    assert.equal(ctx.model.id, "claude-haiku-5-5", "Jev fast_edit signal down-shifts Hydra high to fast model");
+    assert.equal(lowPayload.selectedModel, "local-proxy/claude-haiku-5-5", "turn-signal payload reports selected model for Jev receipt");
+    assert.equal(lowPayload.selectedThinking, "low", "turn-signal payload reports selected thinking level");
+    assert.equal(lowPayload.switchedModel, true);
+
+    // Subagent Hydra routing via pi:hydra:subagent-route selects fast models for inspector and frontier for oracle.
+    const inspectorRoute: any = { agent: "inspector", ctx };
+    pi.events.emit("pi:hydra:subagent-route", inspectorRoute);
+    assert.equal(inspectorRoute.models?.[0], "local-proxy/claude-haiku-5-5", "inspector routes to fast model under Hydra");
+    assert.equal(inspectorRoute.thinking, "low");
+
+    const oracleRoute: any = { agent: "oracle", ctx };
+    pi.events.emit("pi:hydra:subagent-route", oracleRoute);
+    assert.equal(oracleRoute.models?.[0], "claude-bridge/claude-opus-5-5", "oracle routes to frontier reasoning model under Hydra");
+    assert.equal(oracleRoute.thinking, "high");
 
     // Delayed setModel via pi:jev:turn-signal must finish before payload.promise resolves.
+    await commands.mode("hydra max", ctx);
     ctx.model = haikuModel; // haiku 5.5
     setModelDelayMs = 25;
     const upgradePayload: any = { reasoningDepth: 3.9, depthConfidence: 0.95, domain: "reasoning", domainConfidence: 0.95, ctx };
@@ -937,13 +972,13 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.deepEqual(inputResult, { action: "handled" }, "incomplete Hydra rollback blocks input");
     ctx.modelRegistry.find = origFind;
     allowFusionAck = true;
-    await commands.mode("apex", ctx); // successful /mode clears recoveryBlocked
+    await commands.mode("hydra max", ctx); // successful /mode hydra clears recoveryBlocked
 
     await commands.mode("hydra status", ctx);
     assert.match(notices.at(-1) ?? "", /Hydra: max/);
 
-    await commands.mode("hydra off", ctx);
-    assert.equal(process.env.PI_HYDRA_TIER, undefined);
+    await commands.mode("apex", ctx);
+    assert.equal(process.env.PI_HYDRA_TIER, undefined, "switching to an explicit mode turns off Hydra");
     assert.equal(statuses.get("hydra"), undefined);
   } finally {
     for (const [key, value] of Object.entries({

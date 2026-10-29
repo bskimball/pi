@@ -30,10 +30,10 @@ import {
   isApexRosterAgent,
   isFusionOnlyAgent,
   isWorkCrewAgent,
-  modelAttempts,
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   resolveAgentThinking,
+  resolveSubagentModelsAndThinking,
   stderrDiagnostic,
   workCrewList,
   WORK_CREW_AGENTS,
@@ -653,8 +653,16 @@ export default function (pi: ExtensionAPI) {
       const idleMs = MODEL_IDLE_MS;
       const toolIdleMs = TOOL_IDLE_MS;
       const maxTurns = def.maxTurns ?? 30;
-      const thinking = resolveAgentThinking(def, pi.getThinkingLevel());
-      const attempts = modelAttempts(def, params.model?.trim() || undefined, params.allowFallback);
+      const resolved = resolveSubagentModelsAndThinking({
+        def,
+        parentThinking: pi.getThinkingLevel(),
+        modelOverride: params.model?.trim() || undefined,
+        allowFallback: params.allowFallback,
+        ctx,
+        emitEvent: (ev, payload) => pi.events.emit(ev, payload),
+      });
+      const thinking = resolved.thinking;
+      const attempts = resolved.attempts;
 
       const ledger = new ActivityLedger({ maxActivities: 400 });
       const attemptedModels: string[] = [];

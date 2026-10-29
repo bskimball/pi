@@ -7,6 +7,7 @@ import {
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   resolveAgentThinking,
+  resolveSubagentModelsAndThinking,
   stripRegularModeCarveout,
   type AgentDef,
 } from "../agent-discovery.ts";
@@ -91,6 +92,53 @@ describe("resolveAgentThinking", () => {
       resolveAgentThinking(def({ name: "machinist", thinking: "low" }), "high"),
       "low",
     );
+  });
+
+  it("routes subagent models and thinking via Hydra when PI_HYDRA_TIER is active and no explicit model override is passed", () => {
+    const inspector = def({
+      name: "inspector",
+      model: "antigravity/gemini-3.8-flash",
+      fallbackModels: ["openai/gpt-6.1-terra"],
+      thinking: "medium",
+    });
+    const saved = process.env.PI_HYDRA_TIER;
+    process.env.PI_HYDRA_TIER = "high";
+    try {
+      const routed = resolveSubagentModelsAndThinking({
+        def: inspector,
+        parentThinking: "high",
+        ctx: {},
+        emitEvent: (ev, payload: any) => {
+          if (ev === "pi:hydra:subagent-route") {
+            payload.models = ["claude-bridge/claude-sonnet-5-5", "openai/gpt-6.1-sol"];
+            payload.thinking = "low";
+          }
+        },
+      });
+      assert.deepEqual(routed.attempts, [
+        "claude-bridge/claude-sonnet-5-5",
+        "openai/gpt-6.1-sol",
+        "antigravity/gemini-3.8-flash",
+        "openai/gpt-6.1-terra",
+      ]);
+      assert.equal(routed.thinking, "low");
+
+      // Explicit model override bypasses Hydra primary selection
+      const overridden = resolveSubagentModelsAndThinking({
+        def: inspector,
+        parentThinking: "high",
+        modelOverride: "xai/grok-4.7",
+        ctx: {},
+        emitEvent: () => {
+          throw new Error("should not emit hydra route when modelOverride is provided");
+        },
+      });
+      assert.equal(overridden.attempts[0], "xai/grok-4.7");
+      assert.equal(overridden.thinking, "medium");
+    } finally {
+      if (saved === undefined) delete process.env.PI_HYDRA_TIER;
+      else process.env.PI_HYDRA_TIER = saved;
+    }
   });
 });
 

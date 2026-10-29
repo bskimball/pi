@@ -41,6 +41,16 @@ export interface TelemetryEvent {
     candidateCount: number;
   };
   thresholds?: { skill?: SkillThresholds; risk?: number; code?: number; todo?: number; memory?: number; oracle?: number };
+  hydra?: {
+    reasoningDepth: number;
+    depthConfidence: number;
+    domain: string;
+    domainConfidence: number;
+    model?: string;
+    thinking?: string;
+    score?: number;
+    switchedModel?: boolean;
+  };
   skipReason?: "short-prompt" | "no-questions";
   /** Code-judge: evidence_sufficient noul; missing answers are recorded as 0. */
   evidenceSufficient?: number;

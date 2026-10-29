@@ -9,12 +9,12 @@ import { noteWait, pollAdvisory, readWaitObservation, readWaitResult, reportStat
 import { looksSecretish, buildMemoryTriageQuestions, collectMemoryTriageFindings, formatMemoryState, formatMemoryTriageAdvisory, parseMemoryEntry } from "./internal/memory-triage.ts";
 import { buildOracleTriggerQuestions, collectOracleTriggerFindings, formatOracleTriggerAdvisory } from "./internal/oracle-trigger.ts";
 import { buildRoutingQuestions, collectGuardFindings, formatRoutingAdvisory } from "./internal/routing-advisory.ts";
-import { buildHydraQuestions, isHydraActive, parseHydraSignal } from "./internal/hydra-signal.ts";
+import { buildHydraQuestions, formatHydraAdvisory, isHydraActive, parseHydraSignal } from "./internal/hydra-signal.ts";
 import { buildTodoEvidenceQuestions, collectTodoEvidenceFindings, diffTodoTransitions, formatTodoEvidenceAdvisory, formatTodoState, nextTodoStatusMap, snapshotTodos } from "./internal/todo-evidence.ts";
 import { BREADTH_ID, buildSkillBreadthQuestion, buildSkillQuestion, buildSkillRelevanceQuestions, formatSkillAdvisory, resolveSkillChoice, resolveSkillSuggestions, type SkillCandidate, type SuggestedSkill } from "./internal/skill-router.ts";
 import { extractWorkflowIndex, MAX_CONTEXT_CHARS } from "./internal/workflow-index.ts";
 export { extractWorkflowIndex };
-import { JEV_SUGGESTION_TYPE, registerSuggestionReceipt, type JevSuggestionDetails } from "./internal/suggestion-receipt.ts";
+import { JEV_SUGGESTION_TYPE, registerSuggestionReceipt, type JevHydraDetails, type JevSuggestionDetails } from "./internal/suggestion-receipt.ts";
 import { logTelemetry, nextEphemeralId, normalizeToolPath, workspaceIdForCwd, type EvaluationStatus } from "./internal/telemetry.ts";
 
 const MAX_CONTENT_CHARS = 30_000;
@@ -447,10 +447,14 @@ export default function (pi: ExtensionAPI): void {
         );
       }
     }
+    let hydraDetails: JevHydraDetails | undefined;
     if (hydraActive) {
       const hydraSignal = parseHydraSignal(result.answers);
       if (hydraSignal) {
-        notes.push(`hydra=d${hydraSignal.reasoningDepth.toFixed(1)}/${hydraSignal.domain}`);
+        let selectedModel: string | undefined;
+        let selectedThinking: string | undefined;
+        let score: number | undefined;
+        let switchedModel: boolean | undefined;
         try {
           const payload: {
             reasoningDepth: number;
@@ -459,12 +463,39 @@ export default function (pi: ExtensionAPI): void {
             domainConfidence: number;
             ctx: typeof ctx;
             promise?: Promise<void>;
+            selectedModel?: string;
+            selectedThinking?: string;
+            score?: number;
+            switchedModel?: boolean;
           } = { ...hydraSignal, ctx };
           pi.events.emit("pi:jev:turn-signal", payload);
           if (payload.promise) await payload.promise;
+          selectedModel = payload.selectedModel;
+          selectedThinking = payload.selectedThinking;
+          score = payload.score;
+          switchedModel = payload.switchedModel;
         } catch {
           // Never let an event listener failure interrupt the turn.
         }
+        hydraDetails = {
+          reasoningDepth: hydraSignal.reasoningDepth,
+          depthConfidence: hydraSignal.depthConfidence,
+          domain: hydraSignal.domain,
+          domainConfidence: hydraSignal.domainConfidence,
+          model: selectedModel,
+          thinking: selectedThinking,
+          score,
+          switchedModel,
+        };
+        lines.push(formatHydraAdvisory(hydraSignal, hydraDetails));
+        const shortModel = selectedModel?.includes("/")
+          ? selectedModel.slice(selectedModel.indexOf("/") + 1)
+          : selectedModel;
+        notes.push(
+          shortModel
+            ? `hydra=${shortModel}${selectedThinking ? `(${selectedThinking})` : ""} d${hydraSignal.reasoningDepth.toFixed(1)}/${hydraSignal.domain}`
+            : `hydra=d${hydraSignal.reasoningDepth.toFixed(1)}/${hydraSignal.domain}`,
+        );
       }
     }
     const evaluationStatus = lines.length > 0 ? "success" : "no-match";
@@ -486,6 +517,7 @@ export default function (pi: ExtensionAPI): void {
         id,
         probability,
       })),
+      hydra: hydraDetails,
       template: questions.skill ? "skill-router@1" : undefined,
       skillDecision: skillDecision
         ? {
@@ -530,11 +562,13 @@ export default function (pi: ExtensionAPI): void {
         id,
         probability,
       })),
+      hydra: hydraDetails,
     });
     const details: JevSuggestionDetails = {
       kind: "turn",
       skill: selectedSkill,
       skills: suggested.map(({ skill, probability }) => ({ name: skill.name, probability })),
+      hydra: hydraDetails,
       findings: receiptFindings,
     };
     return {

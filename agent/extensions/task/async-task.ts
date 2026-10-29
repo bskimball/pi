@@ -30,6 +30,7 @@ import {
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   resolveAgentThinking,
+  resolveSubagentModelsAndThinking,
   stderrDiagnostic,
   workCrewList,
   WORK_CREW_AGENTS,
@@ -1539,6 +1540,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       fusionParentSessionId?: string;
       resumeSessionFile?: string;
       startupRetried?: boolean;
+      ctx?: ExtensionContext;
     },
   ): Promise<{ worker?: Worker; error?: string; fusionObserved?: FusionObservedIdentity; priorContextTokens?: number }> => {
     const identity = params.rebind
@@ -1557,12 +1559,22 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     const isFusion = params.fusion ?? rebindFusionState.fusion;
     const maxTurns = isFusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
     const forcedFusionModel = isFusion ? fusionModel() : undefined;
+    const resolved = (!isFusion && !params.rebind)
+      ? resolveSubagentModelsAndThinking({
+          def,
+          parentThinking: pi.getThinkingLevel(),
+          modelOverride: params.modelOverride,
+          allowFallback: params.allowFallback,
+          ctx: params.ctx,
+          emitEvent: (ev, payload) => pi.events.emit(ev, payload),
+        })
+      : undefined;
     const thinking = isFusion
       ? fusionLifecycle.configured?.sidekick.thinking
-      : params.rebind?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
+      : params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
     const attempts = isFusion
       ? [forcedFusionModel]
-      : modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
+      : resolved?.attempts ?? modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
     // Fusion has exactly one configured model and deliberately bypasses the
     // circuit/fallback chain; preserving its transcript matters more than retry.
     const initial = isFusion
@@ -2220,6 +2232,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         fusion: sidekickMode !== undefined,
         fusionParentSessionId: parentSessionId,
         resumeSessionFile: savedFusion?.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
+        ctx,
       });
       if (worker?.fusion && worker.sessionFile) {
         // Persist the transcript even when prompt acceptance failed: the failed
@@ -2476,6 +2489,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           prompt,
           cwd,
           lastPhaseTag: `task_chain:spawn step=${i + 1}/${steps.length}`,
+          ctx,
         });
         if (error || !worker) {
           digest.push(`step ${i + 1} failed ${step.agent} · ${error ?? "spawn failed"}`);

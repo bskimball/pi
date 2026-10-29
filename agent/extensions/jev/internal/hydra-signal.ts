@@ -74,3 +74,20 @@ export function parseHydraSignal(
     domainConfidence: domainAns?.type === "choice" && Number.isFinite(domainAns.confidence) ? domainAns.confidence : 0,
   };
 }
+
+export function formatHydraAdvisory(
+  signal: HydraTurnSignal,
+  routed?: { model?: string; thinking?: string; score?: number; switchedModel?: boolean },
+): string {
+  const target = routed?.model
+    ? `${routed.model}${routed.thinking ? ` (${routed.thinking})` : ""}`
+    : routed?.thinking
+      ? `thinking=${routed.thinking}`
+      : undefined;
+  const scorePart = typeof routed?.score === "number" && Number.isFinite(routed.score)
+    ? `, score=${routed.score.toFixed(2)}`
+    : "";
+  return target
+    ? `Jev Hydra route: ${target} [depth=${signal.reasoningDepth.toFixed(1)}, domain=${signal.domain}${scorePart}].`
+    : `Jev Hydra signal: depth=${signal.reasoningDepth.toFixed(1)}, domain=${signal.domain}.`;
+}

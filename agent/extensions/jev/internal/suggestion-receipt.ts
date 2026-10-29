@@ -6,11 +6,23 @@ import type { Component } from "@earendil-works/pi-tui";
 
 export const JEV_SUGGESTION_TYPE = "jev-suggestion";
 
+export interface JevHydraDetails {
+  reasoningDepth: number;
+  depthConfidence: number;
+  domain: string;
+  domainConfidence: number;
+  model?: string;
+  thinking?: string;
+  score?: number;
+  switchedModel?: boolean;
+}
+
 export interface JevSuggestionDetails {
   kind: "turn" | "code" | "todo" | "memory" | "review";
   file?: string;
   skill?: { name: string; probability: number };
   skills?: Array<{ name: string; probability: number }>;
+  hydra?: JevHydraDetails;
   findings: Array<{ id: string; label: string; probability: number }>;
 }
 
@@ -35,6 +47,25 @@ function rowsFrom(details: JevSuggestionDetails | undefined): JevSuggestionRow[]
     id: "Jev suggestion",
     subject: details.kind === "turn" ? "turn advisory" : (file || `${details.kind} finding`),
   }];
+  if (details.hydra && typeof details.hydra.reasoningDepth === "number" && Number.isFinite(details.hydra.reasoningDepth)) {
+    const domain = clean(details.hydra.domain, 40) || "coding";
+    const model = clean(details.hydra.model, 80);
+    const thinking = clean(details.hydra.thinking, 32);
+    const target = model
+      ? `${model}${thinking ? ` (${thinking})` : ""}`
+      : (thinking ? `thinking=${thinking}` : `d${details.hydra.reasoningDepth.toFixed(1)}/${domain}`);
+    const detailParts = [
+      `d=${details.hydra.reasoningDepth.toFixed(1)}/${domain}`,
+      typeof details.hydra.score === "number" && Number.isFinite(details.hydra.score)
+        ? `score=${details.hydra.score.toFixed(2)}`
+        : undefined,
+    ].filter((part): part is string => !!part);
+    rows.push({
+      id: "hydra",
+      subject: target,
+      detail: detailParts.join(" · "),
+    });
+  }
   for (const skill of (details.skills ?? (details.skill ? [details.skill] : [])).slice(0, 12)) {
     const skillName = clean(skill?.name, 80);
     if (skillName && validProbability(skill?.probability)) {

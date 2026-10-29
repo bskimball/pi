@@ -6,7 +6,7 @@ import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
 import { QUOTA_STALE_MS, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
-import { HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, type ActiveHydraTier, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
+import { HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
 
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
@@ -164,28 +164,39 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     });
   }
   let hydraRouteChain: Promise<void> = Promise.resolve();
+  let lastJevTurnSignal: HydraTurnSignalInput | undefined;
+  let jevRoutedThisTurn = false;
+  interface HydraRouteResult {
+    summary: string;
+    model: string;
+    thinking: string;
+    score?: number;
+    switchedModel: boolean;
+  }
   async function routeWithHydra(
     ctx: ExtensionContext,
     tier: ActiveHydraTier,
     signal?: HydraTurnSignalInput,
     forceModelPick = false,
-  ): Promise<string | undefined> {
-    let outcome: string | undefined;
+  ): Promise<HydraRouteResult | undefined> {
+    let outcome: HydraRouteResult | undefined;
     const run = async () => {
+      if (signal) lastJevTurnSignal = signal;
       const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
       const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
       const winner = ranked[0];
       if (!winner) return;
 
       const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey) : undefined;
+      const scoreMargin = winner.finalScore - (currentRanked?.finalScore ?? 0);
       const shouldSwitchModel =
         forceModelPick ||
         !cacheWarm ||
         !currentKey ||
         (winner.key !== currentKey &&
-          tier !== "standard" &&
-          (signal?.reasoningDepth ?? 0) >= 3.3 &&
-          winner.finalScore - (ranked.find((c) => c.key === currentKey)?.finalScore ?? 0) >= 0.08);
+          signal !== undefined &&
+          scoreMargin >= 0.02);
 
       const prevState = structuredClone(state);
       const prevModel = current(ctx);
@@ -240,12 +251,20 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           state.models[state.mode] = choice;
           persist();
           publishPair(ctx);
-          outcome = `${winner.key} (${choice.thinking}, score ${winner.finalScore.toFixed(2)})`;
+          outcome = {
+            summary: `${winner.key} (${choice.thinking}, score ${winner.finalScore.toFixed(2)})`,
+            model: winner.key,
+            thinking: choice.thinking,
+            score: winner.finalScore,
+            switchedModel: true,
+          };
           return;
         }
 
-        // Warm cache path: keep current lead model and dynamically adjust thinking effort.
+        // Keep current lead model and dynamically adjust thinking effort.
         const activeModel = ctx.model ?? winner.model;
+        const activeKey = `${activeModel.provider}/${activeModel.id}`;
+        const activeScore = (ranked.find((c) => c.key === activeKey) ?? winner).finalScore;
         const nextThinking = selectThinkingForModel(activeModel, tier, signal);
         if (nextThinking !== pi.getThinkingLevel()) {
           pi.setThinkingLevel(nextThinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
@@ -257,7 +276,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
             publishPair(ctx);
           }
         }
-        outcome = `${activeModel.provider}/${activeModel.id} (${pi.getThinkingLevel()}, cache-sticky)`;
+        const actualThinking = pi.getThinkingLevel();
+        outcome = {
+          summary: `${activeKey} (${actualThinking}, score ${activeScore.toFixed(2)})`,
+          model: activeKey,
+          thinking: actualThinking,
+          score: activeScore,
+          switchedModel: false,
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const failures: string[] = [];
@@ -321,6 +347,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (!nextState.models[mode] && prevModel) nextState.models[mode] = structuredClone(prevModel);
     nextState.mode = mode;
     nextState.fusion = structuredClone(nextFusion);
+    delete nextState.hydra;
     const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : nextState.models[mode];
     let persisted = false;
     let rollback: (() => Promise<void>) | undefined;
@@ -385,6 +412,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         try {
           const latest = readPreferences(preferencePath);
           latest.mode = prevPrefs.mode;
+          if (prevPrefs.hydra && prevPrefs.hydra !== "off") latest.hydra = prevPrefs.hydra;
+          else delete latest.hydra;
           if (prevPrefs.models[mode] !== undefined) latest.models[mode] = structuredClone(prevPrefs.models[mode]) as ModelChoice;
           else delete latest.models[mode];
           if (usesPersistentSidekick(mode)) {
@@ -469,9 +498,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       ctx.ui.notify("Hydra model router: off (using pinned mode model).", "info");
       return;
     }
-    const pickedSummary = await routeWithHydra(ctx, nextTier, undefined, true);
+    const pickedResult = await routeWithHydra(ctx, nextTier, undefined, true);
     ctx.ui.notify(
-      `Hydra model router: ${nextTier}.${pickedSummary ? ` Selected ${pickedSummary}.` : " No matching AA model available in current scope; keeping active model."}`,
+      `Hydra model router: ${nextTier}.${pickedResult ? ` Selected ${pickedResult.summary}.` : " No matching AA model available in current scope; keeping active model."}`,
       "info",
     );
   }
@@ -559,6 +588,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     preferences = readPreferences(preferencePath);
     recoveryBlocked = false;
     lastTurnAt = 0;
+    lastJevTurnSignal = undefined;
+    jevRoutedThisTurn = false;
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
     state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
@@ -604,16 +635,54 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.events.on?.("pi:jev:turn-signal", (payload: unknown) => {
     const tier = activeHydra();
     if (!tier || !payload || typeof payload !== "object") return;
-    const rec = payload as HydraTurnSignalInput & { ctx?: ExtensionContext; promise?: Promise<void> };
+    const rec = payload as HydraTurnSignalInput & {
+      ctx?: ExtensionContext;
+      promise?: Promise<void>;
+      selectedModel?: string;
+      selectedThinking?: string;
+      score?: number;
+      switchedModel?: boolean;
+      summary?: string;
+    };
     if (!rec.ctx) return;
     rec.promise = routeWithHydra(rec.ctx, tier, {
       reasoningDepth: rec.reasoningDepth,
       depthConfidence: rec.depthConfidence,
       domain: rec.domain,
       domainConfidence: rec.domainConfidence,
-    }, false).then(() => {
+    }, false).then((res) => {
       lastTurnAt = Date.now();
+      if (res) {
+        jevRoutedThisTurn = true;
+        rec.selectedModel = res.model;
+        rec.selectedThinking = res.thinking;
+        rec.score = res.score;
+        rec.switchedModel = res.switchedModel;
+        rec.summary = res.summary;
+      }
     });
+  });
+  pi.events.on?.("pi:hydra:subagent-route", (payload: unknown) => {
+    const tier = activeHydra();
+    if (!tier || !payload || typeof payload !== "object") return;
+    const req = payload as {
+      agent?: string;
+      ctx?: ExtensionContext;
+      signal?: HydraTurnSignalInput;
+      models?: string[];
+      thinking?: string;
+    };
+    if (!req.agent || !req.ctx) return;
+    const profile = subagentHydraProfile(req.agent, tier);
+    const effectiveSignal: HydraTurnSignalInput = req.signal ?? (
+      (req.agent === "machinist" || req.agent === "artisan") && lastJevTurnSignal
+        ? lastJevTurnSignal
+        : profile.signal
+    );
+    const ranked = rankForCurrentScope(req.ctx, profile.tier, effectiveSignal, false);
+    if (ranked.length === 0) return;
+    req.models = ranked.map((r) => r.key);
+    req.thinking = ranked[0]!.recommendedThinking;
   });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
@@ -643,9 +712,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("before_agent_start", async (event, ctx) => {
     await hydraRouteChain;
     const tier = activeHydra();
-    if (tier && ctx && !isSessionCacheWarm(ctx)) {
+    if (tier && ctx && !jevRoutedThisTurn && !isSessionCacheWarm(ctx)) {
       await routeWithHydra(ctx, tier, undefined, false);
     }
+    jevRoutedThisTurn = false;
     lastTurnAt = Date.now();
     const options = event.systemPromptOptions;
     if (state.mode === "apex") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, regular);
