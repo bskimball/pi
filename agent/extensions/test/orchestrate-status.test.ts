@@ -6,6 +6,8 @@ import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
+import { registerModes } from "../prompt-commands/modes.ts";
+import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-commands/hydra/usage.ts";
 import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
 import { parseCredentialsResponse, quotaMultiplierForModel } from "../prompt-commands/hydra/quota-sync.ts";
@@ -814,12 +816,40 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     // Subscription balancing: frontier coding prefers Opus with no history, then cycles to the
     // larger OpenAI subscription once Anthropic carries more than its capacity share of recent turns.
-    const frontierSignal = { reasoningDepth: 2.6, depthConfidence: 0.9, domain: "coding" as const, domainConfidence: 0.9 };
+    const frontierSignal = { reasoningDepth: 3, depthConfidence: 0.9, domain: "coding" as const, domainConfidence: 0.9 };
     const healthyQuota = { schema: 1 as const, updatedAt: 0, source: "none" as const, providers: {} };
     const balanceBase = { models: catalogModels, catalog: SEED_AA_MODELS, quota: healthyQuota, openCircuits: new Set<string>(), tier: "standard" as const, signal: frontierSignal };
+    const planModels: any[] = [
+      { provider: "antigravity", id: "gemini-4-carbon", reasoning: true },
+      { provider: "openai", id: "gpt-6-astra", reasoning: true },
+      { provider: "claude-bridge", id: "claude-opus-5-5", reasoning: true },
+      { provider: "muse-code", id: "muse-wonder-1.0", reasoning: true },
+    ];
+    const equalMetrics = planModels.map(model => ({
+      ...SEED_AA_MODELS[0]!,
+      slug: matchAaMetrics(model.id, SEED_AA_MODELS)!.slug,
+    }));
+    const planRanked = rankModelsForHydra({
+      ...balanceBase,
+      models: planModels,
+      catalog: equalMetrics,
+      signal: { reasoningDepth: 2.6, depthConfidence: 1, domain: "conversation", domainConfidence: 1 },
+      usage: { google: 20, openai: 20, anthropic: 20, meta: 20 },
+    });
+    const scoreFor = (provider: string) => planRanked.find(candidate => candidate.model.provider === provider)!.finalScore;
+    assert.equal(scoreFor("antigravity"), scoreFor("openai"), "Google and OpenAI have equal usage targets");
+    assert.equal(scoreFor("openai"), scoreFor("claude-bridge"), "Claude is not penalized for its lower subscription price");
+    assert.equal(scoreFor("claude-bridge"), scoreFor("muse-code"), "Muse has an equal target without a conversation bonus");
     assert.equal(rankModelsForHydra(balanceBase)[0]?.key, "claude-bridge/claude-opus-5-5", "frontier coding picks the strongest model without usage history");
+    const ordinaryOptions = { ...balanceBase, signal: { ...frontierSignal, reasoningDepth: 2.2 } };
+    assert.equal(rankModelsForHydra(ordinaryOptions)[0]?.key, "openai/gpt-6.1-sol", "ordinary implementation prefers efficient Sol within the quality band");
+    assert.equal(rankModelsForHydra({ ...ordinaryOptions, currentModelKey: "openai/gpt-6-astra", cacheWarm: true })[0]?.key, "openai/gpt-6.1-sol", "Astra cache stickiness does not erase Sol's efficiency advantage");
+    assert.equal(rankModelsForHydra({ ...ordinaryOptions, usage: { openai: 40, anthropic: 4 } })[0]?.key, "claude-bridge/claude-opus-5-5", "underused Claude gets suitable implementation work");
+    assert.equal(rankModelsForHydra({ ...ordinaryOptions, tier: "max" })[0]?.key, "claude-bridge/claude-opus-5-5", "max mode preserves frontier quality rather than optimizing cost");
+    const openaiOnly = catalogModels.filter(model => model.provider === "openai");
+    assert.equal(rankModelsForHydra({ ...balanceBase, models: openaiOnly })[0]?.key, "openai/gpt-6-astra", "deep work selects Astra over Sol in the OpenAI pool");
     assert.equal(
-      rankModelsForHydra({ ...balanceBase, usage: { anthropic: 3 } })[0]?.model.provider,
+      rankModelsForHydra({ ...ordinaryOptions, usage: { anthropic: 3 } })[0]?.model.provider,
       "openai",
       "smoothed subscription balancing cycles coding work to OpenAI after 3 consecutive Anthropic turns",
     );
@@ -885,15 +915,15 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       "variant selection respects the explicit model scope",
     );
     assert.equal(
-      rankModelsForHydra({ ...balanceBase, usage: { anthropic: 40, openai: 4 } })[0]?.model.provider,
+      rankModelsForHydra({ ...ordinaryOptions, usage: { anthropic: 40, openai: 4 } })[0]?.model.provider,
       "openai",
-      "over-used Anthropic subscription cycles frontier work to OpenAI",
+      "over-used Anthropic subscription cycles ordinary work to OpenAI",
     );
     // Quota tilt: with Anthropic at 45% and OpenAI at 95%, the most-quota good-enough model wins;
     // with Anthropic exhausted (3%), bridge models drop out of the ranking entirely.
     const entry = (provider: string, remainingPercent: number) => ({ provider, remainingPercent, inCooldown: false, disabled: false, successCount: 9, failureCount: 0 });
     const quotaTilt = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 45), openai: entry("openai", 95) } };
-    assert.equal(rankModelsForHydra({ ...balanceBase, quota: quotaTilt })[0]?.key, "openai/gpt-6-astra", "most-quota family wins the tilt among good-enough models");
+    assert.equal(rankModelsForHydra({ ...ordinaryOptions, quota: quotaTilt })[0]?.key, "openai/gpt-6.1-sol", "quota and efficiency favor Sol among good-enough models");
     const quotaExhausted = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 3), openai: entry("openai", 95) } };
     assert.equal(rankModelsForHydra({ ...balanceBase, quota: quotaExhausted }).some(r => r.model.provider === "claude-bridge"), false, "exhausted family is excluded, not just deprioritized");
 
@@ -1024,10 +1054,11 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     // Coding domain with underscored depth (1.4, low confidence 0.48) must NOT pick Haiku/low;
     // it floors to a capable coding model at medium thinking.
+    ctx.model = catalogModels.find(m => m.id === "gpt-6-astra")!;
     const codingPayload: any = { reasoningDepth: 1.4, depthConfidence: 0.48, domain: "coding", domainConfidence: 0.52, ctx };
     pi.events.emit("pi:jev:turn-signal", codingPayload);
     await codingPayload.promise;
-    assert.notEqual(ctx.model.id, "claude-haiku-5-5", "coding domain never selects Haiku when mid/frontier coding models are available");
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "ordinary coding switches a warm Astra session to efficient Sol, not lightweight Haiku");
     assert.equal(currentThinking, "medium", "coding domain uses at least medium thinking");
 
     // Complex coding (depth >= 2.85) in hydra:standard runs on a frontier model (high); a warm cache
@@ -1046,7 +1077,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     const oracleRoute: any = { agent: "oracle", ctx };
     pi.events.emit("pi:hydra:subagent-route", oracleRoute);
-    assert.equal(oracleRoute.models?.[0], "claude-bridge/claude-opus-5-5", "oracle routes to frontier reasoning model under Hydra");
+    assert.equal(oracleRoute.models?.[0], "claude-bridge/claude-opus-5-5", "oracle routes to the strongest reasoning model without a subscription-price penalty");
     assert.equal(oracleRoute.thinking, "high");
 
     // Delayed setModel via pi:jev:turn-signal must finish before payload.promise resolves.
@@ -1175,7 +1206,35 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(ctx.model.id, "muse-wonder-1.0-contributor", "live routing switches a warm Muse base to its contributor without a score bonus");
     ctx.scopedModels = [];
 
+    assert.deepEqual(readUsageCounts(), {}, "routing and before_agent_start do not count hypothetical calls");
+    const response = (provider: string, model: string, stopReason = "toolUse", totalTokens = 100) => ({
+      message: { role: "assistant", provider, model, stopReason, usage: { totalTokens } },
+    });
+    for (const h of handlers.message_end ?? []) {
+      await h(response("openai", "gpt-6.1-sol"), ctx);
+      await h(response("openai", "gpt-6.1-sol"), ctx);
+      await h(response("openai", "gpt-6-astra", "error", 0), ctx);
+    }
+    assert.deepEqual(readUsageCounts(), { openai: 2 }, "each completed call counts; zero-usage failures do not");
+    const workerHandlers: Record<string, any> = {};
+    process.env.PI_SUBAGENT = "1";
+    registerModes({ on: (name: string, handler: any) => { workerHandlers[name] = handler; } } as any, "", "", "", "");
+    delete process.env.PI_SUBAGENT;
+    assert.deepEqual(Object.keys(workerHandlers), ["message_end"], "workers install accounting without lead routing");
+    await workerHandlers.message_end(response("claude-bridge", "claude-opus-5-5"));
+    assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1 }, "worker fallback provider is counted from the actual response");
+    const now = Date.now();
+    writeFileSync(join(defaultUsagePath(), "another-process.json"), JSON.stringify({ schema: 1, events: [
+      { t: now, family: "google", provider: "antigravity", model: "gemini-4-argon" },
+      { t: now - USAGE_WINDOW_MS - 1, family: "meta", provider: "muse-code", model: "muse-wonder-1.0" },
+    ] }));
+    assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1, google: 1 }, "combines independent ledgers and excludes expired calls");
+    await commands.mode("hydra status", ctx);
+    assert.match(notices.at(-1) ?? "", /24h calls:/);
+
     await commands.mode("apex", ctx);
+    for (const h of handlers.message_end ?? []) await h(response("openai", "gpt-6-astra"), ctx);
+    assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1, google: 1 }, "manual-mode calls are excluded");
     assert.equal(process.env.PI_HYDRA_TIER, undefined, "switching to an explicit mode turns off Hydra");
     assert.equal(statuses.get("hydra"), undefined);
   } finally {

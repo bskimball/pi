@@ -36,6 +36,15 @@ function joinPromptAppends(...sections: Array<string | undefined>): string {
 }
 
 export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = ""): void {
+  // Workers inherit Hydra's tier but must not install lead routing or commands.
+  // Count their actual responses here, including fallback models, just like the lead.
+  pi.on("message_end", (event) => {
+    const tier = process.env.PI_HYDRA_TIER;
+    const message = event.message;
+    if (!isHydraTier(tier) || tier === "off" || message.role !== "assistant") return;
+    if ((message.stopReason === "error" || message.stopReason === "aborted") && message.usage.totalTokens === 0) return;
+    recordHydraUsage(message.provider, message.model);
+  });
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
@@ -204,6 +213,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         forceModelPick ||
         !cacheWarm ||
         !currentKey ||
+        !currentRanked?.meetsQuality ||
         (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`) ||
         (winner.key !== currentKey &&
           signal !== undefined &&
@@ -531,7 +541,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       );
       const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} ${aaSnap.models.length} models, quota=${quotaSnap.source}, openCircuits=${openCircuits.size})`;
       const usage = Object.entries(readUsageCounts()).sort((a, b) => b[1] - a[1]);
-      const usageLine = `24h turns: ${usage.length ? usage.map(([family, n]) => `${family} ${n}`).join(", ") : "none"}`;
+      const usageLine = `24h calls: ${usage.length ? usage.map(([family, n]) => `${family} ${n}`).join(", ") : "none"}`;
       ctx.ui.notify([header, usageLine, ...(top.length ? top : ["No matching AA models in current provider scope."])].join("\n"), "info");
       return;
     }
@@ -816,7 +826,6 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
     req.models = ranked.map((r) => r.key);
     req.thinking = ranked[0]!.recommendedThinking;
-    recordHydraUsage(ranked[0]!.model.provider, ranked[0]!.model.id);
   });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
@@ -849,7 +858,6 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (tier && ctx && !jevRoutedThisTurn && !isSessionCacheWarm(ctx)) {
       await routeWithHydra(ctx, tier, undefined, false);
     }
-    if (tier && ctx?.model) recordHydraUsage(ctx.model.provider, ctx.model.id);
     jevRoutedThisTurn = false;
     lastTurnAt = Date.now();
     const options = event.systemPromptOptions;

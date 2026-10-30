@@ -1,10 +1,9 @@
 // Pure stats-driven model and thinking scorer for Hydra.
 //
 // Combines Artificial Analysis metrics (Coding Score, Intelligence Index,
-// Output Speed tok/s), subscription capacity and recent usage balance,
-// 8317 quota / circuit-breaker health, Jev's per-turn task signal, and
-// prompt-cache stickiness. API list price is ignored: routed providers are
-// flat-rate subscriptions, so capacity, not per-token cost, is the constraint.
+// Output Speed tok/s), equal subscription usage targets, quota / circuit
+// health, Jev's task signal, and prompt-cache stickiness. Within the task's
+// quality band, API token price is a proxy for subscription burn, not a bill.
 
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { matchAaMetrics, type AaModelMetrics } from "./aa-sync.ts";
@@ -92,6 +91,7 @@ export interface RankedModelCandidate {
   key: string;
   aa: AaModelMetrics;
   rawUtility: number;
+  meetsQuality: boolean;
   quotaMultiplier: number;
   quotaReason?: string;
   cacheBonus: number;
@@ -104,42 +104,37 @@ function clamp01(value: number): number {
 }
 
 /**
- * Relative subscription capacity per model family (1 = largest plan).
- * Unlisted families are pay-per-use or minor plans.
+ * Equal call-share targets for subscriptions, independent of monthly price.
+ * Unlisted families remain secondary pay-per-use or minor plans.
  */
 export const SUBSCRIPTION_CAPACITY: Readonly<Record<string, number>> = {
   google: 1,
   openai: 1,
   meta: 1,
-  anthropic: 0.5,
-  xai: 0.5,
+  anthropic: 1,
+  xai: 1,
 };
 const DEFAULT_SUBSCRIPTION_CAPACITY = 0.25;
 const CAPACITY_BONUS = 0.04;
 /** Under-used families are only promoted when within this fraction of the task's best score. */
 const BALANCE_QUALITY_GATE = 0.85;
-/** General tiebreak tilt toward the fastest, cheapest, most-quota model — applied only inside the quality band. */
+/** Hard tasks retain capability ordering inside a tighter quality band. */
+const FRONTIER_QUALITY_GATE = 0.95;
 const QUOTA_HEADROOM_WEIGHT = 0.08;
-const SPEED_TILT_WEIGHT = 0.04;
-const COST_TILT_WEIGHT = 0.03;
-
-/** Relaxed gate for a family starved below a quarter of its capacity share, so every healthy subscription gets some suitable work. */
-const STARVED_QUALITY_GATE = 0.6;
-const STARVED_SHARE_FRACTION = 0.25;
+const SPEED_TILT_WEIGHT = 0.08;
+const COST_TILT_WEIGHT = 0.12;
 
 /**
  * Hands-on preferences that AA benchmarks do not capture, added to task utility
- * per domain and model family (e.g. Gemini for creative work, Muse Wonder's
- * conversational feel).
+ * per domain and model family (e.g. Gemini for creative work).
  */
 export const DOMAIN_AFFINITY: Partial<Record<HydraDomain, Readonly<Record<string, number>>>> = {
   writing: { google: 0.18 },
-  conversation: { meta: 0.05 },
 };
 
-/** Routed turns required in the usage window before balancing applies. */
+/** Completed model calls required in the usage window before balancing applies. */
 export const MIN_USAGE_SAMPLE = 3;
-/** Prior pseudo-turns distributed by capacity share so early balancing ramps smoothly instead of lurching. */
+/** Prior pseudo-calls distributed by target share so early balancing ramps smoothly. */
 const BALANCE_PRIOR_TURNS = 10;
 const BALANCE_EXPONENT = 0.5;
 const MIN_BALANCE = 0.6;
@@ -155,7 +150,7 @@ function smoothedUsageShare(
   poolFamilies: ReadonlySet<string>,
 ): { target: number; smoothedShare: number } | undefined {
   if (!usage) return undefined;
-  const total = Object.values(usage).reduce((sum, n) => sum + n, 0);
+  const total = [...poolFamilies].reduce((sum, f) => sum + (usage[f] ?? 0), 0);
   if (total < MIN_USAGE_SAMPLE) return undefined;
   let capacitySum = 0;
   for (const f of poolFamilies) capacitySum += subscriptionCapacity(f);
@@ -169,7 +164,7 @@ function smoothedUsageShare(
 /**
  * Proportional multiplier on [0.6..1.5]: (target share / smoothed share)^0.5.
  * A family used below its capacity share keeps gaining priority until it
- * catches up, so large subscriptions are not starved by small quality gaps.
+ * catches up, while task quality gates prevent unsuitable substitutions.
  */
 export function usageBalanceMultiplier(
   family: string,
@@ -179,16 +174,6 @@ export function usageBalanceMultiplier(
   const shares = smoothedUsageShare(family, usage, poolFamilies);
   if (!shares) return 1;
   return Math.max(MIN_BALANCE, Math.min(MAX_BALANCE, (shares.target / shares.smoothedShare) ** BALANCE_EXPONENT));
-}
-
-function isStarved(
-  family: string,
-  usage: Readonly<Record<string, number>> | undefined,
-  poolFamilies: ReadonlySet<string>,
-): boolean {
-  const shares = smoothedUsageShare(family, usage, poolFamilies);
-  if (!shares) return false;
-  return shares.smoothedShare < shares.target * STARVED_SHARE_FRACTION;
 }
 
 export const EXCLUDED_HYDRA_PROVIDERS = new Set([
@@ -428,7 +413,7 @@ export interface RankModelsOptions {
   signal?: HydraTurnSignalInput;
   currentModelKey?: string;
   cacheWarm?: boolean;
-  /** Routed-turn counts per model family over the recent usage window. */
+  /** Completed-call counts per model family over the recent usage window. */
   usage?: Readonly<Record<string, number>>;
 }
 
@@ -456,7 +441,6 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
       ? allowedModels.filter((m) => scopedKeys.has(`${m.provider}/${m.id}`))
       : allowedModels;
   const effectivePool = pool.length > 0 ? pool : allowedModels;
-  const poolFamilies = new Set(effectivePool.map((m) => inferModelFamily(m.provider, m.id)));
   const ranges = computeMetricRanges(catalog);
 
   const domain = signal?.domain ?? "coding";
@@ -470,28 +454,36 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
     return [{ model, aa, family, quotaHealth, taskUtility }];
   });
   const bestTaskUtility = Math.max(0, ...scored.map((s) => s.taskUtility));
+  const frontier = tier === "max" || effectiveSignalDepth(tier, signal) >= 2.85;
+  const qualityGate = frontier ? FRONTIER_QUALITY_GATE : BALANCE_QUALITY_GATE;
+  const poolFamilies = new Set(scored
+    .filter(s => s.taskUtility >= qualityGate * bestTaskUtility)
+    .map(s => s.family));
 
   const candidates: RankedModelCandidate[] = [];
   for (const { model, aa, family, quotaHealth, taskUtility } of scored) {
     const key = `${model.provider}/${model.id}`;
     const { multiplier: quotaMultiplier, reason: quotaReason } = quotaHealth;
-    let balance = usageBalanceMultiplier(family, usage, poolFamilies);
-    // Under-use may only promote models that are good enough for this task.
-    const gate = isStarved(family, usage, poolFamilies) ? STARVED_QUALITY_GATE : BALANCE_QUALITY_GATE;
-    if (balance > 1 && taskUtility < gate * bestTaskUtility) balance = 1;
+    const meetsQuality = taskUtility >= qualityGate * bestTaskUtility;
+    const balance = meetsQuality ? usageBalanceMultiplier(family, usage, poolFamilies) : 1;
     // Fastest + most quota (and cheapest, as a quota-burn proxy) wins among
     // models that are good enough for the task; outside the quality band the
     // tilt is withheld so it can never trade correctness for speed or quota.
     let tilt = 0;
-    if (taskUtility >= BALANCE_QUALITY_GATE * bestTaskUtility) {
+    if (meetsQuality) {
       const remaining = quotaRemainingForModel(model.provider, model.id, quota);
       const headroom = remaining !== null ? remaining / 100 : 0.5;
       const speedNorm = clamp01(Math.min(aa.outputSpeedTps ?? 80, 260) / 260);
       const costEfficiency = clamp01(1 - Math.min(aa.blendedPricePer1m ?? 2.5, 3.0) / 3.0);
-      tilt = QUOTA_HEADROOM_WEIGHT * headroom + SPEED_TILT_WEIGHT * speedNorm + COST_TILT_WEIGHT * costEfficiency;
+      tilt = QUOTA_HEADROOM_WEIGHT * headroom +
+        (frontier ? 0.04 : SPEED_TILT_WEIGHT) * speedNorm +
+        (frontier ? 0.03 : COST_TILT_WEIGHT) * costEfficiency;
     }
+    // Ordinary work treats sufficient capability as equivalent, then optimizes
+    // speed/cost. Hard work still rewards every increment of capability.
+    const qualityUtility = meetsQuality && !frontier ? bestTaskUtility : taskUtility;
     const rawUtility =
-      taskUtility * balance +
+      qualityUtility * balance +
       CAPACITY_BONUS * subscriptionCapacity(family) +
       providerQualityBonus(model.provider) +
       tilt;
@@ -507,6 +499,7 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
       model,
       key,
       aa,
+      meetsQuality,
       rawUtility: Number(rawUtility.toFixed(4)),
       quotaMultiplier,
       quotaReason,
@@ -516,7 +509,7 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
     });
   }
 
-  candidates.sort((a, b) => b.finalScore - a.finalScore || a.key.localeCompare(b.key));
+  candidates.sort((a, b) => Number(b.meetsQuality) - Number(a.meetsQuality) || b.finalScore - a.finalScore || a.key.localeCompare(b.key));
   // Choose the Muse variant only after ranking, preserving its position and score
   // against other models (including any warm-cache bonus on the base variant).
   const byKey = new Map(candidates.map(candidate => [candidate.key, candidate]));
