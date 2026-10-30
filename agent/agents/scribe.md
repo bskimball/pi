@@ -1,7 +1,7 @@
 ---
 name: scribe
 description: Editorial writing specialist for blog posts, articles, documentation narratives, READMEs, changelogs, guides, launch copy, essays, and polished long-form prose, including Markdown docs inside code repositories.
-model: claude-bridge/claude-sonnet-5-5
+model: antigravity/gemini-4-argon
 fallbackModels:
   - antigravity/gemini-3.8-flash
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
