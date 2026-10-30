@@ -197,12 +197,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       if (!winner) return;
 
       const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-      const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey) : undefined;
+      const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey ||
+        (ctx.model?.id.startsWith("muse-") && c.key === `${currentKey}-contributor`)) : undefined;
       const scoreMargin = winner.finalScore - (currentRanked?.finalScore ?? 0);
       const shouldSwitchModel =
         forceModelPick ||
         !cacheWarm ||
         !currentKey ||
+        (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`) ||
         (winner.key !== currentKey &&
           signal !== undefined &&
           scoreMargin >= 0.02);
@@ -278,7 +280,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         // Keep current lead model and dynamically adjust thinking effort.
         const activeModel = ctx.model ?? winner.model;
         const activeKey = `${activeModel.provider}/${activeModel.id}`;
-        const activeScore = (ranked.find((c) => c.key === activeKey) ?? winner).finalScore;
+        const activeScore = (ranked.find((c) => c.key === activeKey ||
+          (activeModel.id.startsWith("muse-") && c.key === `${activeKey}-contributor`)) ?? winner).finalScore;
         const nextThinking = selectThinkingForModel(activeModel, tier, signal);
         if (nextThinking !== pi.getThinkingLevel()) {
           pi.setThinkingLevel(nextThinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);

@@ -833,6 +833,57 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       "claude-bridge/claude-opus-5-5",
       "early usage balancing does not relax the starvation quality gate to promote sub-0.85x models after 5 turns",
     );
+    assert.equal(matchAaMetrics("muse-spark-1.3-contributor", SEED_AA_MODELS)?.slug, "muse-spark-1-3");
+    assert.equal(matchAaMetrics("muse-spark-1.2-contributor", SEED_AA_MODELS), undefined, "does not borrow Spark 1.3 metrics for 1.2");
+    const sparkModels = ["muse-spark-1.3", "muse-spark-1.3-contributor"].map(id => ({ provider: "muse-code", id, name: id, reasoning: true }));
+    const sparkRanked = rankModelsForHydra({ ...balanceBase, models: sparkModels as any[], currentModelKey: "muse-code/muse-spark-1.3", cacheWarm: true });
+    assert.equal(sparkRanked.length, 1, "Spark 1.3 twins resolve to the contributor variant without a catalog sync");
+    assert.equal(sparkRanked[0]?.key, "muse-code/muse-spark-1.3-contributor");
+    assert.equal(sparkRanked[0]?.aa.codingScore, 35, "uses Spark 1.3's published measurements, not Spark Open's");
+    const contributorModels: any[] = [
+      { provider: "muse-code", id: "muse-wonder-1.0", name: "Muse Wonder", reasoning: true },
+      { provider: "muse-code", id: "muse-wonder-1.0-contributor", name: "Muse Wonder Contributor", reasoning: true },
+    ];
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: contributorModels })[0]?.key,
+      "muse-code/muse-wonder-1.0-contributor",
+      "Hydra prefers the Muse contributor variant over its identical non-contributor twin",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: contributorModels, currentModelKey: "muse-code/muse-wonder-1.0", cacheWarm: true })[0]?.key,
+      "muse-code/muse-wonder-1.0-contributor",
+      "contributor preference beats cache stickiness on the non-contributor twin when Jev signalled the turn",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: contributorModels, signal: undefined, currentModelKey: "muse-code/muse-wonder-1.0", cacheWarm: true })[0]?.key,
+      "muse-code/muse-wonder-1.0-contributor",
+      "contributor preference beats warm-cache stickiness on the non-contributor twin without a Jev signal",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: [...subGateModels, { provider: "muse-code", id: "muse-wonder-1.0-contributor", name: "Muse Wonder Contributor", reasoning: true }], usage: { anthropic: 5 } })[0]?.key,
+      "claude-bridge/claude-opus-5-5",
+      "contributor selection does not override the frontier quality gate",
+    );
+    for (const signal of [frontierSignal, { reasoningDepth: 1.5, depthConfidence: 1, domain: "conversation" as const, domainConfidence: 1 }, undefined]) {
+      const options = { ...balanceBase, signal, currentModelKey: "muse-code/muse-wonder-1.0", cacheWarm: true };
+      const baseline = rankModelsForHydra({ ...options, models: [...catalogModels, contributorModels[0]] });
+      const withContributor = rankModelsForHydra({ ...options, models: [...catalogModels, ...contributorModels] });
+      assert.deepEqual(
+        withContributor.map(candidate => [candidate.key.replace(/-contributor$/, ""), candidate.finalScore]),
+        baseline.map(candidate => [candidate.key, candidate.finalScore]),
+        "contributor selection changes only the Muse variant, not scores or cross-model order",
+      );
+    }
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: contributorModels, openCircuits: new Set(["muse-code/muse-wonder-1.0-contributor"]) })[0]?.key,
+      "muse-code/muse-wonder-1.0",
+      "unhealthy contributor falls back to the base Muse variant",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: contributorModels, scopedKeys: new Set(["muse-code/muse-wonder-1.0"]) })[0]?.key,
+      "muse-code/muse-wonder-1.0",
+      "variant selection respects the explicit model scope",
+    );
     assert.equal(
       rankModelsForHydra({ ...balanceBase, usage: { anthropic: 40, openai: 4 } })[0]?.model.provider,
       "openai",
@@ -1114,6 +1165,15 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     await commands.mode("hydra status", ctx);
     assert.match(notices.at(-1) ?? "", /Hydra: max/);
+
+    catalogModels.push(...contributorModels);
+    ctx.scopedModels = contributorModels.map(model => ({ model, thinkingLevel: "low" }));
+    ctx.model = contributorModels[0];
+    const musePayload: any = { reasoningDepth: 1.5, depthConfidence: 1, domain: "conversation", domainConfidence: 1, ctx };
+    pi.events.emit("pi:jev:turn-signal", musePayload);
+    await musePayload.promise;
+    assert.equal(ctx.model.id, "muse-wonder-1.0-contributor", "live routing switches a warm Muse base to its contributor without a score bonus");
+    ctx.scopedModels = [];
 
     await commands.mode("apex", ctx);
     assert.equal(process.env.PI_HYDRA_TIER, undefined, "switching to an explicit mode turns off Hydra");

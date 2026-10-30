@@ -122,6 +122,7 @@ const BALANCE_QUALITY_GATE = 0.85;
 const QUOTA_HEADROOM_WEIGHT = 0.08;
 const SPEED_TILT_WEIGHT = 0.04;
 const COST_TILT_WEIGHT = 0.03;
+
 /** Relaxed gate for a family starved below a quarter of its capacity share, so every healthy subscription gets some suitable work. */
 const STARVED_QUALITY_GATE = 0.6;
 const STARVED_SHARE_FRACTION = 0.25;
@@ -516,5 +517,19 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
   }
 
   candidates.sort((a, b) => b.finalScore - a.finalScore || a.key.localeCompare(b.key));
-  return candidates;
+  // Choose the Muse variant only after ranking, preserving its position and score
+  // against other models (including any warm-cache bonus on the base variant).
+  const byKey = new Map(candidates.map(candidate => [candidate.key, candidate]));
+  const selected = new Set<string>();
+  return candidates.flatMap(candidate => {
+    const twin = candidate.model.id.startsWith("muse-")
+      ? byKey.get(`${candidate.key}-contributor`)
+      : undefined;
+    const preferred = twin
+      ? { ...candidate, model: twin.model, key: twin.key, recommendedThinking: twin.recommendedThinking }
+      : candidate;
+    if (selected.has(preferred.key)) return [];
+    selected.add(preferred.key);
+    return [preferred];
+  });
 }
