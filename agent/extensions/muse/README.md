@@ -27,7 +27,7 @@ Before submission, Pi's `onPayload` callback receives `{ prompt, images, tools }
 2. Pi executes the tools itself.
 3. The next request resends the whole transcript, including the full tool results.
 
-Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS`), not as a native Muse system override. Muse's own tools, shell, write, web, reminders, and yolo mode are disabled or not used, so Muse never acts directly. The CLI runs with `--max-model-steps 1` and `--no-session-log`.
+Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS`), not as a native Muse system override. Every call passes `--yolo` to skip Muse approval and sandbox permissions, without `--disable-shell` or `--disable-write` restrictions that can cause the model to refuse Pi tool requests. This does not change Pi's own permissions. The empty preset keeps Muse's native tools out of the turn; Pi executes the returned tool calls. Web tools and reminders remain disabled. The CLI runs with `--max-model-steps 1` and `--no-session-log`.
 
 ## Behavior and limits
 
@@ -35,7 +35,7 @@ Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS
 - Every Pi model turn pays CLI process startup plus a full-transcript prompt, so latency is higher than a native provider.
 - Reasoning content is not exposed. Pi's reasoning level maps to `--reasoning-effort` (`off` becomes `none`, `max` becomes `ultra`).
 - PNG, JPEG, WebP, and GIF images are written to the temp workspace and passed as `--image`. The transcript holds numbered placeholders. Other MIME types fail the turn.
-- Each turn runs in a temporary workspace that is deleted when it finishes. Relative tool paths in the prompt resolve against Pi's working directory, not that workspace.
+- Each turn uses Pi's working directory as Muse's workspace and process directory. Prompt, schema, and image files are held in a temporary directory that is deleted when the turn finishes.
 - CLI output over 16 MiB, a failed or missing terminal event, or an invalid envelope fails the turn. Abort and session shutdown kill the process tree.
 
 ## Usage accounting

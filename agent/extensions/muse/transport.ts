@@ -30,10 +30,10 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     await writeFile(promptPath, request.prompt, { mode: 0o600 });
     await writeFile(schemaPath, JSON.stringify(responseSchema), { mode: 0o600 });
     const args = [
-      "exec", "--json", "--provider", "meta", "--model", model, "--preset", "empty",
+      "exec", "--json", "--provider", "meta", "--model", model, "--preset", "empty", "--yolo",
       "--prompt-file", promptPath, "--output-schema", schemaPath,
-      "--workspace", dir, "--worktree", "off", "--max-model-steps", "1", "--no-session-log",
-      "--disable-shell", "--disable-write", "--disable-web-tools", "--disable-request-user-input",
+      "--workspace", process.cwd(), "--worktree", "off", "--max-model-steps", "1", "--no-session-log",
+      "--disable-web-tools", "--disable-request-user-input",
       "--disable-reminders", "--no-foreign-personal-context", "--approval-judge", "off",
     ];
     const effort = options?.reasoning === "max" ? "ultra" : options?.reasoning ?? "none";
@@ -50,7 +50,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     for (const key of Object.keys(env)) if (key.toUpperCase() === "META_API_KEY") delete env[key];
     signal.throwIfAborted();
     return await new Promise<MuseResult>((resolve, reject) => {
-      const child = spawn(museBinary(), args, { cwd: dir, env, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(museBinary(), args, { cwd: process.cwd(), env, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
       let pending = "";
       let stderr = "";
       let bytes = 0;
