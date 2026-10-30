@@ -4,7 +4,7 @@ description: Visual design and UI specialist for substantial frontend, redesign,
 model: antigravity/gemini-4-argon
 fallbackModels:
   - claude-bridge/claude-opus-5-5
-  - meta/muse-wonder-1.0
+  - muse-code/muse-wonder-1.0
   - openai/gpt-6-astra
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
