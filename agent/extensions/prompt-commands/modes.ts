@@ -537,7 +537,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const openCircuits = readOpenCircuits();
       const ranked = rankForCurrentScope(ctx, tier, undefined, isSessionCacheWarm(ctx));
       const top = ranked.slice(0, 4).map((r, idx) =>
-        `${idx + 1}. ${r.key} (${r.recommendedThinking}) score=${r.finalScore.toFixed(2)} [code=${r.aa.codingScore.toFixed(0)} intel=${(r.aa.intelligenceIndex ?? 0).toFixed(0)} tps=${(r.aa.outputSpeedTps ?? 0).toFixed(0)} $${(r.aa.blendedPricePer1m ?? 0).toFixed(2)}${r.quotaReason ? ` ${r.quotaReason}` : ""}]`
+        `${idx + 1}. ${r.key} (${r.recommendedThinking}) score=${r.finalScore.toFixed(2)} [code=${r.aa.codingScore.toFixed(0)} intel=${(r.aa.intelligenceIndex ?? 0).toFixed(0)}${typeof r.aa.designArenaElo === "number" ? ` da=${r.aa.designArenaElo.toFixed(0)}` : ""} tps=${(r.aa.outputSpeedTps ?? 0).toFixed(0)} $${(r.aa.blendedPricePer1m ?? 0).toFixed(2)}${r.quotaReason ? ` ${r.quotaReason}` : ""}]`
       );
       const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} ${aaSnap.models.length} models, quota=${quotaSnap.source}, openCircuits=${openCircuits.size})`;
       const usage = Object.entries(readUsageCounts()).sort((a, b) => b[1] - a[1]);
@@ -811,10 +811,13 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (!req.agent || !req.ctx) return;
     req.scope = state.hydraScope;
     const profile = subagentHydraProfile(req.agent, tier);
+    const role = req.agent.toLowerCase();
     const effectiveSignal: HydraTurnSignalInput = req.signal ?? (
-      (req.agent === "machinist" || req.agent === "artisan") && lastJevTurnSignal
+      role === "machinist" && lastJevTurnSignal && lastJevTurnSignal.domain !== "design"
         ? lastJevTurnSignal
-        : profile.signal
+        : role === "artisan" && lastJevTurnSignal?.domain === "design"
+          ? { ...lastJevTurnSignal, reasoningDepth: Math.max(profile.signal.reasoningDepth, lastJevTurnSignal.reasoningDepth) }
+          : profile.signal
     );
     const ranked = rankForCurrentScope(req.ctx, profile.tier, effectiveSignal, false);
     if (ranked.length === 0) {
@@ -824,8 +827,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       req.scopeExhausted = true;
       return;
     }
-    req.models = ranked.map((r) => r.key);
-    req.thinking = ranked[0]!.recommendedThinking;
+    const qualityRanked = ranked.filter((r) => r.meetsQuality);
+    const selected = qualityRanked.length > 0 ? qualityRanked : ranked;
+    req.models = selected.map((r) => r.key);
+    req.thinking = selected[0]!.recommendedThinking;
   });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;

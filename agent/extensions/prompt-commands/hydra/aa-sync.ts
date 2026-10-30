@@ -10,6 +10,8 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 export const AA_MODELS_URL = "https://artificialanalysis.ai/models";
+export const DESIGN_ARENA_LEADERBOARD_URL = "https://www.designarena.ai/api/leaderboard";
+export const DESIGN_ARENA_REGISTRY_URL = "https://www.designarena.ai/api/registry";
 export const AA_STALE_MS = 24 * 60 * 60_000; // 24 hours
 
 export interface AaModelMetrics {
@@ -45,6 +47,8 @@ export interface AaModelMetrics {
   aa3dElo?: number | null;
   /** Code2Video-AA Elo: product and brand videos designed in code. */
   code2videoElo?: number | null;
+  /** Design Arena Overall Frontend (Text-to-HTML) code leaderboard Elo. */
+  designArenaElo?: number | null;
   /** AA-PersonalityBench index percentiles on [0..100]; `slop` is higher-is-worse. */
   personality?: Partial<Record<AaPersonalityIndex, number>>;
 }
@@ -114,6 +118,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     presentationElo: 1305.2,
     aa3dElo: 1152.6,
     code2videoElo: 1259.4,
+    designArenaElo: 1327,
     personality: {
       expressiveness: 82.7,
       organization: 48.0,
@@ -142,6 +147,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.2,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+    designArenaElo: 1385,
   },
   {
     slug: "gpt-6-astra",
@@ -160,6 +166,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.5,
     contextWindowTokens: 400_000,
     isReasoning: true,
+    designArenaElo: 1390,
   },
   {
     slug: "gpt-6-1-sol",
@@ -178,6 +185,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.15,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+    designArenaElo: 1359,
   },
   {
     slug: "claude-sonnet-5-5",
@@ -196,6 +204,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.1,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+    designArenaElo: 1351,
   },
   {
     slug: "gpt-6-1-terra",
@@ -214,6 +223,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.075,
     contextWindowTokens: 400_000,
     isReasoning: true,
+    designArenaElo: 1300,
   },
   {
     slug: "muse-wonder-full",
@@ -250,6 +260,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 220_000,
     isReasoning: true,
+    designArenaElo: 1333,
   },
   {
     slug: "kimi-k3-1-pro",
@@ -268,6 +279,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 220_000,
     isReasoning: true,
+    designArenaElo: 1354,
   },
   {
     slug: "muse-wonder",
@@ -286,6 +298,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+    designArenaElo: 1386,
   },
   {
     slug: "claude-haiku-5-5",
@@ -304,6 +317,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 200_000,
     isReasoning: true,
+    designArenaElo: 1280,
   },
   {
     slug: "grok-4-7",
@@ -322,6 +336,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: 0.5,
     contextWindowTokens: 500_000,
     isReasoning: true,
+    designArenaElo: 1267,
   },
   {
     slug: "deepseek-v4-1-flash-1017",
@@ -340,6 +355,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 131_072,
     isReasoning: true,
+    designArenaElo: 1318,
   },
   {
     slug: "glm-5-3",
@@ -358,6 +374,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 220_000,
     isReasoning: true,
+    designArenaElo: 1298,
   },
   {
     slug: "gemini-3-8-flash",
@@ -376,6 +393,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 220_000,
     isReasoning: true,
+    designArenaElo: 1302,
   },
   {
     slug: "gpt-6-luna",
@@ -394,6 +412,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 220_000,
     isReasoning: true,
+    designArenaElo: 1265,
   },
   {
     slug: "muse-spark-1-3",
@@ -417,6 +436,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     presentationElo: 1525.38,
     aa3dElo: 1033.4636,
     code2videoElo: 1018.78,
+    designArenaElo: 1350,
     personality: {
       expressiveness: 65.35,
       organization: 57.925,
@@ -445,6 +465,7 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     cacheHitPricePer1m: null,
     contextWindowTokens: 1_000_000,
     isReasoning: true,
+    designArenaElo: 1306,
   },
 ];
 
@@ -647,7 +668,13 @@ export function readAaCatalog(path = defaultAaCatalogPath()): AaCatalogSnapshot 
     if (existsSync(path)) {
       const raw = JSON.parse(readFileSync(path, "utf8"));
       if (raw && typeof raw === "object" && Array.isArray(raw.models) && raw.models.length > 0) {
-        const models = raw.models as AaModelMetrics[];
+        const seedBySlug = new Map(SEED_AA_MODELS.map((s) => [s.slug, s]));
+        const models = (raw.models as AaModelMetrics[]).map((m) => {
+          const seed = seedBySlug.get(m.slug);
+          return seed && m.designArenaElo === undefined && seed.designArenaElo !== undefined
+            ? { ...m, designArenaElo: seed.designArenaElo }
+            : m;
+        });
         // Seeds added after the last sync still need to be scoreable.
         const known = new Set(models.map((m) => m.slug));
         return {
@@ -667,6 +694,54 @@ export function readAaCatalog(path = defaultAaCatalogPath()): AaCatalogSnapshot 
     source: "seed",
     models: SEED_AA_MODELS,
   };
+}
+
+/**
+ * Parse Design Arena's `/api/leaderboard` (Overall Frontend Text-to-HTML code arena)
+ * and optional `/api/registry` (codename -> displayName mapping) into a normalized
+ * model-slug -> Elo map.
+ */
+export function parseDesignArenaLeaderboard(
+  leaderboardPayload: unknown,
+  registryPayload?: unknown,
+): Map<string, number> {
+  const scores = new Map<string, number>();
+  const data =
+    leaderboardPayload &&
+    typeof leaderboardPayload === "object" &&
+    Array.isArray((leaderboardPayload as { data?: unknown }).data)
+      ? ((leaderboardPayload as { data: unknown[] }).data)
+      : [];
+  const regModels =
+    registryPayload &&
+    typeof registryPayload === "object" &&
+    (registryPayload as { models?: unknown }).models &&
+    typeof (registryPayload as { models?: unknown }).models === "object"
+      ? ((registryPayload as { models: Record<string, { displayName?: unknown }> }).models)
+      : {};
+
+  const toKey = (raw: string): string => {
+    const norm = normalizeToken(raw);
+    return normalizeToken(EXPLICIT_ALIASES[norm] ?? norm);
+  };
+
+  for (const row of data) {
+    if (!row || typeof row !== "object") continue;
+    const rec = row as Record<string, unknown>;
+    const modelId = typeof rec.modelId === "string" ? rec.modelId.trim() : "";
+    const elo = finiteOrNull(rec.elo);
+    if (!modelId || elo === null) continue;
+    const direct = toKey(modelId);
+    if (direct && !scores.has(direct)) scores.set(direct, elo);
+    const rawDisplay = regModels[modelId]?.displayName;
+    const displayName =
+      typeof rawDisplay === "string" ? rawDisplay.replace(/\s*\([^)]*\)\s*$/g, "").trim() : "";
+    if (displayName) {
+      const byDisplay = toKey(displayName);
+      if (byDisplay && !scores.has(byDisplay)) scores.set(byDisplay, elo);
+    }
+  }
+  return scores;
 }
 
 export function saveAaCatalog(snapshot: AaCatalogSnapshot, path = defaultAaCatalogPath()): void {
@@ -700,28 +775,74 @@ export async function syncAaCatalog(options?: {
     if (parsed.length === 0) throw new Error("No AA model entries found in response");
 
     // Merge with seed entries so models not in the top 28 default chart still retain baseline scores.
+    const seedBySlug = new Map<string, AaModelMetrics>();
     const bySlug = new Map<string, AaModelMetrics>();
-    for (const seed of SEED_AA_MODELS) bySlug.set(seed.slug, seed);
-    for (const live of parsed) bySlug.set(live.slug, live);
+    for (const seed of SEED_AA_MODELS) {
+      seedBySlug.set(seed.slug, seed);
+      bySlug.set(seed.slug, seed);
+    }
+    for (const live of parsed) {
+      const seed = seedBySlug.get(live.slug);
+      bySlug.set(live.slug, seed?.designArenaElo !== undefined ? { ...live, designArenaElo: seed.designArenaElo } : live);
+    }
 
     // Seeded models AA leaves off the listing (e.g. Gemini 4 Argon) still have full
     // records on their own pages; refresh them so every AA measurement is current.
     const listed = new Set(parsed.map((m) => m.slug));
-    await Promise.all(
-      SEED_AA_MODELS.filter((seed) => !listed.has(seed.slug)).map(async (seed) => {
+    const [, designArenaScores] = await Promise.all([
+      Promise.all(
+        SEED_AA_MODELS.filter((seed) => !listed.has(seed.slug)).map(async (seed) => {
+          try {
+            const page = await fetchFn(`${url}/${seed.slug}`, {
+              signal: controller.signal,
+              headers: { Accept: "text/html,application/xhtml+xml" },
+            });
+            if (!page.ok) return;
+            const metrics = parseAaModelPage(await page.text(), seed.slug);
+            if (metrics) {
+              bySlug.set(
+                seed.slug,
+                seed.designArenaElo !== undefined ? { ...metrics, designArenaElo: seed.designArenaElo } : metrics,
+              );
+            }
+          } catch {
+            // Keep the seed baseline for this model.
+          }
+        }),
+      ),
+      (async (): Promise<Map<string, number>> => {
         try {
-          const page = await fetchFn(`${url}/${seed.slug}`, {
-            signal: controller.signal,
-            headers: { Accept: "text/html,application/xhtml+xml" },
-          });
-          if (!page.ok) return;
-          const metrics = parseAaModelPage(await page.text(), seed.slug);
-          if (metrics) bySlug.set(seed.slug, metrics);
+          const [lbRes, regRes] = await Promise.all([
+            fetchFn(DESIGN_ARENA_LEADERBOARD_URL, {
+              method: "POST",
+              signal: controller.signal,
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ arenaType: "models", category: "allcategories", inputModality: "text" }),
+            }),
+            fetchFn(DESIGN_ARENA_REGISTRY_URL, {
+              signal: controller.signal,
+              headers: { Accept: "application/json" },
+            }).catch(() => undefined),
+          ]);
+          if (!lbRes.ok) return new Map();
+          const lbJson = await lbRes.json();
+          const regJson = regRes?.ok ? await regRes.json().catch(() => undefined) : undefined;
+          return parseDesignArenaLeaderboard(lbJson, regJson);
         } catch {
-          // Keep the seed baseline for this model.
+          return new Map();
         }
-      }),
-    );
+      })(),
+    ]);
+
+    if (designArenaScores.size > 0) {
+      for (const [slug, entry] of bySlug) {
+        const key = normalizeToken(EXPLICIT_ALIASES[normalizeToken(slug)] ?? slug);
+        const daElo = designArenaScores.get(key);
+        if (daElo !== undefined) {
+          bySlug.set(slug, { ...entry, designArenaElo: daElo });
+        }
+      }
+    }
 
     const snapshot: AaCatalogSnapshot = {
       schema: 1,

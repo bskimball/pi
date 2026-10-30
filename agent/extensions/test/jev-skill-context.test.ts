@@ -348,6 +348,7 @@ describe("hydra turn signal", () => {
     const q = buildHydraQuestions();
     assert.equal(q[HYDRA_DEPTH_ID]?.type, "score");
     assert.equal(q[HYDRA_DOMAIN_ID]?.type, "choice");
+    assert.equal(typeof (q[HYDRA_DOMAIN_ID] as any)?.criteria?.design, "string");
   });
 
   it("parses 0-based Jev score [0..3] into 1-based depth [1..4] and floors low-confidence coding/research", () => {
@@ -391,6 +392,14 @@ describe("hydra turn signal", () => {
       [HYDRA_DOMAIN_ID]: { type: "choice", choice: "research", confidence: 0.28, probabilities: {} },
     });
     assert.equal(ambiguousResearch?.reasoningDepth, 2.2);
+
+    // UI/design domain floors at 2.4 (or 2.6 when low-confidence) so frontend/UI work never collapses into a shallow fast lookup.
+    const designTurn = parseHydraSignal({
+      [HYDRA_DEPTH_ID]: { type: "score", score: 0.8, confidence: 0.85, legend: [], probabilities: {} },
+      [HYDRA_DOMAIN_ID]: { type: "choice", choice: "design", confidence: 0.92, probabilities: {} },
+    });
+    assert.equal(designTurn?.domain, "design");
+    assert.equal(designTurn?.reasoningDepth, 2.4);
   });
 
   it("extracts recent assistant context for short follow-up prompts like 'implement both steps'", () => {

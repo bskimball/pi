@@ -34,7 +34,7 @@ export interface HydraTurnSignalInput {
   domainConfidence: number;
 }
 
-export type HydraDomain = "coding" | "reasoning" | "fast_edit" | "research" | "writing" | "conversation";
+export type HydraDomain = "coding" | "design" | "reasoning" | "fast_edit" | "research" | "writing" | "conversation";
 
 export type SubagentHydraRole = {
   tier?: ActiveHydraTier;
@@ -55,11 +55,17 @@ export function subagentHydraProfile(
       signal: { reasoningDepth: 3.8, depthConfidence: 1, domain: "reasoning", domainConfidence: 1 },
     };
   }
-  if (name === "artisan" || name === "machinist") {
+  if (name === "artisan") {
+    return {
+      tier: parentTier === "max" ? "max" : "high",
+      signal: { reasoningDepth: 3.2, depthConfidence: 1, domain: "design", domainConfidence: 1 },
+    };
+  }
+  if (name === "machinist") {
     return {
       tier: parentTier,
       signal: {
-        reasoningDepth: name === "artisan" ? 3.2 : 2.6,
+        reasoningDepth: 2.6,
         depthConfidence: 1,
         domain: "coding",
         domainConfidence: 1,
@@ -118,6 +124,9 @@ const DEFAULT_SUBSCRIPTION_CAPACITY = 0.25;
 const CAPACITY_BONUS = 0.04;
 /** Under-used families are only promoted when within this fraction of the task's best score. */
 const BALANCE_QUALITY_GATE = 0.85;
+/** Minimum design task utility (Design Arena + coding + intelligence + affinity) required for UI/design work; excludes Sol. */
+const DESIGN_MIN_UTILITY = 0.80;
+const DESIGN_QUALITY_GATE = 0.80;
 /** Hard tasks retain capability ordering inside a tighter quality band. */
 const FRONTIER_QUALITY_GATE = 0.95;
 const QUOTA_HEADROOM_WEIGHT = 0.08;
@@ -125,10 +134,12 @@ const SPEED_TILT_WEIGHT = 0.08;
 const COST_TILT_WEIGHT = 0.12;
 
 /**
- * Hands-on preferences that AA benchmarks do not capture, added to task utility
- * per domain and model family (e.g. Gemini for creative work).
+ * Hands-on preferences that AA and Design Arena benchmarks do not fully capture,
+ * added to task utility per domain and model family (e.g. Antigravity/Gemini and
+ * Claude on UI/design craft, Gemini for creative writing).
  */
 export const DOMAIN_AFFINITY: Partial<Record<HydraDomain, Readonly<Record<string, number>>>> = {
+  design: { google: 0.25, anthropic: 0.07 },
   writing: { google: 0.18 },
 };
 
@@ -208,6 +219,9 @@ function effectiveSignalDepth(
   if (signal.domain === "coding") {
     return Math.max(signal.depthConfidence < 0.65 ? 2.2 : 2.0, raw);
   }
+  if (signal.domain === "design") {
+    return Math.max(signal.depthConfidence < 0.65 ? 2.6 : 2.4, raw);
+  }
   if (signal.domain === "reasoning") {
     return Math.max(2.85, raw);
   }
@@ -263,6 +277,7 @@ type Metric =
   | "intel"
   | "speed"
   | "factual"
+  | "designArena"
   | "work"
   | "presentation"
   | "creativeBuild"
@@ -283,6 +298,10 @@ const DOMAIN_PROFILES: Record<Exclude<HydraDomain, "fast_edit">, { workhorse: We
   coding: {
     workhorse: { code: 0.45, intel: 0.15, speed: 0.25, factual: 0.10, transparency: 0.05 },
     frontier: { code: 0.55, intel: 0.33, factual: 0.07, speed: 0.05 },
+  },
+  design: {
+    workhorse: { designArena: 0.55, code: 0.25, intel: 0.20 },
+    frontier: { designArena: 0.55, code: 0.25, intel: 0.20 },
   },
   reasoning: {
     workhorse: { intel: 0.40, code: 0.20, factual: 0.25, transparency: 0.15 },
@@ -340,6 +359,8 @@ function metricValue(aa: AaModelMetrics, metric: Metric, ranges: AaMetricRanges)
       return clamp01(Math.min(aa.outputSpeedTps ?? 80, 260) / 260);
     case "factual":
       return typeof aa.hallucinationRate === "number" ? clamp01(1 - aa.hallucinationRate) : undefined;
+    case "designArena":
+      return typeof aa.designArenaElo === "number" ? clamp01((aa.designArenaElo - 1260) / 135) : undefined; // 1260..1395 -> 0..1
     case "work":
     case "presentation":
     case "creativeBuild": {
@@ -390,9 +411,9 @@ export function computeAaUtility(
   let utility = workhorse + (scoreProfile(aa, profile.frontier, ranges) - workhorse) * t;
 
   // Capability floor: lightweight models (codingScore < 40, e.g. Haiku, Flash, Luna) must not
-  // outrank capable models on coding, reasoning, or non-trivial research. Writing and
+  // outrank capable models on coding, design, reasoning, or non-trivial research. Writing and
   // conversation lean on personality and creative measurements instead.
-  if ((domain === "coding" || domain === "reasoning" || domain === "research") && (aa.codingScore ?? 0) < 40) {
+  if ((domain === "coding" || domain === "design" || domain === "reasoning" || domain === "research") && (aa.codingScore ?? 0) < 40) {
     utility *= 0.55;
   }
   return utility;
@@ -455,16 +476,20 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
   });
   const bestTaskUtility = Math.max(0, ...scored.map((s) => s.taskUtility));
   const frontier = tier === "max" || effectiveSignalDepth(tier, signal) >= 2.85;
-  const qualityGate = frontier ? FRONTIER_QUALITY_GATE : BALANCE_QUALITY_GATE;
+  const preserveQualityOrder = frontier || domain === "design";
+  const qualityGate = domain === "design" ? DESIGN_QUALITY_GATE : frontier ? FRONTIER_QUALITY_GATE : BALANCE_QUALITY_GATE;
+  const isQualified = (taskUtility: number) =>
+    taskUtility >= qualityGate * bestTaskUtility &&
+    (domain !== "design" || taskUtility >= DESIGN_MIN_UTILITY);
   const poolFamilies = new Set(scored
-    .filter(s => s.taskUtility >= qualityGate * bestTaskUtility)
+    .filter(s => isQualified(s.taskUtility))
     .map(s => s.family));
 
   const candidates: RankedModelCandidate[] = [];
   for (const { model, aa, family, quotaHealth, taskUtility } of scored) {
     const key = `${model.provider}/${model.id}`;
     const { multiplier: quotaMultiplier, reason: quotaReason } = quotaHealth;
-    const meetsQuality = taskUtility >= qualityGate * bestTaskUtility;
+    const meetsQuality = isQualified(taskUtility);
     const balance = meetsQuality ? usageBalanceMultiplier(family, usage, poolFamilies) : 1;
     // Fastest + most quota (and cheapest, as a quota-burn proxy) wins among
     // models that are good enough for the task; outside the quality band the
@@ -476,12 +501,12 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
       const speedNorm = clamp01(Math.min(aa.outputSpeedTps ?? 80, 260) / 260);
       const costEfficiency = clamp01(1 - Math.min(aa.blendedPricePer1m ?? 2.5, 3.0) / 3.0);
       tilt = QUOTA_HEADROOM_WEIGHT * headroom +
-        (frontier ? 0.04 : SPEED_TILT_WEIGHT) * speedNorm +
-        (frontier ? 0.03 : COST_TILT_WEIGHT) * costEfficiency;
+        (preserveQualityOrder ? 0.04 : SPEED_TILT_WEIGHT) * speedNorm +
+        (preserveQualityOrder ? 0.03 : COST_TILT_WEIGHT) * costEfficiency;
     }
     // Ordinary work treats sufficient capability as equivalent, then optimizes
-    // speed/cost. Hard work still rewards every increment of capability.
-    const qualityUtility = meetsQuality && !frontier ? bestTaskUtility : taskUtility;
+    // speed/cost. Hard work and UI/design work still reward every increment of capability.
+    const qualityUtility = meetsQuality && !preserveQualityOrder ? bestTaskUtility : taskUtility;
     const rawUtility =
       qualityUtility * balance +
       CAPACITY_BONUS * subscriptionCapacity(family) +

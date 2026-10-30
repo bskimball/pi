@@ -9,7 +9,7 @@ import { registerPresentationSwitch } from "../prompt-commands/presentation-swit
 import { registerModes } from "../prompt-commands/modes.ts";
 import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-commands/hydra/usage.ts";
 import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
-import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
+import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
 import { parseCredentialsResponse, quotaMultiplierForModel } from "../prompt-commands/hydra/quota-sync.ts";
 import { rankModelsForHydra } from "../prompt-commands/hydra/scorer.ts";
 
@@ -759,6 +759,22 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(argonPage?.gdpvalElo, 1631);
     assert.deepEqual(argonPage?.personality, { expressiveness: 82.7, slop: 70.3 });
 
+    const daMap = parseDesignArenaLeaderboard(
+      {
+        data: [
+          { modelId: "gpt-6-astra", elo: 1390 },
+          { modelId: "claude-opus-5-5", elo: 1385 },
+          { modelId: "gpt-6.1-sol", elo: 1359 },
+          { modelId: "cortado", elo: 1298 },
+        ],
+      },
+      { models: { cortado: { displayName: "GLM-5.3" } } },
+    );
+    assert.equal(daMap.get("gpt-6-astra"), 1390);
+    assert.equal(daMap.get("claude-opus-5-5"), 1385);
+    assert.equal(daMap.get("gpt-6-1-sol"), 1359);
+    assert.equal(daMap.get("glm-5-3"), 1298, "resolves Design Arena codenames via registry displayName");
+
     // 2. Quota & circuit filtering (including mixed disabled + cooldown credentials)
     const creds = parseCredentialsResponse({
       files: [
@@ -848,6 +864,55 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(rankModelsForHydra({ ...ordinaryOptions, tier: "max" })[0]?.key, "claude-bridge/claude-opus-5-5", "max mode preserves frontier quality rather than optimizing cost");
     const openaiOnly = catalogModels.filter(model => model.provider === "openai");
     assert.equal(rankModelsForHydra({ ...balanceBase, models: openaiOnly })[0]?.key, "openai/gpt-6-astra", "deep work selects Astra over Sol in the OpenAI pool");
+
+    // UI/design domain (and Artisan) uses Design Arena rankings + design affinity so work routes to
+    // Claude, Astra, or Antigravity and excludes Sol from the quality band.
+    const designModels = [
+      ...catalogModels,
+      { provider: "antigravity", id: "gemini-4-argon", name: "Gemini 4 Argon", reasoning: true },
+    ];
+    const designSignal = { reasoningDepth: 2.4, depthConfidence: 0.9, domain: "design" as const, domainConfidence: 0.9 };
+    const designBase = { ...balanceBase, models: designModels, signal: designSignal };
+    const designRanked = rankModelsForHydra(designBase);
+    const designEligibleKeys = designRanked.filter(r => r.meetsQuality).map(r => r.key);
+    assert.deepEqual(
+      designEligibleKeys,
+      ["claude-bridge/claude-opus-5-5", "openai/gpt-6-astra", "antigravity/gemini-4-argon"],
+      "design domain admits Claude, Astra, and Antigravity while excluding Sol from the quality band",
+    );
+    assert.equal(
+      designRanked.find(r => r.key === "openai/gpt-6.1-sol")?.meetsQuality,
+      false,
+      "Sol does not meet the design quality bar",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...designBase, currentModelKey: "openai/gpt-6.1-sol", cacheWarm: true })[0]?.key,
+      "claude-bridge/claude-opus-5-5",
+      "design turn switches away from a warm Sol session",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...designBase, usage: { anthropic: 10 } })[0]?.key,
+      "openai/gpt-6-astra",
+      "design work cycles from Claude to Astra (never Sol) when Claude carries recent calls",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...designBase, usage: { anthropic: 10, openai: 10 } })[0]?.key,
+      "antigravity/gemini-4-argon",
+      "design work cycles to Antigravity when Claude and OpenAI carry recent calls",
+    );
+    assert.deepEqual(
+      rankModelsForHydra({ ...designBase, models: openaiOnly, currentModelKey: "openai/gpt-6.1-sol", cacheWarm: true })
+        .filter(r => r.meetsQuality)
+        .map(r => r.key),
+      ["openai/gpt-6-astra"],
+      "in OpenAI-only scope, only Astra meets the design quality bar",
+    );
+    assert.equal(
+      rankModelsForHydra({ ...designBase, models: openaiOnly, openCircuits: new Set(["openai/gpt-6-astra"]) })
+        .find(r => r.key === "openai/gpt-6.1-sol")?.meetsQuality,
+      false,
+      "even when Astra is unavailable, Sol remains below the design quality floor",
+    );
     assert.equal(
       rankModelsForHydra({ ...ordinaryOptions, usage: { anthropic: 3 } })[0]?.model.provider,
       "openai",
@@ -1060,6 +1125,25 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     await codingPayload.promise;
     assert.equal(ctx.model.id, "gpt-6.1-sol", "ordinary coding switches a warm Astra session to efficient Sol, not lightweight Haiku");
     assert.equal(currentThinking, "medium", "coding domain uses at least medium thinking");
+
+    // Even immediately after an ordinary coding turn that selected Sol, Artisan subagent routing
+    // uses the design domain (never inheriting coding/Sol) and selects Claude/Astra/Antigravity.
+    const artisanAfterCoding: any = { agent: "artisan", ctx };
+    pi.events.emit("pi:hydra:subagent-route", artisanAfterCoding);
+    assert.equal(artisanAfterCoding.models?.[0], "claude-bridge/claude-opus-5-5", "Artisan routes via design profile rather than inheriting coding Sol");
+    assert.equal(artisanAfterCoding.models?.includes("openai/gpt-6.1-sol"), false, "Artisan fallback chain excludes Sol");
+    assert.equal(artisanAfterCoding.thinking, "high");
+
+    // Direct UI/design turn switches a warm Sol session onto a design-capable model.
+    const designPayload: any = { reasoningDepth: 2.2, depthConfidence: 0.85, domain: "design", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", designPayload);
+    await designPayload.promise;
+    assert.ok(["claude-opus-5-5", "gpt-6-astra"].includes(ctx.model.id), "design turn switches off warm Sol onto Opus or Astra");
+
+    // Machinist (non-visual coding specialist) does not inherit a design turn signal from the lead.
+    const machinistAfterDesign: any = { agent: "machinist", ctx };
+    pi.events.emit("pi:hydra:subagent-route", machinistAfterDesign);
+    assert.equal(machinistAfterDesign.models?.includes("openai/gpt-6.1-sol"), true, "Machinist stays on non-visual coding domain after a lead design turn");
 
     // Complex coding (depth >= 2.85) in hydra:standard runs on a frontier model (high); a warm cache
     // may hold an already-selected frontier model when the leader's margin is below the switch threshold.
