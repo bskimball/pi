@@ -11,6 +11,9 @@ import { initialPreferences } from "../prompt-commands/mode-state.ts";
 import memory from "../continual-memory.ts";
 import profile from "../user-profile.ts";
 import jev from "../jev/index.ts";
+import { prepareRequest, parseResponse, parseUsage } from "../muse/protocol.ts";
+import { Type, type Context, type Model } from "@earendil-works/pi-ai";
+import { streamMuse } from "../muse/index.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -105,6 +108,12 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
         current = options.forceSystemPrompt ?? buildSystemPrompt(options);
       }
       assert.match(current, new RegExp(marker));
+      const musePrompt = prepareRequest({ systemPrompt: current, messages: [{ role: "user", content: "Actual user request", timestamp: 0 }] }, dir).prompt;
+      assert.match(musePrompt, new RegExp(marker), `${mode} Muse projection lost mode block`);
+      if (mode !== "pi") {
+        assert.match(musePrompt, /Profile delivery token/);
+        assert.match(musePrompt, /Continual memory/);
+      }
       if (mode === "fusion") assert.match(current, /^You are an expert coding assistant operating inside pi/, "Fusion retains the stock base without a custom prompt");
       const captures = new PromptCaptures();
       captures.record(current, { custom: options.customPrompt, append: options.appendSystemPrompt, contextFiles: options.contextFiles, skills: options.skills });
@@ -127,4 +136,60 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
     if (oldSubagent === undefined) delete process.env.PI_SUBAGENT; else process.env.PI_SUBAGENT = oldSubagent;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Muse preserves the request before advisories, system patches, tool results and image positions", () => {
+  const readTool = { name: "read", description: "Read a file", parameters: Type.Object({ path: Type.String() }) };
+  const context: Context = { messages: [
+    { role: "system", content: "Base instructions", sections: { mode: "Old mode", profile: "Keep profile" }, toolsAdded: [readTool], timestamp: 0 },
+    { role: "user", content: "Analyze our prompts and skills; compare the show-me article", timestamp: 1 },
+    { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "agent/SYSTEM.md" } }], api: "openai-responses", provider: "openai", model: "previous", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
+    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Actual file contents" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], isError: false, timestamp: 3 },
+    { role: "system", content: "Later instructions", sections: { mode: "Regular mode" }, timestamp: 4 },
+    { role: "user", content: "Jev routing advisory: underspecified scope. Hint, not a verdict.", timestamp: 5 },
+  ] };
+  const request = prepareRequest(context, "C:/workspace");
+  assert.match(request.prompt, /Base instructions/);
+  assert.match(request.prompt, /Later instructions/);
+  assert.match(request.prompt, /Regular mode/);
+  assert.match(request.prompt, /Keep profile/);
+  assert.doesNotMatch(request.prompt, /Old mode/);
+  assert.match(request.prompt, /Analyze our prompts and skills/);
+  assert.match(request.prompt, /Jev routing advisory/);
+  assert.ok(request.prompt.indexOf("Analyze our prompts") < request.prompt.indexOf("Jev routing advisory"));
+  assert.match(request.prompt, /read-1/);
+  assert.match(request.prompt, /Actual file contents/);
+  assert.match(request.prompt, /Image attachment 1/);
+  assert.doesNotMatch(request.prompt, /aW1hZ2U=/);
+  assert.deepEqual(request.images, [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+  assert.deepEqual(request.tools, [readTool]);
+  assert.deepEqual(prepareRequest(context, "C:/workspace", "none").tools, []);
+  const response = parseResponse(JSON.stringify({ text: "Reading…", tool_calls: [{ name: "read", arguments_json: '{"path":"agent/SYSTEM.md"}' }] }), request.tools);
+  assert.equal(response.text, "Reading…");
+  assert.equal(response.calls[0].name, "read");
+  assert.deepEqual(response.calls[0].arguments, { path: "agent/SYSTEM.md" });
+  assert.ok(response.calls[0].id);
+  assert.throws(() => parseResponse('{"text":"","tool_calls":[]}', []), /neither/);
+  assert.throws(() => parseResponse('{"text":"","tool_calls":[{"name":"bash","arguments_json":"{}"}]}', request.tools), /unavailable/);
+  // Token counts captured from the real Muse Wonder round-trip (not a synthetic usage format).
+  assert.deepEqual(parseUsage({ models: [{ model: "muse-wonder-1.0", input_tokens: 17978, cached_tokens: 0, output_tokens: 175, reasoning_tokens: 120, calls: 1 }] }), { input: 17978, output: 175, cacheRead: 0, cacheWrite: 0 });
+  assert.throws(() => parseUsage({}), /no per-model/);
+});
+
+test("Muse honors outgoing-payload interception before launching the CLI", async () => {
+  const model: Model<"muse-code-cli"> = { id: "muse-wonder-1.0", name: "Muse Wonder", provider: "muse-code", api: "muse-code-cli", baseUrl: "http://localhost", reasoning: true, input: ["text"], contextWindow: 1_000_000, maxTokens: 128_000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const context: Context = { messages: [{ role: "user", content: "Original task before an advisory", timestamp: 0 }] };
+  let called = false;
+  const rejected = await streamMuse(model, context, { onPayload: async (payload, currentModel) => {
+    called = true;
+    assert.equal(currentModel, model);
+    assert.match(JSON.stringify(payload), /Original task before an advisory/);
+    throw new Error("Request blocked by interceptor");
+  } }).result();
+  assert.equal(called, true);
+  assert.equal(rejected.stopReason, "error");
+  assert.equal(rejected.errorMessage, "Request blocked by interceptor");
+  const replaced = await streamMuse(model, context, { onPayload: () => ({ prompt: "Replaced task", tools: [], images: [{ type: "image", data: "", mimeType: "unsupported/test" }] }) }).result();
+  assert.equal(replaced.stopReason, "error");
+  assert.match(replaced.errorMessage!, /does not support this image MIME type: unsupported\/test/);
 });

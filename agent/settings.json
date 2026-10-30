@@ -8,8 +8,7 @@
     "npm:pi-intercom",
     "npm:pi-claude-bridge",
     "npm:pi-antigravity",
-    "npm:@amaster.ai/pi-computer-use",
-    "npm:pi-muse-bridge"
+    "npm:@amaster.ai/pi-computer-use"
   ],
   "skills": [
     "-skills/chrome-devtools-cli",
