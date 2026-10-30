@@ -10,17 +10,7 @@
     "npm:pi-antigravity",
     "npm:@amaster.ai/pi-computer-use"
   ],
-  "skills": [
-    "-skills/chrome-devtools-cli",
-    "-skills/troubleshooting",
-    "-skills/a11y-debugging",
-    "-skills/debug-optimize-lcp",
-    "-skills/memory-leak-debugging",
-    "-skills/grill-me",
-    "-skills/acquire-codebase-knowledge",
-    "-skills/codex",
-    "-skills/apex"
-  ],
+  "skills": [],
   "pi-computer-use": {
     "mode": "bundled",
     "confirmAppLaunch": true,

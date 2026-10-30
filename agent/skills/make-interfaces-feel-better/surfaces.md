@@ -254,3 +254,25 @@ Interactive elements should prefer a 44×44px hit area for touch or mobile conte
 ### Collision Rule
 
 If the extended hit area overlaps another interactive element, shrink the pseudo-element — but make it as large as possible without colliding. Two interactive elements should never have overlapping hit areas.
+
+## Touch Device Hover Gating
+
+Touch devices synthesize a `:hover` state on tap, causing sticky false-positive hover animations and styles on mobile. Gate hover transforms and elevation shifts behind `@media (hover: hover) and (pointer: fine)`:
+
+```css
+@media (hover: hover) and (pointer: fine) {
+  .card:hover {
+    box-shadow: var(--shadow-border-hover);
+    transform: translateY(-1px);
+  }
+}
+```
+
+## The Sonner Principles (Component Craft)
+
+When building reusable UI primitives (toasts, drawers, popovers, command menus):
+
+1. **Zero-friction ergonomics:** prefer a single mount point (e.g., `<Toaster />` + `toast()`) over boilerplate provider trees when possible.
+2. **Ship great defaults:** most consumers never customize timing, easing, or spacing — make the out-of-box defaults cohesive and polished.
+3. **Handle edge cases invisibly:** pause timers when the browser tab is hidden (`document.hidden`), fill pointer gaps between stacked items (such as stacked toasts) with `:after` pseudo-elements so hover state never drops between items, and capture pointer events during drag.
+4. **Match motion to mood:** a professional operational dashboard should feel crisp and fast (`125–180ms` with `--ease-out`); an expressive showcase or toast stack can use slightly softer easing where it fits the product personality.

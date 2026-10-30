@@ -1,194 +1,226 @@
 # Animations
 
-Interruptible animations, enter/exit transitions, contextual icon animations, and motion restraint.
+The Animation Decision Framework, custom easing curves, durations, spring physics, component motion patterns, `clip-path`, gestures, contextual icons, and reduced-motion accessibility.
 
-## Interruptible Animations
+## The Animation Decision Framework
 
-Users change intent mid-interaction. If animations aren't interruptible, the interface feels broken.
+Before writing any animation code, answer these four questions in order:
 
-### CSS Transitions vs. Keyframes
+### 1. Should this animate at all?
 
-| | CSS Transitions | CSS Keyframe Animations |
-| --- | --- | --- |
-| **Behavior** | Interpolate toward latest state | Run on a fixed timeline |
-| **Interruptible** | Yes — retargets mid-animation | No — restarts from beginning |
-| **Use for** | Interactive state changes (hover, toggle, open/close) | Staged sequences that run once (enter animations, loading) |
-| **Duration** | Fixed; retargets the value mid-flight, not the timeline | Fixed timeline, restarts from the beginning |
+Ask how often users will see the animation:
+
+| Frequency | Decision |
+| --- | --- |
+| **100+ times/day** (keyboard shortcuts, command palette toggle, quick switcher) | **No animation. Ever.** |
+| **Tens of times/day** (hover effects, list/table navigation, tab switches) | Remove or reduce to `≤150ms` opacity/color transition |
+| **Occasional** (modals, drawers, toasts, dropdowns, popovers) | Standard UI animation |
+| **Rare / first-time** (onboarding, empty-state hero, celebrations) | Can add staged delight or stagger |
+
+**Never animate keyboard-initiated actions.** Actions repeated hundreds of times daily feel slow, delayed, and disconnected when animated. Raycast has no open/close animation — that is the optimal experience for high-frequency tools.
+
+### 2. What is the purpose?
+
+Every animation must answer "why does this animate?":
+- **Spatial consistency** — a toast or drawer enters and exits along the same axis, making swipe-to-dismiss intuitive.
+- **State indication** — a morphing button or icon confirms a state transition.
+- **Feedback** — a button scales down on press (`scale(0.96)`–`scale(0.97)`), confirming the UI heard the user.
+- **Preventing jarring changes** — elements appearing or disappearing smoothly instead of popping.
+- **Explanation** — onboarding or marketing motion that demonstrates how a feature works.
+
+If the purpose is just "it looks cool" and the user will see it often, do not animate. Motion is never the only feedback channel — every animated state change also needs a static cue (color, icon, or label).
+
+### 3. What easing should it use?
+
+```text
+Is the element entering or exiting?
+  Yes -> ease-out (starts fast, feels immediately responsive)
+  No  ->
+    Is it moving or morphing on screen?
+      Yes -> ease-in-out (natural acceleration and deceleration)
+    Is it a hover or color change?
+      Yes -> ease
+    Is it constant motion (marquee, hold-to-delete progress, spinner)?
+      Yes -> linear
+    Default -> ease-out
+```
+
+**Critical: use custom easing curves.** Built-in CSS easings (`ease-out`, `ease-in-out`) are too weak and lack intentional punch:
 
 ```css
-/* Good — interruptible transition for a toggle */
+:root {
+  /* Strong ease-out for entering/exiting UI interactions */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Strong ease-in-out for on-screen movement/morphing */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* iOS-like drawer curve (Ionic / Vaul) */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+```
+
+**Never use `ease-in` for UI animations.** `ease-in` starts slow, delaying movement at the exact millisecond the user is watching most closely. A `300ms ease-in` dropdown feels sluggish compared to `300ms ease-out`.
+
+### 4. How fast should it be?
+
+| Element | Duration |
+| --- | --- |
+| Button press feedback (`:active`) | `100–160ms` |
+| Tooltips, small popovers | `125–200ms` |
+| Dropdowns, selects, menus | `150–250ms` |
+| Modals, drawers, toasts | `200–500ms` |
+| Hold-to-delete / deliberate press | `~2000ms linear` (with `200ms ease-out` release) |
+
+**Rule: UI animations should stay under 300ms.** Speed shapes perceived performance: a `180ms` select feels snappier than a `400ms` one, a faster spinner makes identical load times feel shorter, and skipping delay/animation on subsequent tooltips makes an entire toolbar feel instant.
+
+---
+
+## Interruptible Animations: CSS Transitions vs. Keyframes
+
+Users change intent mid-interaction. If animations aren't interruptible, the interface snaps or restarts from zero.
+
+| | CSS Transitions / Springs | CSS Keyframe Animations |
+| --- | --- | --- |
+| **Behavior** | Interpolate toward latest target | Run on a fixed timeline |
+| **Interruptible** | Yes — retargets smoothly mid-flight | No — restarts from zero or snaps |
+| **Use for** | Dynamic UI state changes (toggle, open/close, toasts, hover) | Staged sequences that run once (initial hero stagger, continuous loops) |
+
+```css
+/* Good — interruptible transition for a drawer or toast */
 .drawer {
   transform: translateX(-100%);
-  transition: transform 200ms ease-out;
+  transition: transform 200ms var(--ease-out);
 }
 .drawer.open {
   transform: translateX(0);
 }
-
-/* Clicking again mid-animation smoothly reverses — no jank */
 ```
+
+---
+
+## Spring Animations
+
+Springs simulate physical velocity and settle naturally without fixed durations, maintaining momentum when interrupted mid-gesture.
+
+### When to Use Springs
+- Drag interactions with momentum (drawers, swipeable cards)
+- Elements that should feel alive (Dynamic Island-style morphs, contextual icon swaps)
+- Gestures that frequently reverse mid-motion
+- Decorative pointer-tracking interactions (never functional charts where precision matters)
+
+### Spring Configuration
+
+```js
+// Apple-style duration + bounce (recommended — easiest to reason about)
+{ type: "spring", duration: 0.5, bounce: 0.2 }
+
+// Non-bouncy UI spring (contextual icons, crisp layout transitions)
+{ type: "spring", duration: 0.3, bounce: 0 }
+
+// Traditional physics (fine-grained control, e.g., useSpring on mouse tracking)
+{ type: "spring", mass: 1, stiffness: 100, damping: 10 }
+```
+
+Keep bounce `0` in most standard UI contexts, or subtle (`0.1–0.3`) for drag-to-dismiss and playful surfaces.
+
+---
+
+## Component Motion Principles
+
+### Never Animate from `scale(0)`
+
+Nothing in the real world disappears to zero and materializes from nothing. Elements starting at `scale(0)` look unnatural. Start from `scale(0.95)` (or `≥0.9`) combined with `opacity: 0`:
 
 ```css
-/* Bad — keyframe animation for interactive element */
-.drawer.open {
-  animation: slideIn 200ms ease-out forwards;
-}
+/* Bad */
+.entering { transform: scale(0); }
 
-/* Closing mid-animation snaps or restarts — feels broken */
-```
-
-**Rule:** Always prefer CSS transitions for interactive elements. Reserve keyframes for one-shot sequences.
-
-## Enter Animations: Split and Stagger
-
-Use this pattern for infrequent staged entrances where sequence helps communicate hierarchy, such as the first load of a page hero, success state, or empty state. Break a large container into semantic chunks and animate each individually. Do not stagger routine interactions such as row hovers, keystrokes, or repeated tab changes.
-
-### Step by Step
-
-1. **Split** into logical groups (title, description, buttons)
-2. **Stagger** with ~100ms delay between groups
-3. **For titles**, consider splitting into individual words with ~80ms stagger
-4. **Combine** `opacity`, `blur`, and `translateY` for the enter effect
-
-### Code Example
-
-```tsx
-// Motion (Framer Motion) — staggered enter
-function PageHeader() {
-  return (
-    <motion.div
-      initial="hidden"
-      animate="visible"
-      variants={{
-        visible: { transition: { staggerChildren: 0.1 } },
-      }}
-    >
-      <motion.h1
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
-        Welcome
-      </motion.h1>
-
-      <motion.p
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
-        A description of the page.
-      </motion.p>
-
-      <motion.div
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
-        <Button>Get started</Button>
-      </motion.div>
-    </motion.div>
-  );
-}
-```
-
-### CSS-Only Stagger
-
-```css
-.stagger-item {
+/* Good */
+.entering {
+  transform: scale(0.95);
   opacity: 0;
-  transform: translateY(12px);
-  filter: blur(4px);
-  animation: fadeInUp 400ms ease-out forwards;
+}
+```
+
+### Make Popovers Origin-Aware
+
+Popovers, dropdowns, and menus should scale from their trigger, not from `center`. **Exception: modals**, which are viewport-centered rather than trigger-anchored and keep `transform-origin: center`.
+
+```css
+/* Base UI / Radix origin variable */
+.popover {
+  transform-origin: var(--transform-origin);
+  transition: transform 150ms var(--ease-out), opacity 150ms var(--ease-out);
+}
+```
+
+### Tooltips: Skip Delay and Animation on Subsequent Hovers
+
+Delay the first tooltip to prevent accidental activation on pass-through, but once any tooltip in a group is open, open adjacent tooltips immediately with `0ms` duration:
+
+```css
+.tooltip {
+  transition: transform 125ms var(--ease-out), opacity 125ms var(--ease-out);
+  transform-origin: var(--transform-origin);
 }
 
-.stagger-item:nth-child(1) { animation-delay: 0ms; }
-.stagger-item:nth-child(2) { animation-delay: 100ms; }
-.stagger-item:nth-child(3) { animation-delay: 200ms; }
+.tooltip[data-starting-style],
+.tooltip[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
 
-@keyframes fadeInUp {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-    filter: blur(0);
+/* Skip animation on subsequent adjacent tooltips */
+.tooltip[data-instant] {
+  transition-duration: 0ms;
+}
+```
+
+### Animate Entry with `@starting-style`
+
+When browser support allows, use `@starting-style` to animate initial DOM insertion in pure CSS without a React `useEffect(() => setMounted(true), [])`:
+
+```css
+.toast {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(100%);
   }
 }
 ```
 
-## Exit Animations
+### Percentage `translateY` for Height-Independent Motion
 
-Exit animations should be softer and less attention-grabbing than enter animations. The user's focus is moving to the next thing — don't fight for attention.
+Percentage values in `translate()` are relative to the element's own box. Use `translateY(100%)` or `translateY(-100%)` for drawers and toasts instead of hardcoded pixel heights.
 
-### Subtle Exit (Recommended)
+### Use Blur to Mask Imperfect Crossfades
 
-```tsx
-// Small fixed translateY — indicates direction without drama
-<motion.div
-  exit={{
-    opacity: 0,
-    y: -12,
-    filter: "blur(4px)",
-    transition: { duration: 0.15, ease: "easeOut" },
-  }}
->
-  {content}
-</motion.div>
-```
-
-### Full Exit (When Context Matters)
-
-```tsx
-// Slide fully out — use when spatial context is important
-// (e.g., a card returning to a list, a drawer closing)
-<motion.div
-  exit={{
-    opacity: 0,
-    x: "-100%",
-    transition: { duration: 0.2, ease: "easeOut" },
-  }}
->
-  {content}
-</motion.div>
-```
-
-### Good vs. Bad
+When a crossfade between two states still looks like two distinct objects overlapping, add `filter: blur(2px)` (up to `4px`; keep well under `20px` for Safari performance) during the transition so the eye perceives one smooth morph:
 
 ```css
-/* Good — subtle exit */
-.item-exit {
-  opacity: 0;
-  transform: translateY(-12px);
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+.button-content {
+  transition: filter 200ms ease, opacity 200ms ease;
 }
-
-/* Bad — dramatic exit that steals focus */
-.item-exit {
-  opacity: 0;
-  transform: translateY(-100%) scale(0.5);
-  transition: all 400ms ease-out;
-}
-
-/* Sometimes correct — remove immediately when motion adds no context */
-.item-exit {
-  display: none;
+.button-content.transitioning {
+  filter: blur(2px);
+  opacity: 0.7;
 }
 ```
 
-**Key points:**
-- Use a small fixed `translateY` (e.g., `-12px`) instead of the full container height
-- Keep some directional movement to indicate where the element went
-- Exit duration should be shorter than enter duration (150ms vs 300ms)
-- Use a subtle exit when it preserves spatial context. Remove immediately when motion adds no information, the interaction repeats frequently, or reduced motion is requested.
+---
 
 ## Contextual Icon Animations
 
-When icons appear or disappear contextually (on hover, on state change), animate them with `opacity`, `scale`, and `blur` rather than just toggling visibility.
+When icons swap state (play → pause, copy → check, bookmark toggle), animate `opacity`, `scale`, and `blur` rather than toggling visibility abruptly.
 
-### Motion Example
-
-This example uses the `motion` package. If the project instead has `framer-motion`, import the same APIs from `"framer-motion"`; never mix an installed package with the other package's import path.
+- **Exact values:** `scale` from `0.25` to `1`, `opacity` from `0` to `1`, `filter` from `"blur(4px)"` to `"blur(0px)"`.
+- **With `motion` or `framer-motion`** (match the package already in `package.json`): use `AnimatePresence initial={false} mode="popLayout"` and `transition={{ type: "spring", duration: 0.3, bounce: 0 }}` (bounce **must** be `0`).
+- **Without a motion library:** keep both icons in the DOM (one `absolute inset-0`) and cross-fade with `transition-[opacity,filter,scale] duration-300 ease-[cubic-bezier(0.2,0,0,1)]`. Do not install a motion library just for icon swaps.
 
 ```tsx
 import { AnimatePresence, motion } from "motion/react";
@@ -196,7 +228,7 @@ import { AnimatePresence, motion } from "motion/react";
 function IconButton({ isActive, icon: Icon }) {
   return (
     <button>
-      <AnimatePresence mode="popLayout">
+      <AnimatePresence initial={false} mode="popLayout">
         <motion.span
           key={isActive ? "active" : "inactive"}
           initial={{ opacity: 0, scale: 0.25, filter: "blur(4px)" }}
@@ -212,113 +244,13 @@ function IconButton({ isActive, icon: Icon }) {
 }
 ```
 
-### CSS Transition Approach (No Motion)
+---
 
-If the project doesn't use Motion (Framer Motion), keep both icons in the DOM and cross-fade them with CSS transitions. Because neither icon unmounts, both enter and exit animate smoothly.
+## Scale on Press & Skip Animation on Page Load
 
-The trick: one icon is absolutely positioned on top of the other. Toggling state cross-fades them — the entering icon scales up from `0.25` while the exiting icon scales down to `0.25`, both with opacity and blur.
+### Scale on Press
 
-```tsx
-function IconButton({ isActive, ActiveIcon, InactiveIcon }) {
-  return (
-    <button>
-      <div className="relative">
-        <div
-          className={cn(
-            "absolute inset-0 flex items-center justify-center",
-            "transition-[opacity,filter,scale] duration-300",
-            "ease-[cubic-bezier(0.2,0,0,1)]",
-            isActive
-              ? "scale-100 opacity-100 blur-0"
-              : "scale-[0.25] opacity-0 blur-[4px]"
-          )}
-        >
-          <ActiveIcon />
-        </div>
-        <div
-          className={cn(
-            "transition-[opacity,filter,scale] duration-300",
-            "ease-[cubic-bezier(0.2,0,0,1)]",
-            isActive
-              ? "scale-[0.25] opacity-0 blur-[4px]"
-              : "scale-100 opacity-100 blur-0"
-          )}
-        >
-          <InactiveIcon />
-        </div>
-      </div>
-    </button>
-  );
-}
-```
-
-The non-absolute icon (InactiveIcon) defines the layout size. The absolute icon (ActiveIcon) overlays it without affecting flow.
-
-### Choosing Between Motion and CSS
-
-| | Motion (Framer Motion) | CSS transitions (both icons in DOM) |
-| --- | --- | --- |
-| **Enter animation** | Yes | Yes |
-| **Exit animation** | Yes (via `AnimatePresence`) | Yes (cross-fade — icon never unmounts) |
-| **Spring physics** | Yes | No — use `cubic-bezier(0.2, 0, 0, 1)` as approximation |
-| **When to use** | Project already uses `motion` or `framer-motion` | No motion dependency, or keeping bundle small |
-
-**Rule:** Check the project's `package.json`. Import from `"motion/react"` when `motion` is installed, or from `"framer-motion"` when `framer-motion` is installed. If both exist, follow the imports already used by the component or its nearest peers. If neither is present, use the CSS cross-fade pattern — don't add a dependency just for icon transitions.
-
-### When to Animate Icons
-
-| Animate | Don't animate |
-| --- | --- |
-| Icons that appear on hover (action buttons) | Static navigation icons |
-| State change icons (play → pause, like → liked) | Decorative icons |
-| Icons in contextual toolbars | Icons that are always visible |
-| Loading/success state indicators | Icon labels (text next to icon) |
-
-**Important:** Always use exactly these values for contextual icon animations — do not deviate:
-- `scale`: `0.25` → `1` (never use `0.5` or `0.6`)
-- `opacity`: `0` → `1`
-- `filter`: `"blur(4px)"` → `"blur(0px)"`
-- `transition`: `{ type: "spring", duration: 0.3, bounce: 0 }` — **bounce must always be `0`**, never `0.1` or any other value
-
-## Scale on Press
-
-A subtle scale-down on click gives buttons tactile feedback. Always use `scale(0.96)`. Never use a value smaller than `0.95` — anything below feels exaggerated. Use CSS transitions for interruptibility — if the user releases mid-press, it should smoothly return.
-
-Not every button needs this. Add a `static` prop to your button component that disables the scale effect when the motion would be distracting.
-
-### CSS Example
-
-```css
-.button {
-  transition-property: scale;
-  transition-duration: 150ms;
-  transition-timing-function: ease-out;
-}
-
-.button:active {
-  scale: 0.96;
-}
-```
-
-### Tailwind Example
-
-```tsx
-<button className="transition-transform duration-150 ease-out active:scale-[0.96]">
-  Click me
-</button>
-```
-
-### Motion Example
-
-```tsx
-<motion.button whileTap={{ scale: 0.96 }}>
-  Click me
-</motion.button>
-```
-
-### Static Prop Pattern
-
-Extract the scale class into a variable and conditionally apply it based on a `static` prop:
+Add `scale(0.96)` or `scale(0.97)` on `:active` (`100–160ms ease-out`) so buttons feel tactile (`scale()` proportionally scales text and child icons too). Never use a value below `0.95`. Provide a `static` prop on shared `<Button>` components to opt out where press scaling would distract.
 
 ```tsx
 const tapScale = "active:not-disabled:scale-[0.96]";
@@ -337,67 +269,69 @@ function Button({ static: isStatic, className, children, ...props }) {
     </button>
   );
 }
-
-// Usage
-<Button>Click me</Button>           {/* scales on press */}
-<Button static>Submit</Button>       {/* no scale */}
 ```
 
-## Skip Animation on Page Load
+### Skip Animation on Initial Mount
 
-Use `initial={false}` on `AnimatePresence` to prevent enter animations from firing on first render. Elements that are already in their default state shouldn't animate in on page load — only on subsequent state changes.
+Use `initial={false}` on `AnimatePresence` for toggles, tabs, segmented controls, and icon swaps so elements already in their default state do not animate in on page load. Omit `initial={false}` only when an intentional first-load entrance animation depends on `initial="hidden"`.
 
-### When It Works
+---
 
-```tsx
-// Good — icon doesn't animate in on mount, only on state change
-<AnimatePresence initial={false} mode="popLayout">
-  <motion.span
-    key={isActive ? "active" : "inactive"}
-    initial={{ opacity: 0, scale: 0.25, filter: "blur(4px)" }}
-    animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-    exit={{ opacity: 0, scale: 0.25, filter: "blur(4px)" }}
-  >
-    <Icon />
-  </motion.span>
-</AnimatePresence>
-```
+## Enter Stagger & Asymmetric Exit Animations
 
-Works well for: icon swaps, toggles, tabs, segmented controls — anything that has a default state on page load.
+### Split and Stagger Enter Animations
 
-### When It Breaks
+For infrequent staged entrances (first load of a hero, empty state, or onboarding card), split content into semantic chunks (title, description, actions) and stagger by `30–100ms` (`opacity: 0 → 1`, `translateY(8px–12px) → 0`, optional `blur(4px) → 0`). Never block user interaction while stagger animations play, and never stagger high-frequency lists or hovers.
 
-Don't use `initial={false}` when the component relies on its `initial` prop to set up a first-time enter animation, like a staggered page hero or a loading state. In those cases, removing the initial animation skips the entire entrance.
+### Subtle & Asymmetric Exits
 
-```tsx
-// Bad — initial={false} would skip the staggered page enter entirely
-<AnimatePresence initial={false}>
-  <motion.div initial="hidden" animate="visible" variants={...}>
-    ...
-  </motion.div>
-</AnimatePresence>
-```
+The user's attention has already moved to what's next — exits should be faster and gentler than enters:
+- **Subtle exit (default):** small fixed `translateY(-12px)` + `opacity: 0` over `150ms ease-out` instead of collapsing full height.
+- **Full spatial exit:** `translateX(-100%)` or `translateY(100%)` over `200ms var(--ease-out)` when preserving drawer/toast spatial origin.
+- **Deliberate hold vs. release:** slow where the user is deciding (`2s linear` on `:active` hold-to-delete), snappy where the system responds (`200ms ease-out` on release).
 
-Verify the component still looks right on a full page refresh before applying this.
+---
 
-## Motion Restraint
+## `clip-path: inset()` for Hardware-Accelerated Animation
 
-Motion is a budget, not a garnish:
+`clip-path: inset(top right bottom left)` clips an element inward from each edge and animates smoothly without extra layout cost:
 
-- **No custom animation on high-frequency interactions.** Repeated interactions get instant feedback or a minimal `opacity` or `background-color` transition at ≤150ms.
-- **Motion is never the only feedback channel.** Every animated state change also needs a static cue such as color, icon, or label.
-- **Brief and precise beats prominent.** If a shorter, smaller animation communicates the same thing, use it.
-- **Honor reduced-motion preferences.** Preserve the static cue and remove unnecessary movement.
+1. **Hold-to-delete button:** place a colored overlay with `clip-path: inset(0 100% 0 0)`. On `.button:active .overlay`, transition to `inset(0 0 0 0)` with `transition: clip-path 2s linear`; on release, snap back with `transition: clip-path 200ms ease-out`.
+2. **Tabs with seamless color transitions:** duplicate the tab list, style the top copy as the active state (background + contrasting text color), and animate `clip-path: inset(...)` over the active tab's bounds so text and indicator recolor in perfect lockstep.
+3. **Scroll image reveals:** start at `clip-path: inset(0 0 100% 0)` and transition to `inset(0 0 0 0)` once in view (`IntersectionObserver` or `useInView` with `{ once: true, margin: "-100px" }`).
+4. **Comparison sliders:** stack two images and adjust the top layer's `clip-path: inset(0 ${rightPercent}% 0 0)` on drag.
+
+---
+
+## Gesture and Drag Interactions
+
+When building swipeable drawers, sheets, toasts, or cards:
+
+1. **Momentum / velocity dismissal:** do not require dragging past a large distance threshold if the user flicks quickly. Compute velocity (`Math.abs(dragDistance) / elapsedTimeMs`) and dismiss when `velocity > 0.11` even on short drags:
+   ```js
+   const elapsed = Date.now() - dragStartTime.current;
+   const velocity = Math.abs(swipeAmount) / elapsed;
+   if (Math.abs(swipeAmount) >= SWIPE_THRESHOLD || velocity > 0.11) {
+     dismiss();
+   }
+   ```
+2. **Boundary damping / friction:** when dragging past the natural boundary (e.g., pulling an open drawer further up), apply progressive damping rather than a hard stop — nothing in the physical world stops instantaneously without give.
+3. **Pointer capture:** call `setPointerCapture(e.pointerId)` once dragging starts so tracking continues smoothly if the pointer leaves the element bounds.
+4. **Multi-touch protection:** ignore secondary touch points once `isDragging` is true so switching fingers mid-drag does not jump the element to a new coordinate.
+
+---
+
+## Accessibility: `prefers-reduced-motion`
+
+Reduced motion means **fewer and gentler** animations, not zero feedback. Remove position, slide, and scale movement while preserving quick opacity or color transitions (`~150–200ms`) that aid comprehension:
 
 ```css
-/* Good: high-frequency hover gets a minimal transition */
-.row:hover {
-  background-color: var(--surface-hover);
-  transition: background-color 100ms ease-out;
-}
-
-/* Bad: every hover replays a full entrance */
-.row:hover .row-icon {
-  animation: bounceIn 500ms;
+@media (prefers-reduced-motion: reduce) {
+  .drawer,
+  .toast,
+  .popover {
+    transition: opacity 150ms ease;
+    transform: none !important;
+  }
 }
 ```

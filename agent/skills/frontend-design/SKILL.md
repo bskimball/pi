@@ -115,7 +115,7 @@ Implement the smallest coherent change that delivers the chosen design at the re
 
 If validation fails, fix the concrete defect rather than restarting design exploration unless the failure disproves the design.
 
-Finish with a `make-interfaces-feel-better` polish pass where it applies to the elements you actually built (concentric radii on genuinely nested rounded surfaces, optical alignment, shadows vs. structural borders, tabular numbers, restrained motion, exact transition properties, minimum hit areas). Load `~/.agents/skills/make-interfaces-feel-better/SKILL.md` (or the project `.agents/skills` copy if present) to refine chosen surfaces — never add extra containers, animations, or borders just to exercise a polish rule.
+Finish with a `make-interfaces-feel-better` polish pass where it applies to the elements you actually built (Emil Kowalski's animation decision framework, custom easing curves, `<300ms` duration ceiling, origin-aware popovers, concentric radii on genuinely nested rounded surfaces, optical alignment, shadows vs. structural borders, tabular numbers, restrained motion, exact transition properties, minimum hit areas). Load `~/.pi/agent/skills/make-interfaces-feel-better/SKILL.md` (or the project `.agents/skills` copy if present) to refine chosen surfaces and animations — never add extra containers, animations, or borders just to exercise a polish rule.
 
 ## 7. Report
 
