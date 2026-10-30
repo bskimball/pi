@@ -332,7 +332,14 @@ describe("collectFindings", () => {
 
 describe("hydra turn signal", () => {
   it("detects active hydra env tiers and builds score+choice questions", () => {
-    assert.equal(isHydraActive(undefined), false);
+    const saved = process.env.PI_HYDRA_TIER;
+    try {
+      delete process.env.PI_HYDRA_TIER;
+      assert.equal(isHydraActive(undefined), false);
+    } finally {
+      if (saved === undefined) delete process.env.PI_HYDRA_TIER;
+      else process.env.PI_HYDRA_TIER = saved;
+    }
     assert.equal(isHydraActive("off"), false);
     assert.equal(isHydraActive("standard"), true);
     assert.equal(isHydraActive("high"), true);

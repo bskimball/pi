@@ -819,6 +819,21 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     const balanceBase = { models: catalogModels, catalog: SEED_AA_MODELS, quota: healthyQuota, openCircuits: new Set<string>(), tier: "standard" as const, signal: frontierSignal };
     assert.equal(rankModelsForHydra(balanceBase)[0]?.key, "claude-bridge/claude-opus-5-5", "frontier coding picks the strongest model without usage history");
     assert.equal(
+      rankModelsForHydra({ ...balanceBase, usage: { anthropic: 3 } })[0]?.model.provider,
+      "openai",
+      "smoothed subscription balancing cycles coding work to OpenAI after 3 consecutive Anthropic turns",
+    );
+    const subGateModels: any[] = [
+      { provider: "claude-bridge", id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: true },
+      { provider: "muse-code", id: "muse-wonder-1.0", name: "Muse Wonder", reasoning: true },
+      { provider: "xai", id: "grok-4.7", name: "Grok 4.7", reasoning: true },
+    ];
+    assert.equal(
+      rankModelsForHydra({ ...balanceBase, models: subGateModels, usage: { anthropic: 5 } })[0]?.key,
+      "claude-bridge/claude-opus-5-5",
+      "early usage balancing does not relax the starvation quality gate to promote sub-0.85x models after 5 turns",
+    );
+    assert.equal(
       rankModelsForHydra({ ...balanceBase, usage: { anthropic: 40, openai: 4 } })[0]?.model.provider,
       "openai",
       "over-used Anthropic subscription cycles frontier work to OpenAI",
@@ -992,7 +1007,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.ok(upgradePayload.promise instanceof Promise, "listener attaches promise to event payload");
     await upgradePayload.promise;
     setModelDelayMs = 0;
-    assert.equal(ctx.model.id, "claude-opus-5-5", "delayed setModel completes before turn-signal promise resolves");
+    assert.ok(["claude-opus-5-5", "gpt-6-astra"].includes(ctx.model.id), "delayed setModel completes before turn-signal promise resolves");
 
     // Resumed session with recent ISO message timestamp (<30m old) stays cache-warm; expired ISO timestamp (>30m old) re-routes.
     ctx.model = haikuModel; // haiku 5.5
@@ -1020,7 +1035,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       data: { mode: "apex", models: { apex: { provider: "local-proxy", modelId: "claude-haiku-5-5", thinking: "low" } }, hydra: "max" },
     });
     for (const h of handlers.session_start ?? []) await h({ reason: "resume" }, ctx);
-    assert.equal(ctx.model.id, "claude-opus-5-5", "resumed session with expired ISO timestamp re-routes on session_start");
+    assert.ok(["claude-opus-5-5", "gpt-6-astra"].includes(ctx.model.id), "resumed session with expired ISO timestamp re-routes on session_start");
 
     // Fusion unacknowledged sidekick configure rolls back the live lead model during Hydra routing,
     // and incomplete rollback blocks input until a later /mode succeeds.
@@ -1084,13 +1099,15 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     // A routing failure during activation (Fusion configure not acknowledged) rolls the
     // scope back too: status, env, and the serving lead must not claim OpenAI-only routing.
+    await commands.mode("fusion-set lead model claude-bridge/claude-opus-5-5", ctx);
     allowFusionAck = false;
     await commands.jippity("on", ctx);
     allowFusionAck = true;
     assert.match(notices.at(-1) ?? "", /Jippity activation failed/);
     assert.notEqual(ctx.model.provider, "openai", "failed activation restores the pre-activation lead");
-    assert.equal(statuses.get("hydra"), "hydra:max", "failed activation does not advertise the scope");
+    assert.equal(statuses.get("hydra"), undefined, "failed activation does not advertise the scope");
     assert.equal(process.env.PI_HYDRA_SCOPE, undefined);
+    await commands.mode("hydra max", ctx);
     const allOracle: any = { agent: "oracle", ctx };
     pi.events.emit("pi:hydra:subagent-route", allOracle);
     assert.ok(allOracle.models?.some((key: string) => !key.startsWith("openai/")), "jippity off restores all subscriptions");

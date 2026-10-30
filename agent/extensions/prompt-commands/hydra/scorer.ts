@@ -137,7 +137,9 @@ export const DOMAIN_AFFINITY: Partial<Record<HydraDomain, Readonly<Record<string
 };
 
 /** Routed turns required in the usage window before balancing applies. */
-export const MIN_USAGE_SAMPLE = 20;
+export const MIN_USAGE_SAMPLE = 3;
+/** Prior pseudo-turns distributed by capacity share so early balancing ramps smoothly instead of lurching. */
+const BALANCE_PRIOR_TURNS = 10;
 const BALANCE_EXPONENT = 0.5;
 const MIN_BALANCE = 0.6;
 const MAX_BALANCE = 1.5;
@@ -146,8 +148,25 @@ export function subscriptionCapacity(family: string): number {
   return SUBSCRIPTION_CAPACITY[family] ?? DEFAULT_SUBSCRIPTION_CAPACITY;
 }
 
+function smoothedUsageShare(
+  family: string,
+  usage: Readonly<Record<string, number>> | undefined,
+  poolFamilies: ReadonlySet<string>,
+): { target: number; smoothedShare: number } | undefined {
+  if (!usage) return undefined;
+  const total = Object.values(usage).reduce((sum, n) => sum + n, 0);
+  if (total < MIN_USAGE_SAMPLE) return undefined;
+  let capacitySum = 0;
+  for (const f of poolFamilies) capacitySum += subscriptionCapacity(f);
+  if (capacitySum <= 0) return undefined;
+  const target = subscriptionCapacity(family) / capacitySum;
+  if (target <= 0) return undefined;
+  const smoothedShare = ((usage[family] ?? 0) + BALANCE_PRIOR_TURNS * target) / (total + BALANCE_PRIOR_TURNS);
+  return { target, smoothedShare };
+}
+
 /**
- * Proportional multiplier on [0.6..1.5]: (target share / actual share)^0.5.
+ * Proportional multiplier on [0.6..1.5]: (target share / smoothed share)^0.5.
  * A family used below its capacity share keeps gaining priority until it
  * catches up, so large subscriptions are not starved by small quality gaps.
  */
@@ -156,16 +175,9 @@ export function usageBalanceMultiplier(
   usage: Readonly<Record<string, number>> | undefined,
   poolFamilies: ReadonlySet<string>,
 ): number {
-  if (!usage) return 1;
-  const total = Object.values(usage).reduce((sum, n) => sum + n, 0);
-  if (total < MIN_USAGE_SAMPLE) return 1;
-  let capacitySum = 0;
-  for (const f of poolFamilies) capacitySum += subscriptionCapacity(f);
-  if (capacitySum <= 0) return 1;
-  const target = subscriptionCapacity(family) / capacitySum;
-  const share = (usage[family] ?? 0) / total;
-  if (share <= 0) return MAX_BALANCE;
-  return Math.max(MIN_BALANCE, Math.min(MAX_BALANCE, (target / share) ** BALANCE_EXPONENT));
+  const shares = smoothedUsageShare(family, usage, poolFamilies);
+  if (!shares) return 1;
+  return Math.max(MIN_BALANCE, Math.min(MAX_BALANCE, (shares.target / shares.smoothedShare) ** BALANCE_EXPONENT));
 }
 
 function isStarved(
@@ -173,13 +185,9 @@ function isStarved(
   usage: Readonly<Record<string, number>> | undefined,
   poolFamilies: ReadonlySet<string>,
 ): boolean {
-  if (!usage) return false;
-  const total = Object.values(usage).reduce((sum, n) => sum + n, 0);
-  if (total < MIN_USAGE_SAMPLE) return false;
-  let capacitySum = 0;
-  for (const f of poolFamilies) capacitySum += subscriptionCapacity(f);
-  const target = subscriptionCapacity(family) / capacitySum;
-  return (usage[family] ?? 0) / total < target * STARVED_SHARE_FRACTION;
+  const shares = smoothedUsageShare(family, usage, poolFamilies);
+  if (!shares) return false;
+  return shares.smoothedShare < shares.target * STARVED_SHARE_FRACTION;
 }
 
 export const EXCLUDED_HYDRA_PROVIDERS = new Set([
@@ -196,7 +204,7 @@ export const EXCLUDED_HYDRA_PROVIDERS = new Set([
  */
 function providerQualityBonus(provider: string): number {
   const p = provider.toLowerCase();
-  if (p === "claude-bridge" || p === "openai" || p === "antigravity" || p === "xai" || p === "meta") {
+  if (p === "claude-bridge" || p === "openai" || p === "antigravity" || p === "xai" || p === "muse-code") {
     return 0.015;
   }
   if (p === "local-proxy") return 0.01;
