@@ -21,6 +21,8 @@
     "typebox": "*"
   },
   "dependencies": {
+    "@earendil-works/chord": "1.4.0",
+    "@earendil-works/pi-durable": "1.4.0",
     "@pi/ui-kit": "file:packages/ui-kit",
     "diff": "9.0.0"
   }

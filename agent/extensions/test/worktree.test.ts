@@ -5,6 +5,10 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { after, describe, it, test } from "node:test";
 import { shipping, type Exec, type ShippingInput } from "../worktree/internal/shipping.ts";
+import { enqueue, queueDir, queueStatus, runQueue } from "../worktree/internal/shipping-queue.ts";
+import { startQueue, recoverQueueOperation, queueExec, queueEndpoint } from "../worktree/internal/queue-host.ts";
+import { createServer } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { branch, commonDir, git as shippingGit, head, loadTask, locked, refHead, stateDir, trees } from "../worktree/internal/shipping-state.ts";
 
 import worktreeExtension, { allowedWorktreePath, parseWorktreeList, patchPaths } from "../worktree.ts";
@@ -134,6 +138,7 @@ function shippingFixture() {
   shippingGit(root, ["init", "--initial-branch=main"]);
   shippingGit(root, ["config", "user.name", "Shipping Test"]); shippingGit(root, ["config", "user.email", "test@example.com"]);
   shippingGit(root, ["config", "commit.gpgsign", "false"]); shippingGit(root, ["config", "core.hooksPath", join(dir, "no-hooks")]);
+  shippingGit(root, ["config", "core.autocrlf", "false"]);
   writeFileSync(join(root, "README.md"), "base\n"); writeFileSync(join(root, "outside.txt"), "preserve\n");
   shippingGit(root, ["add", "README.md", "outside.txt"]); shippingGit(root, ["commit", "-m", "initial"]);
   shippingGit(root, ["init", "--bare", "--initial-branch=main", remote]); shippingGit(root, ["remote", "add", "origin", remote]); shippingGit(root, ["push", "origin", "main"]);
@@ -156,6 +161,109 @@ function worktreeTool() {
     return result.content[0].text as string;
   };
 }
+
+test("durable queue checks and lands an authorized exact candidate, deduplicates, and reopens", async () => {
+  const f = shippingFixture(); await f.begin(); const candidate = f.change();
+  await assert.rejects(enqueue(f.root, "session-one", "demo", candidate, false), /permission/);
+  await assert.rejects(enqueue(f.root, "session-one", "demo", candidate, true), /review/);
+  await f.call({ operation: "review", task: "demo", expectedHead: candidate, verdict: "pass", evidence: "queue test review" });
+  const job = await enqueue(f.root, "session-one", "demo", candidate, true);
+  assert.equal((await enqueue(f.root, "session-one", "demo", candidate, true)).id, job.id);
+  assert.match(JSON.stringify(queueStatus(f.root)), /queued/);
+  await runQueue(f.root, realExec);
+  assert.equal(loadTask(f.root, "demo").landed?.head, candidate);
+  assert.match(JSON.stringify(queueStatus(f.root)), /landed/);
+  await runQueue(f.root, async () => { throw new Error("completed job must not run again"); });
+  assert.equal(shippingGit(f.remote, ["rev-parse", "main"]), candidate);
+});
+
+test("queue ownership endpoint excludes a second runner and releases on close", async () => {
+  const f = shippingFixture();
+  const first = createServer(), second = createServer();
+  const listen = (server: ReturnType<typeof createServer>) => new Promise<void>((resolve, reject) => {
+    server.once("error", reject); server.listen(queueEndpoint(f.root), resolve);
+  });
+  const close = (server: ReturnType<typeof createServer>) => new Promise<void>(resolve => server.close(() => resolve()));
+  try {
+    await listen(first);
+    await assert.rejects(listen(second), (error: NodeJS.ErrnoException) => error.code === "EADDRINUSE" || error.code === "EACCES");
+    await close(first);
+    await listen(second);
+  } finally { await close(first); await close(second); }
+});
+
+test("detached durable queue recovers after its runner dies mid-check", async () => {
+  const f = shippingFixture();
+  const marker = join(f.dir, "gate.json");
+  await f.begin({ checks: [{ command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({runner:process.ppid,child:process.pid}));setTimeout(()=>{},1200)`] }] });
+  const candidate = f.change();
+  await f.call({ operation: "review", task: "demo", expectedHead: candidate, verdict: "pass", evidence: "crash recovery test review" });
+  await enqueue(f.root, "session-one", "demo", candidate, true);
+  startQueue(f.root);
+  const until = async (condition: () => boolean, label: string) => {
+    const deadline = Date.now() + 45000;
+    while (!condition()) {
+      if (Date.now() > deadline) {
+        const log = join(queueDir(f.root), "runner.log");
+        throw new Error(`Timed out: ${label}; ${JSON.stringify(queueStatus(f.root))}; ${existsSync(log) ? readFileSync(log, "utf8").slice(-4000) : "no runner log"}`);
+      }
+      await delay(100);
+    }
+  };
+  let runner: number | undefined;
+  try {
+    await until(() => existsSync(marker), "gate started");
+    const started = JSON.parse(readFileSync(marker, "utf8")) as { runner: number; child: number };
+    runner = started.runner;
+    process.kill(runner, "SIGKILL"); runner = undefined;
+    await until(() => { try { process.kill(started.child, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }, "orphan check exited");
+    startQueue(f.root, true);
+    await until(() => Boolean(loadTask(f.root, "demo").landed), "recovered landing");
+    await until(() => JSON.stringify(queueStatus(f.root)).includes('"state":"landed"'), "landing receipt");
+    assert.equal(shippingGit(f.remote, ["rev-parse", "main"]), candidate);
+    // Allow the runner to close its storage before fixture teardown on Windows.
+    await delay(1000);
+  } finally { if (runner) { try { process.kill(runner, "SIGKILL"); } catch {} } }
+});
+
+test("queue refuses ambiguous spawn recovery, preserves stop receipts, and requires explicit retry", async () => {
+  const f = shippingFixture(); await f.begin(); const candidate = f.change();
+  await f.call({ operation: "review", task: "demo", expectedHead: candidate, verdict: "pass", evidence: "queue stop review" });
+  const r = await enqueue(f.root, "session-one", "demo", candidate, true);
+  const child = join(queueDir(f.root), "child.json");
+  writeFileSync(child, JSON.stringify({ state: "starting" }));
+  assert.throws(() => recoverQueueOperation(f.root), /ambiguous/);
+  assert.equal(existsSync(child), true);
+  rmSync(child);
+  const receipts = join(queueDir(f.root), "receipts"); mkdirSync(receipts);
+  writeFileSync(join(receipts, `${r.id}.json`), JSON.stringify({ id: r.id, task: r.task, head: r.head, state: "blocked", error: "prior failure before terminal checkpoint" }));
+  await runQueue(f.root, async () => { throw new Error("stopped job must never execute"); });
+  assert.equal(loadTask(f.root, "demo").landed, undefined);
+  const retry = await enqueue(f.root, "session-one", "demo", candidate, true);
+  assert.notEqual(retry.id, r.id);
+  await runQueue(f.root, realExec);
+  assert.equal(loadTask(f.root, "demo").landed?.head, candidate);
+});
+
+test("queue timeout is a failed command even if its termination handler exits cleanly", async () => {
+  const f = shippingFixture(); mkdirSync(queueDir(f.root), { recursive: true });
+  const r = await queueExec(f.root)(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},100)"], { cwd: f.root, timeout: 1000 });
+  assert.equal(r.killed, true);
+});
+
+test("durable queue blocks failed gates, changed heads, and changed approval contracts", async () => {
+  for (const change of ["gate", "head", "contract"]) {
+    const f = shippingFixture(); await f.begin(); const candidate = f.change();
+    await f.call({ operation: "review", task: "demo", expectedHead: candidate, verdict: "pass", evidence: "queue test review" });
+    await enqueue(f.root, "session-one", "demo", candidate, true);
+    if (change === "head") f.change("advanced\n");
+    if (change === "contract") await f.call({ operation: "amend", task: "demo", paths: ["README.md", "new.txt", "outside.txt"], confirm: true });
+    await runQueue(f.root, change === "gate" ? async () => ({ stdout: "", stderr: "gate failed", code: 1, killed: false }) : realExec);
+    assert.equal(loadTask(f.root, "demo").landed, undefined);
+    assert.match(JSON.stringify(queueStatus(f.root)), /blocked/);
+    assert.equal(shippingGit(f.remote, ["rev-parse", "main"]), f.base);
+  }
+});
 
 test("status is read-only; registration is immutable, scoped, and visible from linked trees", async () => {
   const f = shippingFixture();
@@ -438,7 +546,7 @@ test("explicit worker base excludes dirty parent edits and missing checkouts rem
   assert.equal(readFileSync(join(f.worker, "README.md"), "utf8"), "base\n");
   rmSync(f.worker, { recursive: true });
   const status: any = await f.call({ operation: "status" });
-  assert.match(status.worktrees.find((w: any) => w.path === f.worker).dirty, /missing/);
+  assert.match(status.worktrees.find((w: any) => resolve(w.path) === resolve(f.worker)).dirty, /missing/);
   assert.equal(status.tasks[0].workers[0].base, f.base);
 });
 

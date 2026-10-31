@@ -137,6 +137,6 @@ export async function locked<T>(root: string, fn: () => Promise<T>): Promise<T> 
     // Rename is not a stale-lock CAS. Leave reclamation explicit to avoid racing two rescuers.
     throw new Error(`Stale shipping lock from exited PID ${owner.pid}; inspect and remove ${file}, then resume.`);
   }
-  writeFileSync(file, JSON.stringify({ pid: process.pid, host: hostname() }), { flag: "wx", mode: 0o600 });
+  writeFileSync(file, JSON.stringify({ pid: process.pid, host: hostname(), ...(process.env.PI_SHIPPING_QUEUE_RUNNER === "1" ? { queue: true } : {}) }), { flag: "wx", mode: 0o600 });
   try { return await fn(); } finally { unlinkSync(file); }
 }

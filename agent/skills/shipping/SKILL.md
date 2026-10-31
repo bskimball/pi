@@ -52,6 +52,13 @@ If commit permission is absent, preserve worker trees or scoped patches until au
 
 Issues close only when actually fixed: use `Fixes #N` on the task PR for automatic closure. Adjacent bugs remain separate issues, not cleanup targets. Release/install requests run the repository's canonical pipeline from the landed revision and report separate proof.
 
+## Durable verify+land queue
+
+- `shipping enqueue` (`task`, `expectedHead`, `confirm:true`) queues a detached Pi Durable job to verify and land an exact candidate. It requires existing `delivery: "ship"`, applicable exact-SHA `shipping review`, and explicit user authorization to verify+land; an implementation request is not permission to ship.
+- The detached Pi Durable runner executes only the existing canonical `verify` checks and then existing `land` for that exact `expectedHead` — no `publish`, conflict resolution, or `cleanup`. It stops on check/land failures or if `HEAD` or review/approval changes.
+- The queue survives Pi session exit and resumes the current repository on the next Pi project opening after a machine restart; it is not an always-on OS service.
+- `shipping queue_status` (`task` optional) is read-only. `pending-merge` means the candidate has not landed. After inspecting a stopped or `pending-merge` job and confirming authorization, run an explicit `shipping enqueue` again to resume.
+
 ## Final receipt
 
 Always state:
