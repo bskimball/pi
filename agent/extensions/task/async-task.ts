@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { HANDOFF_INSTRUCTION } from "./runtime/report-delivery.ts";
+import { installPassiveNotes, writePassiveNote } from "./runtime/passive-notes.ts";
 import { childToolArgs } from "./runtime/child-process.ts";
 import { Type } from "typebox";
 import {
@@ -778,6 +779,7 @@ function renderLaunchReceipt(view: WorkerView, theme: any): Component {
 // ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
+  installPassiveNotes(pi);
   // Trial runner only. Unset in normal use so specialist tools stay registered.
   if (process.env.PI_TRIAL_DISABLE_DELEGATION === "1") return;
   if (taskPresentationEnabled()) installTaskRenderSafety();
@@ -1764,6 +1766,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           ...process.env,
           PI_SUBAGENT: "1",
           PI_ASYNC_RPC: "1",
+          PI_TASK_NOTES_DIR: sessionDir,
+          PI_PROJECT_CONTEXT_CWD: process.env.PI_PROJECT_CONTEXT_CWD || params.ctx?.cwd || params.cwd,
           PI_SUBAGENT_AGENT: def.name,
           PI_SUBAGENT_MODEL: modelLabel,
           ...(isFusion ? { PI_FUSION_SIDEKICK: "1" } : {}),
@@ -2870,7 +2874,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   });
 
   /** task_send modes shared by the tool and the fleet control channel. */
-  type SendMode = "steer" | "follow_up" | "prompt";
+  type SendMode = "steer" | "follow_up" | "prompt" | "note";
 
   const executeTaskSend = async (params: { id?: string; message?: string; mode?: SendMode }) => {
       const id = params.id?.trim();
@@ -2903,6 +2907,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
       if (worker.closed || worker.lifecycle === "closed") {
         return textResult(`${id} is closed.`, true, sendDetails("rejected", "worker closed"));
+      }
+      if (mode === "note") {
+        try {
+          const noteId = writePassiveNote(worker.sessionDir, message);
+          return textResult(`${id} note ${noteId} stored. It will be included in the next request; no turn or generation was started. Latest 20 notes are projected; receipts remain in the worker notes directory.`, false, sendDetails("delivered", "passive context for the next request"));
+        } catch (error) {
+          return textResult(`${id} note failed: ${error instanceof Error ? error.message : String(error)}`, true, sendDetails("failed"));
+        }
       }
       if (!worker.client || worker.client.isClosed) {
         return textResult(
@@ -3098,6 +3110,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     description: `Send a message to an existing async RPC worker.
 
 Modes:
+- note: Persist passive context for the next request without waking the worker or starting a generation. Latest 20 notes are included; receipts stay on disk.
 - steer: Queued until the next model-call boundary. Cannot interrupt current inference or in-flight tools; delivered after the current assistant turn finishes its tool calls, before the next LLM call.
 - follow_up: Delivered only after the agent fully settles (no more tool calls or steering).
 - prompt: Only allowed when the worker is settled; starts a new generation.
@@ -3110,13 +3123,14 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       message: Type.String({ description: "Message to send to the worker." }),
       mode: Type.Union(
         [
+          Type.Literal("note"),
           Type.Literal("steer"),
           Type.Literal("follow_up"),
           Type.Literal("prompt"),
         ],
         {
           description:
-            "steer = queue until next model-call boundary; follow_up = after settle; prompt = new generation only when settled.",
+            "note = passive context, no wake; steer = next model-call boundary; follow_up = after settle; prompt = new generation only when settled.",
         },
       ),
     }),

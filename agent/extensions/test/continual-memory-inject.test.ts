@@ -124,6 +124,28 @@ test("continual memory injection gates subagents and emits compact reminder once
   });
 });
 
+test("worker inherits full parent project memories, not global or prompt entries", async () => {
+  const parent = join(testRoot, "brief-parent"), worker = join(testRoot, "brief-worker");
+  mkdirSync(parent); mkdirSync(worker);
+  const { handlers, tools } = loadExtension();
+  await execute(tools.memory_write, { action: "create", scope: "project", kind: "memory", title: "Parent decision", content: "Use the actual long decision, not an abbreviated overview." }, context(parent));
+  const inherited = process.env.PI_PROJECT_CONTEXT_CWD;
+  try {
+    process.env.PI_PROJECT_CONTEXT_CWD = parent;
+    await withPiSubagent("1", async () => {
+      const options = { appendSystemPrompt: "base" };
+      await handlers.before_agent_start({ systemPromptOptions: options }, context(worker));
+      assert.match(options.appendSystemPrompt, /Parent decision/);
+      assert.match(options.appendSystemPrompt, /actual long decision, not an abbreviated overview/);
+      assert.match(options.appendSystemPrompt, /not instructions/);
+      assert.doesNotMatch(options.appendSystemPrompt, /global\/memory|Global/);
+    });
+  } finally {
+    if (inherited === undefined) delete process.env.PI_PROJECT_CONTEXT_CWD;
+    else process.env.PI_PROJECT_CONTEXT_CWD = inherited;
+  }
+});
+
 test("project identity uses Git top-level and isolates non-Git roots", () => {
   const repo = join(testRoot, "repo");
   const nested = join(repo, "a", "b");

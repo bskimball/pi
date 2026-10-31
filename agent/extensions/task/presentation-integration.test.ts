@@ -1,8 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installPassiveNotes, writePassiveNote } from "./runtime/passive-notes.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import ampTask from "./amp-task.ts";
 import asyncTask from "./async-task.ts";
+
+it("passive notes persist without sending input, and enter the next request including mid-run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-passive-notes-"));
+  const previous = process.env.PI_TASK_NOTES_DIR;
+  try {
+    let handler: ((event: { messages: unknown[] }) => { messages?: unknown[] } | undefined) | undefined;
+    installPassiveNotes({ on(name: string, fn: typeof handler) { assert.equal(name, "context"); handler = fn; } } as never);
+    process.env.PI_TASK_NOTES_DIR = dir;
+    const messages = [{ role: "user", content: "work" }];
+    assert.equal(handler?.({ messages }), undefined);
+    writePassiveNote(dir, "main advanced; no action requested");
+    const request = handler?.({ messages });
+    assert.match(JSON.stringify(request), /main advanced/);
+    assert.equal(messages.length, 1);
+    assert.deepEqual(handler?.({ messages }), request, "notes survive reread without a new turn or send API");
+    assert.throws(() => writePassiveNote(dir, " "), /1 to 8000/);
+  } finally {
+    if (previous === undefined) delete process.env.PI_TASK_NOTES_DIR; else process.env.PI_TASK_NOTES_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 interface RegisteredTool {
   name: string;

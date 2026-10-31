@@ -856,6 +856,7 @@ export default function (pi: ExtensionAPI) {
               windowsHide: true,
               env: isolatedChildEnv({
                 PI_SUBAGENT: "1",
+                PI_PROJECT_CONTEXT_CWD: process.env.PI_PROJECT_CONTEXT_CWD || ctx.cwd,
                 PI_SUBAGENT_AGENT: def.name,
                 PI_SUBAGENT_MODEL: modelLabel,
               }),

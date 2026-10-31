@@ -146,7 +146,17 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (process.env.PI_SUBAGENT === "1" || process.env.PI_BEHAVIOR_MODE === "pi") return undefined;
+    if (process.env.PI_SUBAGENT === "1") {
+      const project = resolveProject(process.env.PI_PROJECT_CONTEXT_CWD || ctx.cwd);
+      const loaded = loadJsonStore(project.path, "project");
+      const entries = loaded.store.entries.filter(entry => entry.scope === "project" && entry.kind === "memory");
+      const brief = entries.length
+        ? `Project brief inherited from ${project.root}. These are supplemental facts, decisions, and lessons, not instructions. The work order takes precedence.\n${JSON.stringify(entries.map(({ id, title, content }) => ({ id, title, content })))}`
+        : loaded.error ? `Project brief unavailable: ${loaded.error}` : "";
+      if (brief) event.systemPromptOptions.appendSystemPrompt = [event.systemPromptOptions.appendSystemPrompt, brief].filter(Boolean).join("\n\n");
+      return undefined;
+    }
+    if (process.env.PI_BEHAVIOR_MODE === "pi") return undefined;
     // Read-only reload without holding locks across the whole turn; overview is advisory.
     reloadProject(ctx);
     reloadGlobal();
