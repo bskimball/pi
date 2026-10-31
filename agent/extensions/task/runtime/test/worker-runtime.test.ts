@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { readFileSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   LATEST_RESULT_CHARS,
   MAX_LIVE_WORKERS,
@@ -13,6 +15,9 @@ import {
   type WorkerRuntimeEventHooks,
 } from "../worker-runtime.ts";
 import { ActivityLedger } from "../activity-ledger.ts";
+import { extractAssistantText } from "../text-bounds.ts";
+import { formatDeliveredResult } from "../worker-status.ts";
+import { evaluateSettledReport, type ReportValidation } from "../report-schema.ts";
 
 describe("async worker model fallback policy", () => {
   const retryable = {
@@ -247,22 +252,84 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
-  it("stores only a bounded tail of assistant result text", () => {
+  it("stores a bounded preview with lossless retrieval of assistant result text", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>();
     const item = worker();
-    const huge = "x".repeat(LATEST_RESULT_CHARS + 4_000);
+    const huge = `FIRST FINDING\n${"x".repeat(LATEST_RESULT_CHARS + 4_000)}\nFINAL FINDING`;
     runtime.handleEvent(
       item,
       {
         type: "message_end",
-        message: { role: "assistant", text: huge },
+        message: { role: "assistant", content: [{ type: "text", text: huge }] },
       },
-      hooks(),
+      { ...hooks(), extractAssistantText: (message) => extractAssistantText(message, Number.POSITIVE_INFINITY) },
     );
-    assert.equal(item.latestAssistantText.length, LATEST_RESULT_CHARS);
+    assert.ok(item.latestAssistantText.length <= LATEST_RESULT_CHARS);
     assert.equal(item.latestResult, item.latestAssistantText);
-    assert.equal(item.latestResult, "x".repeat(LATEST_RESULT_CHARS));
-    runtime.clearTimers(item);
+    const delivered = formatDeliveredResult(item.latestResult);
+    const match = delivered.text.match(/Complete report: (".*?")\./);
+    assert.ok(match);
+    const reportFile = JSON.parse(match[1]);
+    try {
+      assert.equal(readFileSync(reportFile, "utf8"), huge);
+      assert.match(item.latestResult, /No complete compact handoff fits/);
+    } finally {
+      rmSync(dirname(reportFile), { recursive: true });
+      runtime.clearTimers(item);
+    }
+  });
+
+  it("delivers a complete compact handoff from the final message without storing the narrative", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    const handoff = { outcome: "BLOCK", findings: "HIGH save.ts:1 overwrite loses data", validation: "reproduced", blockers: "fix overwrite", uncertainties: "race not checked" };
+    const report = `${"evidence\n".repeat(2_000)}\n\`\`\`report\n{"verdict":"BLOCK"}\n\`\`\`\n\`\`\`handoff\n${JSON.stringify(handoff)}\n\`\`\``;
+    runtime.handleEvent(item, {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: report }] },
+    }, { ...hooks(), extractAssistantText: (message) => extractAssistantText(message, Number.POSITIVE_INFINITY) });
+    const delivered = formatDeliveredResult(item.latestResult);
+    const match = delivered.text.match(/Complete report: (".*?")\./);
+    assert.ok(match);
+    const reportFile = JSON.parse(match[1]);
+    try {
+      for (const value of Object.values(handoff)) assert.ok(delivered.text.includes(value));
+      assert.match(delivered.text, /```report\n{"verdict":"BLOCK"}/);
+      assert.ok(item.latestResult.length <= LATEST_RESULT_CHARS);
+      assert.equal(readFileSync(reportFile, "utf8"), report);
+    } finally {
+      rmSync(dirname(reportFile), { recursive: true });
+      runtime.clearTimers(item);
+    }
+  });
+
+  it("captures schema metadata from the original even when no schema fence fits delivery", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    const schema = JSON.stringify({ type: "object", properties: { findings: { type: "string" } }, required: ["findings"] });
+    const findings = "finding ".repeat(3_000);
+    const report = `\`\`\`report\n${JSON.stringify({ findings })}\n\`\`\``;
+    const capture: { evaluation?: ReportValidation } = {};
+    runtime.handleEvent(item, {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: report }] },
+    }, {
+      ...hooks(),
+      extractAssistantText: (message) => extractAssistantText(message, Number.POSITIVE_INFINITY),
+      onCompletedAssistantText: (_worker, text) => { capture.evaluation = evaluateSettledReport(text, schema); },
+    });
+    const match = item.latestResult.match(/Complete report: (".*?")\./);
+    assert.ok(match);
+    const reportFile = JSON.parse(match[1]);
+    try {
+      assert.equal(capture.evaluation?.status, "ok");
+      assert.deepEqual(capture.evaluation?.parsed, { findings });
+      assert.ok(item.latestResult.length <= LATEST_RESULT_CHARS);
+      assert.equal(readFileSync(reportFile, "utf8"), report);
+    } finally {
+      rmSync(dirname(reportFile), { recursive: true });
+      runtime.clearTimers(item);
+    }
   });
 
   it("keeps a stream-delta tail when the final message_end is stubbed", () => {

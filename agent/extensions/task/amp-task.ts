@@ -50,7 +50,7 @@ import {
   extractAssistantThinking,
   renderedCardCharCount,
 } from "./runtime/text-bounds.ts";
-import { formatSettledResult } from "./runtime/worker-status.ts";
+import { formatDeliveredResult, HANDOFF_INSTRUCTION } from "./runtime/report-delivery.ts";
 import {
   padStartToWidth,
   safeTruncateToWidth,
@@ -844,9 +844,7 @@ export default function (pi: ExtensionAPI) {
             .filter(Boolean)
             .join("\n\n");
           if (systemPrompt) args.push("--system-prompt", systemPrompt);
-          if (shared.appendSystemPrompt) {
-            args.push("--append-system-prompt", shared.appendSystemPrompt);
-          }
+          args.push("--append-system-prompt", [shared.appendSystemPrompt, HANDOFF_INSTRUCTION].filter(Boolean).join("\n\n"));
           args.push(params.prompt);
 
           let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -920,14 +918,14 @@ export default function (pi: ExtensionAPI) {
             return `no visible text (${typeLabel}${stop})`;
           };
           const takeCompletedAssistant = (message: unknown): string => {
-            const text = extractAssistantText(message);
+            const text = extractAssistantText(message, Number.POSITIVE_INFINITY);
             if (!text) {
               const diag = describeEmptyAssistant(message);
               if (diag) emptyAssistantDiag = diag;
             } else {
               emptyAssistantDiag = undefined;
             }
-            return text;
+            return formatDeliveredResult(text).text;
           };
           const takeStreamedAssistant = (message: unknown): string => {
             const text = extractAssistantText(message);
@@ -1178,7 +1176,7 @@ export default function (pi: ExtensionAPI) {
             attemptIndex > 0
               ? `[${def.name}] succeeded with fallback model ${modelLabel} after ${attemptIndex} failed attempt${attemptIndex === 1 ? "" : "s"}.\n\n${assistantText || "(no output)"}`
               : assistantText || "(no output)";
-          const report = formatSettledResult(rawReport).text;
+          const report = formatDeliveredResult(rawReport).text;
           return {
             content: [{ type: "text", text: report }],
             isError: false,
@@ -1188,7 +1186,7 @@ export default function (pi: ExtensionAPI) {
 
         const allFailed =
           !killReason && attemptFailures.length === attemptedModels.length;
-        const text = formatSettledResult(
+        const text = formatDeliveredResult(
           allFailed
             ? `[${def.name}] all model attempts failed:\n${attemptFailures.map((failure) => `- ${failure}`).join("\n")}`
             : `[${def.name}] stopped: ${killReason} (${turns} turns). Partial result:\n\n${finalAssistantText || "(no output)"}`,

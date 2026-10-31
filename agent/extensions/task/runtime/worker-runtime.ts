@@ -9,6 +9,7 @@
 import { ActivityLedger, type ActivityStatus } from "./activity-ledger.ts";
 import { JobRegistry } from "./job-registry.ts";
 import { killProcessTree } from "./process-tree-kill.ts";
+import { formatDeliveredResult } from "./report-delivery.ts";
 
 export const DEFAULT_MAX_LIVE_WORKERS = 5;
 export const TASK_CONCURRENCY_ENV = "PI_TASK_MAX_WORKERS";
@@ -33,8 +34,7 @@ export const RETRY_COMPACT_BUDGET_MS = 600_000;
 export const LATEST_RESULT_CHARS = 12_000;
 
 function storeLatestText(text: string): string {
-  if (text.length <= LATEST_RESULT_CHARS) return text;
-  return text.slice(text.length - LATEST_RESULT_CHARS);
+  return formatDeliveredResult(text).text;
 }
 
 function appendLatestText(current: string, next: string): string {
@@ -162,6 +162,7 @@ export interface WorkerRuntimeEventHooks<TWorker extends RuntimeEventWorker> {
   normalizeToolName(name: unknown): string;
   summarizeToolArgs(args: unknown): string;
   extractAssistantText(message: object): string;
+  onCompletedAssistantText?(worker: TWorker, text: string): void;
   shouldRetryFallback(worker: TWorker): boolean;
   retryFallback(worker: TWorker): Promise<RuntimeFallbackResult>;
   onSuccessfulSettlement?(worker: TWorker): void;
@@ -681,6 +682,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
             }
             const text = hooks.extractAssistantText(message);
             if (text) {
+              hooks.onCompletedAssistantText?.(worker, text);
               worker.latestAssistantText = storeLatestText(text);
               worker.latestResult = worker.latestAssistantText;
             }

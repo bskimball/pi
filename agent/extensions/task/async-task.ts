@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { HANDOFF_INSTRUCTION } from "./runtime/report-delivery.ts";
 import { childToolArgs } from "./runtime/child-process.ts";
 import { Type } from "typebox";
 import {
@@ -174,7 +175,7 @@ import {
   WAIT_DEFAULT_TIMEOUT_SEC,
   SETTLED_RESULT_CHARS,
   formatCompactWorkerStatus,
-  formatSettledResult,
+  formatDeliveredResult,
   deadWorkerConnectionMessage,
   formatWaitHeartbeat,
   type WorkerStatusSnapshot,
@@ -269,7 +270,7 @@ function orchestrateInlineNudge(category: OrchestrateCategory, count: number): s
 
 /** Follow-up commands carried by every settlement notice, model-side and UI. */
 const SETTLED_HINT =
-  "Use task_wait for the full bounded report; task_send for follow-up; task_close to reap.";
+  "Use task_wait for the report and its full-file link if oversized; task_send for follow-up; task_close to reap.";
 /** Result preview budget in the settlement notice payload. */
 const NOTICE_RESULT_CAP = 400;
 
@@ -1430,10 +1431,15 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
     });
 
+  const capturedReports = new WeakMap<Worker, { generation: number; evaluation: ReturnType<typeof evaluateSettledReport> }>();
+
   const eventHooks: WorkerRuntimeEventHooks<Worker> = {
     normalizeToolName: (name) => cleanOneLine(name, 40),
     summarizeToolArgs: argsSummary,
-    extractAssistantText,
+    extractAssistantText: (message) => extractAssistantText(message, Number.POSITIVE_INFINITY),
+    onCompletedAssistantText: (worker, text) => {
+      capturedReports.set(worker, { generation: worker.generation, evaluation: evaluateSettledReport(text, worker.reportSchema) });
+    },
     shouldRetryFallback: shouldRetryWorkerFallback,
     retryFallback: retryModelFallback,
     onSuccessfulSettlement: noteCircuitSuccess,
@@ -1447,10 +1453,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const applySettledReport = (worker: Worker) => {
-    const evaluation = evaluateSettledReport(
-      worker.latestResult || worker.latestAssistantText || "",
-      worker.reportSchema,
-    );
+    const captured = capturedReports.get(worker);
+    const evaluation = captured?.generation === worker.generation
+      ? captured.evaluation
+      : evaluateSettledReport(worker.latestResult || worker.latestAssistantText || "", worker.reportSchema);
     worker.reportStatus = evaluation.status;
     worker.parsedReport = evaluation.parsed;
     worker.reportError = evaluation.error;
@@ -1739,6 +1745,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     if (systemPrompt) args.push("--system-prompt", systemPrompt);
     const appendParts = [
       shared.appendSystemPrompt,
+      HANDOFF_INSTRUCTION,
       !params.rebind && params.reportSchema?.trim()
         ? reportInstruction(params.reportSchema)
         : undefined,
@@ -2575,7 +2582,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         digest.push(
           `step ${i + 1} ${ok ? "ok" : "failed"} ${step.agent} · ${elapsed} · ${reportLine}`,
         );
-        const bound = formatSettledResult(snapshot.resultText,
+        const bound = formatDeliveredResult(snapshot.resultText,
           worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
         lastReport = bound.text;
         prevText = boundText(bound.text, SETTLED_RESULT_CHARS, Number.POSITIVE_INFINITY).text;
@@ -2589,8 +2596,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         }
       }
 
-      const assembled = assembleChainDigest(digest, lastReport || "(empty)");
-      return textResult(assembled.text, failed, { sessionFiles });
+      const delivered = formatDeliveredResult(
+        assembleChainDigest(digest, lastReport || "(empty)", Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY).text,
+      );
+      return textResult(delivered.text, failed, { sessionFiles });
     },
   });
 
@@ -3169,7 +3178,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     name: "task_wait",
     label: "Task Wait",
     description:
-      `Wait until the worker's current generation settles (agent_settled). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; the full bounded report is returned only on settlement. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
+      `Wait until the worker's current generation settles (agent_settled). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; an intact worker-authored compact handoff is returned on settlement, with a path to the complete report. Read that file with read (offset/limit) for supporting detail. Missing or oversized handoffs fall back to full-file retrieval without substituting an excerpt. Reports remain retrievable after task_close. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
     promptSnippet:
       "Wait for an async RPC worker generation to settle; agent-aware default; timeout is a heartbeat, not a poll cue.",
     parameters: Type.Object({
@@ -3196,13 +3205,6 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true);
       }
-      if (worker.closed || worker.lifecycle === "closed") {
-        return textResult(
-          `${id} is closed.\n\n${formatWorkerStatus(worker)}`,
-          true,
-        );
-      }
-
       const targetGen = params.generation ?? worker.generation;
       if (targetGen !== worker.generation) {
         return textResult(
@@ -3212,10 +3214,10 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         );
       }
       const alreadySettled =
-        (worker.lifecycle === "settled" || worker.lifecycle === "failed") &&
+        (worker.lifecycle === "settled" || worker.lifecycle === "failed" || worker.closed || worker.lifecycle === "closed") &&
         worker.generation === targetGen;
       if (alreadySettled) {
-        const bound = formatSettledResult(
+        const bound = formatDeliveredResult(
           worker.latestResult || worker.latestAssistantText,
           worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined,
         );
@@ -3366,7 +3368,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         };
       }
 
-      const bound = formatSettledResult(snapshot.resultText,
+      const bound = formatDeliveredResult(snapshot.resultText,
         worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
       return textResult(
         [

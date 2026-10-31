@@ -1,6 +1,9 @@
 // Compact model-facing worker status. UI cards keep their own richer
 // WorkerView; these strings are what re-enter the lead context.
 
+export { formatDeliveredResult } from "./report-delivery.ts";
+import { SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES } from "./report-delivery.ts";
+export { SETTLED_RESULT_CHARS, SETTLED_RESULT_LINES };
 import {
   boundText,
   cleanOneLine,
@@ -10,8 +13,6 @@ import { isLiveLifecycle, type WorkerLifecycle } from "./worker-runtime.ts";
 import { WAIT_DEFAULT_TIMEOUT_SEC } from "./wait-policy.ts";
 
 export { WAIT_DEFAULT_TIMEOUT_SEC };
-export const SETTLED_RESULT_CHARS = 12_000;
-export const SETTLED_RESULT_LINES = 120;
 
 const MISSION_CAP = 140;
 const ACTIVITY_CAP = 120;
@@ -117,7 +118,7 @@ function settledBody(snapshot: WorkerStatusSnapshot): string[] {
   );
   return [
     ...waitingUiLines(snapshot),
-    `--- result (${bound.truncated ? "truncated tail; task_wait returns the full bounded report" : "full"}) ---`,
+    `--- result (${bound.truncated ? "truncated tail; task_wait returns an intact compact handoff or a full-file link" : "full"}) ---`,
     bound.text || "(empty)",
   ];
 }
