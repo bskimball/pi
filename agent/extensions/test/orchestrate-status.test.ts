@@ -10,8 +10,9 @@ import { registerModes } from "../prompt-commands/modes.ts";
 import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-commands/hydra/usage.ts";
 import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
 import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
-import { parseCredentialsResponse, quotaMultiplierForModel } from "../prompt-commands/hydra/quota-sync.ts";
+import { parseCredentialsResponse, quotaMultiplierForModel, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
 import { rankModelsForHydra } from "../prompt-commands/hydra/scorer.ts";
+import { resolveSubagentModelsAndThinking } from "../task/runtime/agent-discovery.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
@@ -730,6 +731,52 @@ test("non-Work modes scope project-context Work crew routing to Work mode", () =
   assert.match(WORK_SYSTEM_PROMPT, /researcher \(Oscar\)/);
 });
 
+test("Hydra actively reads Claude subscription usage and retains known quota when probing fails", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-hydra-quota-"));
+  const path = join(dir, "quota-snapshot.json");
+  const configPath = join(dir, "hydra.json");
+  writeFileSync(configPath, JSON.stringify({ cpaManagementKey: "fixture-key", cpaBaseUrl: "http://quota.test" }));
+  let utilization = 100;
+  let upstreamStatus = 200;
+  let probes = 0;
+  const fetchImpl: typeof fetch = async (url, init) => {
+    if (String(url).endsWith("/credentials")) {
+      return Response.json({ files: [{ provider: "claude", auth_index: "fixture-account", disabled: false, cooldowns: [], quota: { signals: upstreamStatus === 403 ? { stale: { remaining_percent: 80 } } : {} } }] });
+    }
+    assert.equal(String(url), "http://quota.test/v8/management/requests/api-call");
+    const request = JSON.parse(String(init?.body));
+    assert.equal(request.auth_index, "fixture-account");
+    assert.equal(request.method, "GET");
+    assert.equal(request.url, "https://api.anthropic.com/api/oauth/usage");
+    assert.equal(request.header.Authorization, "Bearer $TOKEN$");
+    probes++;
+    return Response.json({ status_code: upstreamStatus, body: JSON.stringify({
+      five_hour: { utilization, resets_at: "2026-10-31T21:39:59Z" },
+      seven_day: { utilization: 74, resets_at: "2026-11-01T19:59:59Z" },
+      seven_day_sonnet: { utilization: 100 },
+    }) });
+  };
+  try {
+    const exhausted = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(probes, 1, "empty passive signals require an active usage probe");
+    assert.equal(exhausted.snapshot.providers.anthropic?.remainingPercent, 0);
+    for (const provider of ["claude-bridge", "local-proxy"]) {
+      assert.equal(quotaMultiplierForModel(provider, "claude-opus-5-5", "max", new Set(), readQuotaSnapshot(path)).multiplier, 0);
+    }
+    upstreamStatus = 403;
+    const unavailable = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(unavailable.snapshot.providers.anthropic?.remainingPercent, 0, "probe failure must not turn known exhaustion into healthy unknown quota");
+    assert.match(unavailable.note, /Claude.*unavailable/i);
+    upstreamStatus = 200;
+    utilization = 20;
+    const recovered = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(recovered.snapshot.providers.anthropic?.remainingPercent, 26, "shared weekly limit binds; Sonnet-only limits must not disable all Claude models");
+    utilization = 99;
+    const nearlyEmpty = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(nearlyEmpty.snapshot.providers.anthropic?.remainingPercent, 1, "OAuth utilization is percent, not a fraction");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("Hydra stats scorer ranks AA models, respects quota/circuit health, and switches or holds cache-sticky models via /mode hydra", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-hydra-"));
   const saved = {
@@ -1315,6 +1362,41 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1, google: 1 }, "combines independent ledgers and excludes expired calls");
     await commands.mode("hydra status", ctx);
     assert.match(notices.at(-1) ?? "", /24h calls:/);
+
+    // A warm turn without a Jev signal still refreshes stale quota before deciding
+    // to hold its current model; workers consume the same refreshed snapshot.
+    for (const h of handlers.before_agent_start ?? []) await h({ systemPromptOptions: {} }, ctx);
+    const realNow = Date.now;
+    const realFetch = globalThis.fetch;
+    let quotaProbes = 0;
+    try {
+      Date.now = () => now + 11 * 60_000;
+      writeFileSync(join(dir, "harness", "hydra.json"), JSON.stringify({ cpaManagementKey: "fixture-key", cpaBaseUrl: "http://quota.test" }));
+      globalThis.fetch = async (url) => {
+        if (String(url).endsWith("/credentials")) return Response.json({ files: [{ provider: "claude", auth_index: "fixture", quota: { signals: {} } }] });
+        quotaProbes++;
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return Response.json({ status_code: 200, body: JSON.stringify({ five_hour: { utilization: 100 } }) });
+      };
+      ctx.model = catalogModels.find(m => m.provider === "claude-bridge")!;
+      for (const h of handlers.before_agent_start ?? []) await h({ systemPromptOptions: {} }, ctx);
+      assert.equal(quotaProbes, 1, "routing awaits active quota refresh even after startup");
+      assert.notEqual(ctx.model.provider, "claude-bridge", "warm cache cannot retain an exhausted Claude model");
+      const workerDef: any = { name: "oracle", model: "claude-bridge/claude-opus-5-5", fallbackModels: ["local-proxy/claude-haiku-5-5", "openai/gpt-6-astra"] };
+      const healthyWorker = resolveSubagentModelsAndThinking({ def: workerDef, ctx, emitEvent: pi.events.emit });
+      assert.ok(healthyWorker.attempts.length > 0);
+      assert.equal(healthyWorker.attempts.some(key => key?.includes("claude")), false, "neither ranking nor static fallbacks may reintroduce exhausted Claude");
+      const onlyClaude = resolveSubagentModelsAndThinking({
+        def: { ...workerDef, fallbackModels: [] },
+        ctx: { ...ctx, modelRegistry: { getAvailable: () => catalogModels.filter(model => model.provider === "claude-bridge") } },
+        emitEvent: pi.events.emit,
+      });
+      assert.deepEqual(onlyClaude.attempts, [], "an exhausted pool must not fall back to an exhausted static primary");
+      assert.match(onlyClaude.error ?? "", /no healthy model/);
+    } finally {
+      Date.now = realNow;
+      globalThis.fetch = realFetch;
+    }
 
     await commands.mode("apex", ctx);
     for (const h of handlers.message_end ?? []) await h(response("openai", "gpt-6-astra"), ctx);

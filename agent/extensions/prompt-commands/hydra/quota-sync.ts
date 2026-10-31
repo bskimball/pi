@@ -2,8 +2,8 @@
 //
 // Reads:
 // 1. Persisted model circuit breakers (`agent/harness/model-circuits.json`)
-// 2. Cached or live CLIProxyAPI `/v8/management/credentials` status & quota
-//    snapshot (`agent/harness/quota-snapshot.json`) when a management key is
+// 2. Cached or live CLIProxyAPI credentials status plus active Claude OAuth
+//    usage (`agent/harness/quota-snapshot.json`) when a management key is
 //    available via `CPA_MANAGEMENT_KEY` or `agent/harness/hydra.json`.
 // Never exposes secrets or blocks turns when the management API is unconfigured.
 
@@ -230,7 +230,56 @@ export async function syncQuotaSnapshot(options?: {
       throw new Error(`HTTP ${res.status}`);
     }
     const body = await res.json();
-    const providers = parseCredentialsResponse(body);
+    const files = Array.isArray(body?.files) ? body.files : [];
+    let claudeProbeFailed = false;
+    let claudeProbeSucceeded = false;
+    // /credentials only captures usage from requests sent through CPA. The
+    // Claude bridge bypasses it, so ask the subscription endpoint via CPA's
+    // server-side token substitution rather than reading OAuth credentials.
+    const enrichedFiles = await Promise.all(files.map(async (rec: Record<string, unknown>) => {
+      if (!rec || typeof rec !== "object") return rec;
+      const provider = String(rec.quota_provider ?? rec.quotaProvider ?? rec.provider ?? rec.type ?? "");
+      if (normalizeProviderFamily(provider) !== "anthropic" || rec.disabled === true || rec.unavailable === true ||
+        (Array.isArray(rec.cooldowns) && rec.cooldowns.length > 0)) return rec;
+      try {
+        if (typeof rec.auth_index !== "string" || !rec.auth_index) throw new Error("Missing auth index");
+        const probe = await fetchFn(`${baseUrl}/v8/management/requests/api-call`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            auth_index: rec.auth_index,
+            method: "GET",
+            url: "https://api.anthropic.com/api/oauth/usage",
+            header: {
+              Authorization: "Bearer $TOKEN$",
+              "anthropic-beta": "oauth-2025-04-20",
+              Accept: "application/json",
+              "User-Agent": "claude-code/2.1.0",
+            },
+          }),
+        });
+        if (!probe.ok) throw new Error(`HTTP ${probe.status}`);
+        const result = await probe.json();
+        if (result.status_code !== 200) throw new Error(`Upstream HTTP ${result.status_code}`);
+        const usage = JSON.parse(result.body);
+        // OAuth usage is percent used, unlike the fractional response headers.
+        // Only shared windows belong to this family-level eligibility check.
+        const used = [usage?.five_hour?.utilization, usage?.seven_day?.utilization]
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+        if (used.length === 0) throw new Error("Missing usage windows");
+        claudeProbeSucceeded = true;
+        return { ...rec, remaining_percent: Math.max(0, Math.min(100, 100 - Math.max(...used))) };
+      } catch {
+        claudeProbeFailed = true;
+        return rec;
+      }
+    }));
+    const providers = parseCredentialsResponse({ files: enrichedFiles });
+    const previousClaude = readQuotaSnapshot(path).providers.anthropic;
+    if (claudeProbeFailed && !claudeProbeSucceeded && providers.anthropic && previousClaude?.remainingPercent != null) {
+      providers.anthropic.remainingPercent = Math.min(providers.anthropic.remainingPercent ?? 100, previousClaude.remainingPercent);
+    }
     const snapshot: QuotaSnapshot = {
       schema: 1,
       updatedAt: Date.now(),
@@ -240,7 +289,7 @@ export async function syncQuotaSnapshot(options?: {
     saveQuotaSnapshot(snapshot, path);
     return {
       snapshot,
-      note: `synced ${Object.keys(providers).length} provider family quota state(s) from ${baseUrl}`,
+      note: `synced ${Object.keys(providers).length} provider family quota state(s) from ${baseUrl}${claudeProbeFailed ? "; Claude usage probe unavailable (retaining known quota where available)" : ""}`,
     };
   } finally {
     clearTimeout(timer);

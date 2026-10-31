@@ -84,10 +84,16 @@ export function resolveSubagentModelsAndThinking(options: {
       agent: string;
       ctx: unknown;
       models?: string[];
+      fallbackModels: string[];
       thinking?: string;
       scope?: string;
       scopeExhausted?: boolean;
-    } = { agent: def.name, ctx };
+    } = {
+      agent: def.name, ctx,
+      fallbackModels: modelAttempts(def, undefined, allowFallback).filter(
+        (m): m is string => typeof m === "string" && m.length > 0,
+      ),
+    };
     try {
       emitEvent("pi:hydra:subagent-route", req);
     } catch {
@@ -101,9 +107,7 @@ export function resolveSubagentModelsAndThinking(options: {
       // instead of spawning an out-of-scope (or default) model.
       const inScope = (m: string) => modelInHydraScope(m, scope);
       const hydraModels = Array.isArray(req.models) ? req.models.filter(inScope) : [];
-      const staticAttempts = modelAttempts(def, undefined, allowFallback).filter(
-        (m): m is string => typeof m === "string" && m.length > 0 && inScope(m),
-      );
+      const staticAttempts = req.fallbackModels.filter(inScope);
       const merged = allowFallback
         ? [...new Set([...hydraModels.slice(0, 3), ...staticAttempts])]
         : hydraModels.length > 0
@@ -121,16 +125,14 @@ export function resolveSubagentModelsAndThinking(options: {
         thinking: hydraModels.length > 0 ? req.thinking ?? fallbackThinking : fallbackThinking,
       };
     }
-    if (Array.isArray(req.models) && req.models.length > 0) {
-      const staticAttempts = modelAttempts(def, undefined, allowFallback).filter(
-        (m): m is string => typeof m === "string" && m.length > 0,
-      );
+    if (Array.isArray(req.models)) {
       const merged = allowFallback
-        ? [...new Set([...req.models.slice(0, 3), ...staticAttempts])]
-        : [req.models[0]!];
+        ? [...new Set([...req.models.slice(0, 3), ...req.fallbackModels])]
+        : (req.models.length > 0 ? req.models : req.fallbackModels).slice(0, 1);
       return {
-        attempts: merged.length > 0 ? merged : [undefined],
+        attempts: merged,
         thinking: req.thinking ?? fallbackThinking,
+        ...(merged.length === 0 ? { error: `Hydra has no healthy model for ${def.name}; restore quota or availability before retrying.` } : {}),
       };
     }
   }

@@ -5,7 +5,7 @@ import { MODES, hasCliFlag, isMode, readPreferences, restoreMode, savePreference
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
-import { QUOTA_STALE_MS, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
+import { QUOTA_STALE_MS, quotaMultiplierForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
 import { HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
 import { readUsageCounts, recordHydraUsage } from "./hydra/usage.ts";
 
@@ -181,6 +181,16 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       usage: readUsageCounts(),
     });
   }
+  let lastQuotaAttempt = 0;
+  async function refreshQuotaIfStale(): Promise<void> {
+    const now = Date.now();
+    const quota = readQuotaSnapshot();
+    const unknownClaude = quota.providers.anthropic?.remainingPercent === null;
+    if ((!unknownClaude && now - quota.updatedAt <= QUOTA_STALE_MS) || now - lastQuotaAttempt <= QUOTA_STALE_MS) return;
+    lastQuotaAttempt = now;
+    try { await syncQuotaSnapshot(); }
+    catch { /* Keep the last known snapshot when the management API is unavailable. */ }
+  }
   let hydraRouteChain: Promise<void> = Promise.resolve();
   let lastJevTurnSignal: HydraTurnSignalInput | undefined;
   let jevRoutedThisTurn = false;
@@ -199,6 +209,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   ): Promise<HydraRouteResult | undefined> {
     let outcome: HydraRouteResult | undefined;
     const run = async () => {
+      await refreshQuotaIfStale();
       if (signal) lastJevTurnSignal = signal;
       const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
       const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
@@ -213,7 +224,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         forceModelPick ||
         !cacheWarm ||
         !currentKey ||
-        !currentRanked?.meetsQuality ||
+        !currentRanked ||
+        (signal !== undefined && !currentRanked.meetsQuality) ||
         (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`) ||
         (winner.key !== currentKey &&
           signal !== undefined &&
@@ -531,6 +543,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return;
     }
     if (sub === "status") {
+      await refreshQuotaIfStale();
       const tier: ActiveHydraTier = activeHydra() ?? "high";
       const aaSnap = readAaCatalog();
       const quotaSnap = readQuotaSnapshot();
@@ -744,18 +757,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     publishPair(ctx);
     const startupHydra = activeHydra();
     if (startupHydra && !cliModelOverride) {
-      // Refresh stale AA or quota snapshots opportunistically in the background without blocking startup.
+      // AA metrics can refresh in the background; quota must be known before routing.
       const aaSnap = readAaCatalog();
       if (Date.now() - aaSnap.updatedAt > AA_STALE_MS) {
         syncAaCatalog().catch(() => undefined);
       }
-      const qSnap = readQuotaSnapshot();
-      if (Date.now() - qSnap.updatedAt > QUOTA_STALE_MS) {
-        syncQuotaSnapshot().catch(() => undefined);
-      }
-      if (fresh || !isSessionCacheWarm(ctx)) {
-        await routeWithHydra(ctx, startupHydra, undefined, true);
-      }
+      await routeWithHydra(ctx, startupHydra, undefined, fresh || !isSessionCacheWarm(ctx));
     }
   });
   pi.events.on?.("pi:jev:turn-signal", (payload: unknown) => {
@@ -804,6 +811,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       ctx?: ExtensionContext;
       signal?: HydraTurnSignalInput;
       models?: string[];
+      fallbackModels?: string[];
       thinking?: string;
       scope?: string;
       scopeExhausted?: boolean;
@@ -811,6 +819,14 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (!req.agent || !req.ctx) return;
     req.scope = state.hydraScope;
     const profile = subagentHydraProfile(req.agent, tier);
+    const quota = readQuotaSnapshot();
+    const circuits = readOpenCircuits();
+    req.fallbackModels = req.fallbackModels?.filter(key => {
+      const slash = key.indexOf("/");
+      const provider = slash < 0 ? "" : key.slice(0, slash);
+      const modelId = slash < 0 ? key : key.slice(slash + 1);
+      return quotaMultiplierForModel(provider, modelId, profile.tier, circuits, quota).multiplier > 0;
+    });
     const role = req.agent.toLowerCase();
     const effectiveSignal: HydraTurnSignalInput = req.signal ?? (
       role === "machinist" && lastJevTurnSignal && lastJevTurnSignal.domain !== "design"
@@ -860,7 +876,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("before_agent_start", async (event, ctx) => {
     await hydraRouteChain;
     const tier = activeHydra();
-    if (tier && ctx && !jevRoutedThisTurn && !isSessionCacheWarm(ctx)) {
+    if (tier && ctx && !jevRoutedThisTurn) {
       await routeWithHydra(ctx, tier, undefined, false);
     }
     jevRoutedThisTurn = false;
