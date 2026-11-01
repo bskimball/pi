@@ -5,13 +5,29 @@ import { MODES, hasCliFlag, isMode, readPreferences, restoreMode, savePreference
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
-import { QUOTA_STALE_MS, quotaMultiplierForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
+import { inferModelFamily, QUOTA_STALE_MS, quotaMultiplierForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
 import { HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
 import { readUsageCounts, recordHydraUsage } from "./hydra/usage.ts";
 
 const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
 const CACHE_TTL_MS = 30 * 60_000;
+/** Subscription-wide exhaustion (not transient per-request 429s, which Pi retries). */
+const SUBSCRIPTION_LIMIT_PATTERN = /quota (?:exceeded|exhausted)|session limit|usage limit|weekly limit|five_hour|seven_day/i;
+const DEFAULT_FAMILY_COOLDOWN_MS = 30 * 60_000;
+
+/** Parse a provider's "resets 5:40:00 PM" notice as the next local occurrence of that time. */
+function parseLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const match = /resets\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)/i.exec(message);
+  if (!match) return undefined;
+  const hour12 = Number(match[1]);
+  if (hour12 < 1 || hour12 > 12) return undefined;
+  const hour = (hour12 % 12) + (match[4]!.toUpperCase() === "PM" ? 12 : 0);
+  const reset = new Date(now);
+  reset.setHours(hour, Number(match[2]), Number(match[3] ?? 0), 0);
+  if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1);
+  return reset.getTime();
+}
 
 /**
  * Pi's builder appends project context and skills to a custom prompt, but its
@@ -152,6 +168,29 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (Date.now() - anchorTs > CACHE_TTL_MS) return false;
     return true;
   }
+  // Families whose subscription window the lead exhausted. claude-bridge bypasses
+  // CPA and the task circuit breaker only sees workers, so this is the lead's
+  // own record until the provider's reset time.
+  const familyCooldowns = new Map<string, number>();
+  let quotaRefreshForced = false;
+  // A manual /model pick holds for the user's next run instead of being re-routed.
+  let manualPin = false;
+  const familyCooling = (provider: string, modelId: string): boolean => {
+    const family = inferModelFamily(provider, modelId);
+    const until = familyCooldowns.get(family);
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    familyCooldowns.delete(family);
+    return false;
+  };
+  const openCircuitsFor = (keys: Iterable<string>): Set<string> => {
+    const open = readOpenCircuits();
+    for (const key of keys) {
+      const slash = key.indexOf("/");
+      if (slash > 0 && familyCooling(key.slice(0, slash), key.slice(slash + 1))) open.add(key);
+    }
+    return open;
+  };
   function rankForCurrentScope(
     ctx: ExtensionContext,
     tier: ActiveHydraTier,
@@ -166,7 +205,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     );
     const catalog = readAaCatalog().models;
     const quota = readQuotaSnapshot();
-    const openCircuits = readOpenCircuits();
+    const openCircuits = openCircuitsFor(models.map((m) => `${m.provider}/${m.id}`));
     const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
     return rankModelsForHydra({
       models,
@@ -186,7 +225,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     const now = Date.now();
     const quota = readQuotaSnapshot();
     const unknownClaude = quota.providers.anthropic?.remainingPercent === null;
-    if ((!unknownClaude && now - quota.updatedAt <= QUOTA_STALE_MS) || now - lastQuotaAttempt <= QUOTA_STALE_MS) return;
+    const forced = quotaRefreshForced;
+    quotaRefreshForced = false;
+    if (!forced && ((!unknownClaude && now - quota.updatedAt <= QUOTA_STALE_MS) || now - lastQuotaAttempt <= QUOTA_STALE_MS)) return;
     lastQuotaAttempt = now;
     try { await syncQuotaSnapshot(); }
     catch { /* Keep the last known snapshot when the management API is unavailable. */ }
@@ -211,6 +252,16 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     const run = async () => {
       await refreshQuotaIfStale();
       if (signal) lastJevTurnSignal = signal;
+      if (forceModelPick) manualPin = false;
+      if (manualPin && ctx.model) {
+        outcome = {
+          summary: `${ctx.model.provider}/${ctx.model.id} (${pi.getThinkingLevel()}, manual selection)`,
+          model: `${ctx.model.provider}/${ctx.model.id}`,
+          thinking: pi.getThinkingLevel(),
+          switchedModel: false,
+        };
+        return;
+      }
       const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
       const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
       const winner = ranked[0];
@@ -729,6 +780,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     lastTurnAt = 0;
     lastJevTurnSignal = undefined;
     jevRoutedThisTurn = false;
+    manualPin = false;
     const entries = ctx.sessionManager.getBranch();
     const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
     state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
@@ -820,7 +872,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     req.scope = state.hydraScope;
     const profile = subagentHydraProfile(req.agent, tier);
     const quota = readQuotaSnapshot();
-    const circuits = readOpenCircuits();
+    const circuits = openCircuitsFor(req.fallbackModels ?? []);
     req.fallbackModels = req.fallbackModels?.filter(key => {
       const slash = key.indexOf("/");
       const provider = slash < 0 ? "" : key.slice(0, slash);
@@ -829,8 +881,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     });
     const role = req.agent.toLowerCase();
     const effectiveSignal: HydraTurnSignalInput = req.signal ?? (
-      role === "machinist" && lastJevTurnSignal && lastJevTurnSignal.domain !== "design"
-        ? lastJevTurnSignal
+      // Only engineering turns inform machinist; short approvals classified as
+      // conversation must not demote an implementation worker below its floor.
+      role === "machinist" && (lastJevTurnSignal?.domain === "coding" || lastJevTurnSignal?.domain === "reasoning")
+        ? { ...lastJevTurnSignal, domain: "coding", reasoningDepth: Math.max(profile.signal.reasoningDepth, lastJevTurnSignal.reasoningDepth) }
         : role === "artisan" && lastJevTurnSignal?.domain === "design"
           ? { ...lastJevTurnSignal, reasoningDepth: Math.max(profile.signal.reasoningDepth, lastJevTurnSignal.reasoningDepth) }
           : profile.signal
@@ -848,8 +902,22 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     req.models = selected.map((r) => r.key);
     req.thinking = selected[0]!.recommendedThinking;
   });
+  pi.on("message_end", (event) => {
+    const message = event.message;
+    if (message.role !== "assistant") return;
+    if (message.stopReason === "error" && SUBSCRIPTION_LIMIT_PATTERN.test(message.errorMessage ?? "")) {
+      const now = Date.now();
+      const until = parseLimitResetAt(message.errorMessage ?? "", now) ?? now + DEFAULT_FAMILY_COOLDOWN_MS;
+      familyCooldowns.set(inferModelFamily(message.provider, message.model), until);
+      quotaRefreshForced = true;
+    } else if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+      familyCooldowns.delete(inferModelFamily(message.provider, message.model));
+    }
+  });
+  pi.on("agent_end", () => { manualPin = false; });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
+    if (activeHydra()) manualPin = true;
     modelBlocked = false;
     const choice = { provider: event.model.provider, modelId: event.model.id, thinking: pi.getThinkingLevel() };
     state.models[state.mode] = choice;

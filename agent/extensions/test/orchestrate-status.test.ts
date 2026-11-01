@@ -1211,6 +1211,50 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(oracleRoute.models?.[0], "claude-bridge/claude-opus-5-5", "oracle routes to the strongest reasoning model without a subscription-price penalty");
     assert.equal(oracleRoute.thinking, "high");
 
+    // Machinist keeps its coding floor after an "approved"-style conversation turn.
+    const conversationPayload: any = { reasoningDepth: 1.0, depthConfidence: 0.9, domain: "conversation", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", conversationPayload);
+    await conversationPayload.promise;
+    const machinistAfterConversation: any = { agent: "machinist", ctx };
+    pi.events.emit("pi:hydra:subagent-route", machinistAfterConversation);
+    assert.notEqual(machinistAfterConversation.thinking, "low", "Machinist does not inherit a shallow conversation signal");
+    assert.equal(machinistAfterConversation.models?.includes("local-proxy/claude-haiku-5-5"), false, "Machinist never routes to a lightweight model after a conversation turn");
+
+    // A lead subscription-limit error cools the whole model family until its reset time,
+    // for both lead routing and subagent routing.
+    const limitError = { role: "assistant", provider: "claude-bridge", model: "claude-opus-5-5", stopReason: "error", errorMessage: "Claude quota exceeded — rate limit (five_hour) — resets 5:40:00 PM: You've hit your session limit", usage: { totalTokens: 0 } };
+    // The lead-only handler registers last; the usage recorder is exercised elsewhere.
+    const leadMessageEnd = handlers.message_end.at(-1);
+    await leadMessageEnd({ message: limitError }, ctx);
+    const codingAfterLimit: any = { reasoningDepth: 3.2, depthConfidence: 0.9, domain: "coding", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", codingAfterLimit);
+    await codingAfterLimit.promise;
+    assert.doesNotMatch(ctx.model.id, /claude/, "lead leaves the exhausted Claude family");
+    const oracleAfterLimit: any = { agent: "oracle", ctx, fallbackModels: ["claude-bridge/claude-opus-5-5", "openai/gpt-6-astra"] };
+    pi.events.emit("pi:hydra:subagent-route", oracleAfterLimit);
+    assert.equal(oracleAfterLimit.models?.some((key: string) => key.includes("claude")), false, "subagents skip the exhausted family");
+    assert.deepEqual(oracleAfterLimit.fallbackModels, ["openai/gpt-6-astra"], "static fallbacks skip the exhausted family");
+    // A later successful reply from that family ends the cooldown.
+    const familyRecovered = { ...limitError, stopReason: "stop", errorMessage: undefined, usage: { totalTokens: 10 } };
+    await leadMessageEnd({ message: familyRecovered }, ctx);
+    const oracleAfterRecovery: any = { agent: "oracle", ctx };
+    pi.events.emit("pi:hydra:subagent-route", oracleAfterRecovery);
+    assert.equal(oracleAfterRecovery.models?.[0], "claude-bridge/claude-opus-5-5", "recovered family is eligible again");
+
+    // A manual /model pick holds for the user's next run, then Hydra routes again.
+    ctx.model = solModel;
+    for (const h of handlers.model_select ?? []) await h({ model: solModel, previousModel: undefined, source: "set" }, ctx);
+    const pinnedPayload: any = { reasoningDepth: 3.8, depthConfidence: 0.9, domain: "reasoning", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", pinnedPayload);
+    await pinnedPayload.promise;
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "manual selection is not re-routed on the next run");
+    assert.equal(pinnedPayload.switchedModel, false);
+    for (const h of handlers.agent_end ?? []) await h({ messages: [] }, ctx);
+    const afterPinPayload: any = { reasoningDepth: 3.8, depthConfidence: 0.9, domain: "reasoning", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", afterPinPayload);
+    await afterPinPayload.promise;
+    assert.notEqual(ctx.model.id, "gpt-6.1-sol", "Hydra resumes routing after the pinned run ends");
+
     // Delayed setModel via pi:jev:turn-signal must finish before payload.promise resolves.
     await commands.mode("hydra max", ctx);
     ctx.model = haikuModel; // haiku 5.5

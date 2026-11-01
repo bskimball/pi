@@ -422,6 +422,21 @@ describe("hydra turn signal", () => {
     assert.match(ctxText!, /Prior assistant context/);
     assert.match(ctxText!, /Persist PNG to disk/);
     assert.equal(extractRecentAssistantContext([]), undefined);
+
+    // "approved" after a background wake-up still sees the question asked before it,
+    // and provider quota errors never become the classified context.
+    const text = (t: string) => [{ type: "text", text: t }];
+    const woken = extractRecentAssistantContext([
+      { type: "message", message: { role: "user", content: text("continue") } },
+      { type: "message", message: { role: "assistant", stopReason: "stop", content: text("Awaiting your approval to install the VSIX and run M3.") } },
+      { type: "custom_message", customType: "async-task-settled", content: "3 async RPC workers settled" },
+      { type: "message", message: { role: "assistant", stopReason: "stop", content: text("Closed the three stale, settled workers.") } },
+      { type: "message", message: { role: "assistant", stopReason: "error", content: text("You've hit your session limit") } },
+      { type: "message", message: { role: "user", content: text("approved") } },
+    ]);
+    assert.match(woken!, /approval to install the VSIX/);
+    assert.match(woken!, /Closed the three stale/);
+    assert.doesNotMatch(woken!, /session limit/);
   });
 
   it("formats hydra advisory and renders hydra row in jev-suggestion receipt even when no skill or guard fires", () => {

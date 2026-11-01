@@ -107,22 +107,35 @@ export function parseHydraSignal(
 }
 
 /**
- * Extract bounded text from the most recent assistant message in the session branch
- * so short follow-up prompts ("implement both steps", "do option 2") carry the plan
- * or diagnosis they refer to when Jev classifies the turn.
+ * Extract bounded assistant text written since the user's previous message so short
+ * follow-up prompts ("implement both steps", "approved", "continue") carry the plan,
+ * question, or diagnosis they refer to when Jev classifies the turn. Failed or aborted
+ * replies (e.g. provider quota notices) are skipped, and replies to background wake-ups
+ * after the assistant's last answer are kept together with that answer.
  */
 export function extractRecentAssistantContext(
   entries: readonly unknown[] | undefined,
   maxChars = MAX_RECENT_ASSISTANT_CHARS,
 ): string | undefined {
   if (!Array.isArray(entries) || entries.length === 0 || maxChars <= 0) return undefined;
-  for (let i = entries.length - 1; i >= 0; i--) {
+  const segments: string[] = [];
+  let length = 0;
+  for (let i = entries.length - 1; i >= 0 && length < maxChars; i--) {
     const entry = entries[i] as {
       type?: unknown;
-      message?: { role?: unknown; content?: unknown };
+      message?: { role?: unknown; content?: unknown; stopReason?: unknown };
     } | undefined;
-    if (!entry || entry.type !== "message" || entry.message?.role !== "assistant") continue;
-    const content = entry.message.content;
+    if (!entry || entry.type !== "message") continue;
+    const role = entry.message?.role;
+    // A prior user message bounds the turn; skip a trailing one (the current request).
+    if (role === "user") {
+      if (segments.length > 0) break;
+      continue;
+    }
+    if (role !== "assistant") continue;
+    const stopReason = entry.message?.stopReason;
+    if (stopReason === "error" || stopReason === "aborted") continue;
+    const content = entry.message?.content;
     if (!Array.isArray(content)) continue;
     const textParts: string[] = [];
     for (const block of content) {
@@ -131,15 +144,17 @@ export function extractRecentAssistantContext(
         if (typeof text === "string" && text.trim()) textParts.push(text.trim());
       }
     }
-    if (textParts.length === 0) continue;
     const combined = textParts.join("\n\n").trim();
     if (!combined) continue;
-    const sliced = combined.length > maxChars
-      ? `…${combined.slice(combined.length - (maxChars - 1))}`
-      : combined;
-    return `Prior assistant context (the turn immediately preceding this user request):\n${sliced}`;
+    segments.unshift(combined);
+    length += combined.length + 2;
   }
-  return undefined;
+  if (segments.length === 0) return undefined;
+  const combined = segments.join("\n\n");
+  const sliced = combined.length > maxChars
+    ? `…${combined.slice(combined.length - (maxChars - 1))}`
+    : combined;
+  return `Prior assistant context (the turn immediately preceding this user request):\n${sliced}`;
 }
 
 export function formatHydraAdvisory(

@@ -417,12 +417,21 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     const toolPhase = worker.ledger.hasActiveTools();
     worker.phase = toolPhase ? "tool" : "model";
     const budgetMs = toolPhase ? TOOL_IDLE_MS : MODEL_IDLE_MS;
-    worker.idleTimer = setTimeout(() => {
+    // Streaming deltas skip armIdle to stay cheap but still touch lastEventAt,
+    // so the budget measures silence rather than total turn length.
+    const fire = () => {
+      const quietMs = Date.now() - (worker.lastEventAt ?? 0);
+      if (quietMs < budgetMs) {
+        worker.idleTimer = setTimeout(fire, budgetMs - quietMs);
+        worker.idleTimer.unref?.();
+        return;
+      }
       this.forceKill(
         worker,
         `idle for ${budgetMs / 1000}s${toolPhase ? " during tool execution" : ""}`,
       );
-    }, budgetMs);
+    };
+    worker.idleTimer = setTimeout(fire, budgetMs);
     worker.idleTimer.unref?.();
   }
 
