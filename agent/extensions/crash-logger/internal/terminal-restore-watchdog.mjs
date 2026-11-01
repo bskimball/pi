@@ -435,6 +435,7 @@ let exitObservation;
 let parentGoneHandled = false;
 let parentGonePending = false;
 let exitObservationTimer;
+const EXIT_OBSERVATION_GRACE_MS = 750;
 const exitWatcher = startWindowsExitWatcher(pid, (observation) => {
   exitObservation = observation;
   if (exitObservationTimer) clearTimeout(exitObservationTimer);
@@ -445,7 +446,7 @@ function observeParentGone() {
   if (parentGoneHandled || parentGonePending) return;
   parentGonePending = true;
   if (process.platform === "win32" && exitWatcher && !exitObservation) {
-    exitObservationTimer = setTimeout(onParentGone, 750);
+    exitObservationTimer = setTimeout(onParentGone, EXIT_OBSERVATION_GRACE_MS);
     exitObservationTimer.unref();
     return;
   }
@@ -467,7 +468,9 @@ function onParentGone() {
     const message = [
       `parent pid=${pid} disappeared uncleanly; restored terminal`,
       `detector: pid=${process.pid} ppid=${process.ppid} platform=${process.platform} node=${process.version}`,
-      formatExitObservation(exitObservation),
+      formatExitObservation(exitObservation ?? (exitWatcher
+        ? { source: "windows-process-handle", error: `watcher did not report within ${EXIT_OBSERVATION_GRACE_MS}ms` }
+        : undefined)),
       lastPhaseLine,
       ...formatSnapshot(snapshot, detectedAt),
       ...windowsPostmortem(pid, snapshot?.ppid, detectedAt),

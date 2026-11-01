@@ -200,8 +200,10 @@ test("detached durable queue recovers after its runner dies mid-check", async ()
   await f.call({ operation: "review", task: "demo", expectedHead: candidate, verdict: "pass", evidence: "crash recovery test review" });
   await enqueue(f.root, "session-one", "demo", candidate, true);
   startQueue(f.root);
+  // Hang detector only: each stage spawns Node and git, which can exceed 45s
+  // while the full suite runs files in parallel on Windows.
   const until = async (condition: () => boolean, label: string) => {
-    const deadline = Date.now() + 45000;
+    const deadline = Date.now() + 120000;
     while (!condition()) {
       if (Date.now() > deadline) {
         const log = join(queueDir(f.root), "runner.log");
