@@ -266,6 +266,28 @@ describe("breadth skill routing", () => {
       assert.deepEqual(resolveSkillSuggestions(decision, candidates, 0.82, 0.6, partial, asked).map(match => match.skill.name), ["ninjaone"]);
     }
   });
+
+  it("does not suggest breadth skills when Pass 1 Choice rejected or returned none_needed", () => {
+    const rejected = resolveSkillChoice(
+      choice({ choice: "autotask", confidence: 0.35, probabilities: { autotask: 0.4, none_needed: 0.35, m365: 0.25 } }),
+      candidates,
+      POLICY,
+    );
+    assert.equal(rejected.skill, null);
+    assert.deepEqual(resolveSkillSuggestions(rejected, candidates, 0.9, 0.6, relevance, asked), []);
+  });
+
+  it("keeps the gated Choice winner first even when a breadth Noul scores higher", () => {
+    const shippingWin = resolveSkillChoice(
+      choice({ choice: "m365", confidence: 0.8, probabilities: { m365: 0.7, autotask: 0.2, ninjaone: 0.1 } }),
+      candidates,
+      POLICY,
+    );
+    const highSecondary = { m365: noul(0.68), autotask: noul(0.85), ninjaone: noul(0.4) };
+    const matches = resolveSkillSuggestions(shippingWin, candidates, 0.85, 0.6, highSecondary, asked);
+    assert.deepEqual(matches.map(match => match.skill.name), ["m365", "autotask"]);
+    assert.equal(matches[0]?.probability, 0.7);
+  });
 });
 
 function noul(value: number): JevAnswer {

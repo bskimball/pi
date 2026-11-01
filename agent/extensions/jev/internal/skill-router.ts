@@ -74,7 +74,7 @@ export function buildSkillRelevanceQuestions(candidates: SkillCandidate[], answe
   for (const candidate of ranked.slice(0, MAX_BREADTH_SKILLS)) {
     questions[toOptionKey(candidate.name)] = {
       type: "noul",
-      instructions: `The ${candidate.name} skill is relevant to handling this request.`,
+      instructions: `Loading the ${candidate.name} skill is specifically needed to fulfill this request (not merely loosely related).`,
       criteria: { true: candidate.description },
     };
   }
@@ -91,16 +91,26 @@ export function resolveSkillSuggestions(
   relevance: Record<string, JevAnswer> | undefined,
   asked: Record<string, JevQuestion> | undefined,
 ): SuggestedSkill[] {
-  const fallback = decision.skill ? [{ skill: decision.skill, probability: decision.probability }] : [];
+  if (!decision.skill) return [];
+  const primary = decision.skill;
+  const fallback: SuggestedSkill[] = [{ skill: primary, probability: decision.probability }];
   if (breadth < breadthThreshold || !relevance || !asked) return fallback;
   const keys = Object.keys(asked);
   if (!keys.length || keys.some(key => relevance[key]?.type !== "noul" || !Number.isFinite((relevance[key] as { noul?: number }).noul))) return fallback;
-  const selected = candidates.filter(candidate => {
-    const key = toOptionKey(candidate.name);
-    return key in asked && relevance[key]?.type === "noul" && relevance[key].noul >= breadthThreshold;
-  }).map(skill => ({ skill, probability: (relevance[toOptionKey(skill.name)] as { noul: number }).noul }));
-  if (decision.skill && !selected.some(item => item.skill === decision.skill)) fallback.forEach(item => selected.push(item));
-  return selected.sort((a, b) => b.probability - a.probability || a.skill.name.localeCompare(b.skill.name));
+  const primaryKey = toOptionKey(primary.name);
+  const primaryNoul = primaryKey in asked && relevance[primaryKey]?.type === "noul"
+    ? (relevance[primaryKey] as { noul: number }).noul
+    : decision.probability;
+  const primaryProb = Math.max(decision.probability, primaryNoul);
+  const extras = candidates
+    .filter(candidate => {
+      if (candidate === primary) return false;
+      const key = toOptionKey(candidate.name);
+      return key in asked && relevance[key]?.type === "noul" && relevance[key].noul >= breadthThreshold;
+    })
+    .map(skill => ({ skill, probability: (relevance[toOptionKey(skill.name)] as { noul: number }).noul }))
+    .sort((a, b) => b.probability - a.probability || a.skill.name.localeCompare(b.skill.name));
+  return [{ skill: primary, probability: primaryProb }, ...extras];
 }
 
 export type SkillChoiceReason =

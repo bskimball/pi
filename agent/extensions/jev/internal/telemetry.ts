@@ -22,7 +22,7 @@ export interface TelemetryEvent {
   inputTokens?: number;
   outputTokens?: number;
   skill?: string;
-  /** Skill-router only: every suggested skill, highest probability first. `skill`/`probability` remain the primary match. */
+  /** Skill-router only: every suggested skill, primary Choice winner first, then breadth extras by probability. `skill`/`probability` remain the primary match. */
   skills?: Array<{ name: string; probability: number }>;
   /** Skill-router only: the `spans_multiple_skills` noul that gated the relevance pass. */
   breadth?: number;

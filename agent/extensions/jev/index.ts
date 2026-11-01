@@ -417,7 +417,7 @@ export default function (pi: ExtensionAPI): void {
       skillDecision = decision;
       let relevance: Record<string, JevAnswer> | undefined;
       let asked: Record<string, JevQuestion> | undefined;
-      if (breadth !== undefined && breadth >= config.skillRouter.breadthThreshold) {
+      if (decision.skill && breadth !== undefined && breadth >= config.skillRouter.breadthThreshold) {
         const remaining = config.skillRouter.deadlineMs - (Date.now() - firstStartedAt);
         if (remaining > 0 && !ctx.signal?.aborted) {
           asked = buildSkillRelevanceQuestions(candidates, result.answers.skill);
