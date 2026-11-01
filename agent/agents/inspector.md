@@ -23,7 +23,7 @@ Inside Apex, call `browser_tabs` first and use `browser_*` tools on matching sha
 
 Use the CDP endpoint the work order names. Two branches:
 
-**Named project endpoint.** If the brief names a project CDP port, `test:cdp`, `hal-cdp-test-ready`, or another ephemeral loopback port, connect with `agent-browser --cdp <port>` on that port. Do not use 29300 for that pass. Do not attach to production or authenticated user sessions unless the brief says so.
+**Named project endpoint.** If the brief names a project CDP port, `test:cdp`, `hal-cdp-test-ready`, or another ephemeral loopback port, connect with `agent-browser --cdp <port>` on that port. Do not use 29300 for that pass. Do not attach to production or authenticated user sessions unless the brief says so. If `agent-browser` cannot attach to an Electron endpoint, use the driver script the brief names (or a short Node script over `/json/list` and the page's `webSocketDebuggerUrl`) through `bash`; do not fall back to 29300 or the chrome-devtools MCP, which is bound to it. For a native window with no CDP port, call the `computer_use_*` window tools through `codemode`; target by the exact `pid` and `window_id` from `computer_use_list_windows`.
 
 **Default.** Otherwise attach to the dedicated authenticated debug Chrome on classic CDP port **29300**, profile `~/.pi/browser/chrome-profile`:
 
