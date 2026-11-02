@@ -558,7 +558,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       delete nextState.hydra;
       delete nextState.hydraScope;
     }
-    const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : nextState.models[mode];
+    // Hydra owns lead selection: keep the current (cache-warm) model and let the
+    // route below hold or replace it, instead of flashing a stale slot model.
+    const hydraOwnsLead = !usesPersistentSidekick(mode) && !!nextState.hydra && !!prevModel && !modelBlocked && !recoveryBlocked;
+    if (hydraOwnsLead) nextState.models[mode] = structuredClone(prevModel);
+    const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : hydraOwnsLead ? undefined : nextState.models[mode];
     let persisted = false;
     let rollback: (() => Promise<void>) | undefined;
     const prevBlocked = recoveryBlocked;

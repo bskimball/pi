@@ -18,8 +18,10 @@ const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve(
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
 
 test("reload refreshes the saved model once and preserves it when retrying a blocked mode", async (t) => {
+  // Utopia also covers the Hydra-owned switch: a blocked restore must still re-apply the saved lead.
+  for (const mode of ["apex", "utopia"] as const)
   for (const failure of ["lookup", "selection", "persistent", "exception", "refresh-error", "registry-error"] as const) {
-    await t.test(failure, async () => {
+    await t.test(`${mode} ${failure}`, async () => {
       const dir = mkdtempSync(join(tmpdir(), "pi-mode-reload-"));
       const savedEnv = Object.fromEntries([
         "PI_CODING_AGENT_DIR", "PI_SUBAGENT", "PI_BEHAVIOR_MODE", "PI_HYDRA_TIER", "PI_HYDRA_SCOPE",
@@ -28,7 +30,7 @@ test("reload refreshes the saved model once and preserves it when retrying a blo
       process.env.PI_CODING_AGENT_DIR = dir;
       delete process.env.PI_SUBAGENT;
       const choice = { provider: "openai", modelId: "saved-model", thinking: "high" };
-      const prefs = { ...initialPreferences(), models: { apex: choice } };
+      const prefs = { ...initialPreferences(), mode, models: { [mode]: choice }, ...(mode === "utopia" ? { hydra: "high" } : {}) };
       const prefsPath = join(dir, "mode-settings.json");
       writeFileSync(prefsPath, JSON.stringify(prefs));
       let ready = false;
@@ -85,14 +87,14 @@ test("reload refreshes the saved model once and preserves it when retrying a blo
           assert.match(notices.at(-1) ?? "", failure === "persistent" ? /openai\/saved-model/ : /credential store unavailable/);
           assert.equal(refreshes, failure === "exception" ? 0 : 1);
           ready = true;
-          await commands.mode("apex", ctx);
+          await commands.mode(mode, ctx);
         } else {
           assert.equal(refreshes, 1);
         }
         assert.equal(await emit("input"), undefined);
         assert.equal(ctx.model.id, "saved-model");
         assert.ok(selections.every(id => id === "openai/saved-model"), "never adopts the remaining model as the saved choice");
-        assert.deepEqual(JSON.parse(readFileSync(prefsPath, "utf8")).models.apex, choice);
+        assert.deepEqual(JSON.parse(readFileSync(prefsPath, "utf8")).models[mode], choice);
       } finally {
         clearParentCuaState();
         for (const [key, value] of Object.entries(savedEnv)) {
@@ -1726,6 +1728,20 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(process.env.PI_HYDRA_TIER, "high", "utopia automatically activates Hydra high by default");
     assert.equal(statuses.get("mode"), "Utopia \u00b7 +Sidekick");
     assert.equal(statuses.get("hydra"), "hydra:high");
+
+    // Re-entering Utopia keeps the current lead for Hydra instead of flashing the
+    // stale Utopia slot model saved on the way out.
+    const utopiaSlot = `${ctx.model.provider}/${ctx.model.id}`;
+    await commands.mode("apex", ctx);
+    ctx.model = solModel;
+    assert.notEqual(`${ctx.model.provider}/${ctx.model.id}`, utopiaSlot);
+    const modelSwitches: string[] = [];
+    const trackedSetModel = pi.setModel;
+    pi.setModel = async (m: any) => { modelSwitches.push(`${m.provider}/${m.id}`); return trackedSetModel(m); };
+    await commands.mode("utopia", ctx);
+    pi.setModel = trackedSetModel;
+    assert.equal(modelSwitches.includes(utopiaSlot), false, "switching into Hydra-owned Utopia does not apply the stale slot model");
+    assert.equal(`${ctx.model.provider}/${ctx.model.id}`, `${solModel.provider}/${solModel.id}`, "warm eligible lead is held across the switch");
   } finally {
     for (const [key, value] of Object.entries({
       PI_CODING_AGENT_DIR: saved.dir,
