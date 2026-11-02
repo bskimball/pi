@@ -1426,11 +1426,21 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.ok(["claude-opus-5-5", "gpt-6-astra"].includes(ctx.model.id), "complex coding (depth >= 2.85) runs on a frontier model even in standard tier");
     assert.equal(currentThinking, "high", "complex coding in standard tier escalates thinking to high");
 
-    // Subagent Hydra routing via pi:hydra:subagent-route selects fast models for inspector and frontier for oracle.
-    const inspectorRoute: any = { agent: "inspector", ctx };
+    // Subagent Hydra routing via pi:hydra:subagent-route selects fast models for inspector and frontier for oracle,
+    // and prefers native tool-calling providers over muse-code for inspector/stevedore when native models are available.
+    const inspectorWithMuseCtx = {
+      ...ctx,
+      modelRegistry: { getAvailable: () => [...catalogModels, ...contributorModels] },
+    };
+    const inspectorRoute: any = { agent: "inspector", ctx: inspectorWithMuseCtx };
     pi.events.emit("pi:hydra:subagent-route", inspectorRoute);
     assert.equal(inspectorRoute.models?.[0], "local-proxy/claude-haiku-5-5", "inspector routes to fast model under Hydra");
+    assert.equal(inspectorRoute.models?.some((key: string) => key.startsWith("muse-code/")), false, "inspector excludes muse-code when native tool-calling models are available");
     assert.equal(inspectorRoute.thinking, "low");
+
+    const stevedoreRoute: any = { agent: "stevedore", ctx: inspectorWithMuseCtx };
+    pi.events.emit("pi:hydra:subagent-route", stevedoreRoute);
+    assert.equal(stevedoreRoute.models?.some((key: string) => key.startsWith("muse-code/")), false, "stevedore excludes muse-code when native tool-calling models are available");
 
     const oracleRoute: any = { agent: "oracle", ctx };
     pi.events.emit("pi:hydra:subagent-route", oracleRoute);

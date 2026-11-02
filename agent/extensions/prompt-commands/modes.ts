@@ -1039,7 +1039,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return;
     }
     const qualityRanked = ranked.filter((r) => r.meetsQuality);
-    const selected = qualityRanked.length > 0 ? qualityRanked : ranked;
+    const baseSelected = qualityRanked.length > 0 ? qualityRanked : ranked;
+    const nativeSelected = profile.preferNativeTools
+      ? baseSelected.filter((r) => r.model.provider.toLowerCase() !== "muse-code")
+      : baseSelected;
+    const selected = nativeSelected.length > 0 ? nativeSelected : baseSelected;
     req.models = selected.map((r) => r.key);
     req.thinking = selected[0]!.recommendedThinking;
   });

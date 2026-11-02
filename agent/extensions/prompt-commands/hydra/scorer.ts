@@ -46,6 +46,7 @@ export function isReliableHydraSignal(signal?: HydraTurnSignalInput): signal is 
 export type SubagentHydraRole = {
   tier?: ActiveHydraTier;
   signal: HydraTurnSignalInput;
+  preferNativeTools?: boolean;
 };
 
 /**
@@ -54,7 +55,7 @@ export type SubagentHydraRole = {
 export function subagentHydraProfile(
   agentName: string,
   parentTier: ActiveHydraTier,
-): { tier: ActiveHydraTier; signal: HydraTurnSignalInput } {
+): { tier: ActiveHydraTier; signal: HydraTurnSignalInput; preferNativeTools?: boolean } {
   const name = agentName.toLowerCase();
   if (name === "oracle" || name === "advisor" || name === "strategist") {
     return {
@@ -102,10 +103,13 @@ export function subagentHydraProfile(
       signal: { reasoningDepth: 2.3, depthConfidence: 1, domain: "writing", domainConfidence: 1 },
     };
   }
-  // inspector, scout, stevedore, clerk, picasso, etc.: fast execution/verification
+  // inspector, scout, stevedore, clerk, picasso, etc.: fast execution/verification.
+  // Multi-turn browser/CLI verification and shipping roles prefer native tool-calling
+  // providers over Muse's prompt-injected JSON tool envelope.
   return {
     tier: "standard",
     signal: { reasoningDepth: 1.5, depthConfidence: 1, domain: "fast_edit", domainConfidence: 1 },
+    ...(name === "inspector" || name === "stevedore" ? { preferNativeTools: true } : {}),
   };
 }
 

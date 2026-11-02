@@ -176,16 +176,40 @@ export const FUSION_PREFACE = `# Fusion lead
 You are paired with one persistent sidekick (\`task_start\`, agent \`sidekick\`). Coherent bounded edits, narrow known-path lookups, and small subtle integration work may stay inline with the lead when a handoff would cost more than doing the work directly. For broad, mechanical, repetitive, multi-slice, tool-heavy, or slow work where separate context pays, write the owned todo list and dispatch a bounded sidekick unit. New delegated outcomes or path sets use \`task_start\`, which reuses the idle sidekick; \`task_send\` prompt is limited to one corrective pass for the same unit. A second sidekick is only a disjoint path set with its own check. Full contract: "Fusion mode (active)" at the end of this prompt.
 
 `;
-export const UTOPIA_SYSTEM_BLOCK = `${REGULAR_SYSTEM_BLOCK}
+export const UTOPIA_SYSTEM_BLOCK = `${REGULAR_SYSTEM_BLOCK
+  .replace(
+    "| scout | Broad local reconnaissance; direct symbol/path lookups stay inline with ffgrep/fffind |",
+    "| sidekick | Warm reusable (<100k) repo workhorse: default for local reconnaissance/slice packs, exact Oracle diagnostic experiments, iterative test/build/gate loops, mechanical repo sweeps, and /cua desktop automation |\n| scout | Cold one-off or parallel disjoint local scans when sidekick is busy or fresh isolation pays; direct symbol/path lookups stay inline with ffgrep/fffind |",
+  )
+  .replace(
+    "| scribe | Prose deliverables, regardless of extension |",
+    "| scribe | Standalone or long-form prose deliverables outside the lead's dirty edits; keep bounded (<30 line) doc/README/comment updates inline when the lead owns the checkout |",
+  )
+  .replace(
+    "| machinist | Independent separable non-visual implementation only |",
+    "| machinist | Parallel disjoint non-visual implementation slices when sidekick is busy or separate worktree isolation is required |",
+  )
+  .replace(
+    "Machinist executes mechanically without production edits or architectural interpretation; return bounded evidence to Oracle only if interpretation is needed.",
+    "In Utopia, dispatch `sidekick` (or `machinist` only when `sidekick` is busy) to execute mechanically without production edits or architectural interpretation; return bounded evidence to Oracle only if interpretation is needed.",
+  )
+  .replace(
+    "When scanning is needed, get scout's **slice pack** (scout brief) before writers; skip it for known files/ownership.",
+    "When scanning is needed, get a **slice pack** from the warm `sidekick` (or cold `scout` when `sidekick` is busy or fresh isolation pays) before writers; skip it for known files/ownership.",
+  )
+  .replace(
+    "personal broad local exploration instead of scout,",
+    "personal broad local exploration instead of sidekick/scout,",
+  )}
 
 ## Utopia mode (active)
 
 Utopia combines Apex inline-first ownership and the full specialist roster with a warm, reusable execution \`sidekick\` (\`task_start\`, agent \`sidekick\`).
 
 - **Sticky-lead Hydra overlay (\`high\` by default):** Switching to \`/mode utopia\` automatically activates guardrailed Hydra (\`high\` tier unless another active tier was already selected). The lead model stays cache-sticky while healthy and qualified, modulating thinking effort per turn (\`low\`..\`xhigh\`), while subagents and the warm sidekick route dynamically across your subscriptions by domain and quota.
-- **Inline-first lead:** Implement coherent work inline by default, including multi-file, backend, and ordinary frontend work. Keep architecture, ambiguity resolution, and tight local edits in the lead context.
-- **Warm sidekick (<100k reuse):** When work is mechanical, repetitive, multi-slice, or noisy (iterative test-fixing, broad log/repo sweeps, or \`/cua on\` desktop automation), dispatch \`sidekick\` via \`task_start\`. An idle sidekick reuses its warm transcript across sequential units up to ~100k context tokens (pass \`context: "fresh"\` when prior context is irrelevant); \`task_send mode=prompt\` is bounded to one corrective pass on the same unit.
-- **Ephemeral specialists when distinct judgment or isolation pays:** Use \`oracle\` for path-triggered or integrated-diff fresh-eyes review and hard debugging, \`librarian\` for external library/repo/docs research, \`artisan\` for substantial visual design needing separate creative judgment, \`inspector\` for live-page browser proof, \`stevedore\` for release/git mechanics or optional isolated gate runs, \`scribe\` for prose deliverables, \`picasso\` for generated images, \`scout\` for cold one-off broad scans, and \`advisor\` on explicit user request.`;
+- **Inline-first lead:** Implement coherent work inline by default, including multi-file, backend, and ordinary frontend work. Keep architecture, ambiguity resolution, tight local edits, and small bounded doc/README/comment updates (<30 lines) on a lead-owned checkout inline rather than spawning \`scribe\` onto a dirty tree.
+- **Warm sidekick (<100k reuse):** Default to \`sidekick\` (\`task_start\`, agent \`sidekick\`) before cold \`scout\`, \`machinist\`, or verification-only \`stevedore\` whenever work is local reconnaissance, executing an exact Oracle diagnostic experiment, iterative test-fixing/build/gate loops, broad log/repo sweeps, or \`/cua on\` desktop automation. An idle sidekick reuses its warm transcript across sequential units up to ~100k context tokens (pass \`context: "fresh"\` when prior context is irrelevant); \`task_send mode=prompt\` is bounded to one corrective pass on the same unit.
+- **Ephemeral specialists when distinct judgment or isolation pays:** Use \`oracle\` for path-triggered or integrated-diff fresh-eyes review and hard debugging, \`librarian\` for external library/repo/docs research, \`artisan\` for substantial visual design needing separate creative judgment, \`inspector\` for live-page browser proof, \`stevedore\` for directed release/git/deploy mutations, \`scribe\` for standalone or long-form prose deliverables outside the lead's active dirty edits, \`machinist\` for parallel disjoint worktree slices when \`sidekick\` is busy, \`picasso\` for generated images, \`scout\` for cold one-off or parallel broad scans, and \`advisor\` on explicit user request.`;
 export const FUSION_SYSTEM_BLOCK = `\n\n${readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "fusion.md"), "utf8").trim()}`;
 export const WORK_SYSTEM_PROMPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "prompts", "inactive", "work.md"), "utf8").trim();
 

@@ -126,7 +126,14 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
       const contracts: Record<string, RegExp[]> = {
         pi: [/targeted, bounded reads/, /actual diff and direct callers/, /self-review, not independent review/, /explicit user direction only/],
         apex: [/When delegation is warranted, select the specialist by deliverable/, /required Oracle review and Inspector live-proof gates/, /personal broad local exploration instead of scout/],
-        utopia: [/Utopia combines Apex inline-first ownership and the full specialist roster with a warm, reusable execution `sidekick`/, /Inline-first lead:/, /Warm sidekick \(<100k reuse\):/, /Ephemeral specialists when distinct judgment or isolation pays:/],
+        utopia: [
+          /Utopia combines Apex inline-first ownership and the full specialist roster with a warm, reusable execution `sidekick`/,
+          /Inline-first lead:/,
+          /small bounded doc\/README\/comment updates \(<30 lines\) on a lead-owned checkout inline/,
+          /Warm sidekick \(<100k reuse\):/,
+          /In Utopia, dispatch `sidekick` \(or `machinist` only when `sidekick` is busy\) to execute mechanically/,
+          /Ephemeral specialists when distinct judgment or isolation pays:/,
+        ],
         "apex-orchestrate": [/read-only outcome gets one appropriate evidence-returning role/, /one writer, and independent Oracle review/, /exact integrated content and environment are unchanged/, /User-visible live-page changes still need Inspector proof/],
         fusion: [/Coherent bounded edits, narrow known-path lookups, and small subtle integration work may stay inline/, /inspect the actual diff, boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/],
         work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/],
