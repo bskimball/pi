@@ -114,7 +114,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     .filter(tool => !isComputerUseTool(tool.name) || !tool.exposure || tool.exposure === "direct" || (tool.exposure as string) === "model-only")
     .map(tool => tool.name);
   const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools(), cuaEnabled));
-  let modelBlocked = false;
+  let modelBlocked: string | false = false;
   // Set when a mode switch fails and its compensation is incomplete: input
   // stays blocked until a later /mode succeeds. Deliberately separate from
   // modelBlocked so /model and thinking selection cannot clear it.
@@ -186,8 +186,19 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   }
   async function applyModel(ctx: ExtensionContext, choice?: ModelChoice): Promise<void> {
     if (!choice) return;
-    const model = ctx.modelRegistry.find(choice.provider, choice.modelId);
-    if (!model || !await pi.setModel(model)) throw new Error(`Model unavailable: ${choice.provider}/${choice.modelId}. Retry or choose a replacement.`);
+    let model = ctx.modelRegistry.find(choice.provider, choice.modelId);
+    let selected = model ? await pi.setModel(model) : false;
+    if (!selected && ctx.modelRegistry.refresh) {
+      const refreshed = await ctx.modelRegistry.refresh({ allowNetwork: false });
+      model = ctx.modelRegistry.find(choice.provider, choice.modelId);
+      selected = model ? await pi.setModel(model) : false;
+      if (!selected) {
+        const cause = refreshed?.errors.get(choice.provider)?.message ?? ctx.modelRegistry.getError?.();
+        if (cause) throw new Error(`Model unavailable: ${choice.provider}/${choice.modelId}: ${cause}`);
+      }
+    }
+    if (!model) throw new Error(`Model unavailable: ${choice.provider}/${choice.modelId} is not in the model registry.`);
+    if (!selected) throw new Error(`Model unavailable: ${choice.provider}/${choice.modelId}; provider authentication is not configured. Check /login.`);
     pi.setThinkingLevel(choice.thinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
     choice.thinking = pi.getThinkingLevel();
   }
@@ -536,7 +547,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return;
     }
     const nextState = structuredClone(state);
-    if (prevModel && !recoveryBlocked) nextState.models[nextState.mode] = structuredClone(prevModel);
+    if (prevModel && !recoveryBlocked && !modelBlocked) nextState.models[nextState.mode] = structuredClone(prevModel);
     if (!nextState.models[mode] && prevModel) nextState.models[mode] = structuredClone(prevModel);
     nextState.mode = mode;
     nextState.fusion = structuredClone(nextFusion);
@@ -917,13 +928,18 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       state.models[state.mode]!.thinking = pi.getThinkingLevel();
     }
     changing = true;
-    modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion;
+    modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion
+      ? "Fusion pair configuration is unavailable. Run /mode configure."
+      : false;
     // Restore through a clone: applyModel records the actual (possibly
     // clamped) Pi level on its input, which must not overwrite the stored
     // desired choice that a later switch recovery repairs from.
     const restoreChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
     try { await applyModel(ctx, restoreChoice ? structuredClone(restoreChoice) : undefined); }
-    catch (error) { modelBlocked = true; ctx.ui.notify(String(error), "error"); }
+    catch (error) {
+      modelBlocked = `Could not restore ${labels[state.mode]} mode: ${error instanceof Error ? error.message : String(error)} Retry /mode ${state.mode} or explicitly select a replacement with /model.`;
+      ctx.ui.notify(modelBlocked, "error");
+    }
     finally { changing = false; }
     applyModeTools(state.mode);
     announce();
@@ -938,7 +954,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       if (Date.now() - aaSnap.updatedAt > AA_STALE_MS) {
         syncAaCatalog().catch(() => undefined);
       }
-      await routeWithHydra(ctx, startupHydra, undefined, fresh || !isSessionCacheWarm(ctx));
+      const routed = await routeWithHydra(ctx, startupHydra, undefined, fresh || !isSessionCacheWarm(ctx));
+      if (routed?.switchedModel) modelBlocked = false;
     }
   });
   pi.events.on?.("pi:jev:turn-signal", (payload: unknown) => {
@@ -1060,7 +1077,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return { action: "handled" as const };
     }
     if (modelBlocked) {
-      ctx.ui.notify("Selected model unavailable. Retry /mode or explicitly choose a replacement before continuing.", "error");
+      ctx.ui.notify(modelBlocked, "error");
       return { action: "handled" as const };
     }
     return undefined;

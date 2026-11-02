@@ -17,6 +17,93 @@ import { resolveSubagentModelsAndThinking } from "../task/runtime/agent-discover
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
 const { buildSystemPrompt } = await import(builderUrl) as { buildSystemPrompt: (options: any) => string };
 
+test("reload refreshes the saved model once and preserves it when retrying a blocked mode", async (t) => {
+  for (const failure of ["lookup", "selection", "persistent", "exception", "refresh-error", "registry-error"] as const) {
+    await t.test(failure, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "pi-mode-reload-"));
+      const savedEnv = Object.fromEntries([
+        "PI_CODING_AGENT_DIR", "PI_SUBAGENT", "PI_BEHAVIOR_MODE", "PI_HYDRA_TIER", "PI_HYDRA_SCOPE",
+        "PI_CUA_PARENT_PID", "PI_CUA_ENABLED", "PI_UI_CHROME", "PI_APEX_UI", "PI_UI_SKIN",
+      ].map(key => [key, process.env[key]]));
+      process.env.PI_CODING_AGENT_DIR = dir;
+      delete process.env.PI_SUBAGENT;
+      const choice = { provider: "openai", modelId: "saved-model", thinking: "high" };
+      const prefs = { ...initialPreferences(), models: { apex: choice } };
+      const prefsPath = join(dir, "mode-settings.json");
+      writeFileSync(prefsPath, JSON.stringify(prefs));
+      let ready = false;
+      let refreshes = 0;
+      const selections: string[] = [];
+      const notices: string[] = [];
+      const handlers: Record<string, any[]> = {};
+      const commands: Record<string, any> = {};
+      const entries: any[] = [{ type: "custom", customType: "behavior-mode", data: prefs }];
+      const ctx: any = {
+        mode: "tui", hasUI: true, isIdle: () => true,
+        model: { provider: "other", id: "remaining-model" },
+        modelRegistry: {
+          find: (provider: string, id: string) => failure === "lookup" && !ready ? undefined : { provider, id },
+          async refresh(options: any) {
+            assert.deepEqual(options, { allowNetwork: false });
+            refreshes++;
+            if (failure !== "persistent" && failure !== "refresh-error" && failure !== "registry-error") ready = true;
+            return {
+              aborted: false,
+              errors: new Map(failure === "refresh-error" ? [["openai", new Error("credential store unavailable")]] : []),
+            };
+          },
+          getError: () => failure === "registry-error" ? "credential store unavailable" : undefined,
+        },
+        sessionManager: { getBranch: () => entries },
+        ui: { setStatus() {}, setTheme() {}, notify: (text: string) => notices.push(text) },
+      };
+      const pi: any = {
+        on: (name: string, fn: any) => (handlers[name] ??= []).push(fn),
+        registerCommand: (name: string, spec: any) => { commands[name] = spec.handler; },
+        events: { emit() {}, on() {} },
+        appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+        getAllTools: () => [], getActiveTools: () => [], setActiveTools() {},
+        getThinkingLevel: () => "high", setThinkingLevel() {},
+        async setModel(model: any) {
+          selections.push(`${model.provider}/${model.id}`);
+          if (failure === "exception" && !ready) throw new Error("credential store unavailable");
+          if (!ready) return false;
+          ctx.model = model;
+          return true;
+        },
+      };
+      const emit = async (name: string, event: any = {}) => {
+        let result;
+        for (const fn of handlers[name] ?? []) result = await fn(event, ctx);
+        return result;
+      };
+      try {
+        registerModes(pi, "", "", "", "");
+        await emit("session_start", { reason: "reload" });
+        if (failure !== "lookup" && failure !== "selection") {
+          assert.deepEqual(await emit("input"), { action: "handled" });
+          assert.match(notices.at(-1) ?? "", failure === "persistent" ? /openai\/saved-model/ : /credential store unavailable/);
+          assert.equal(refreshes, failure === "exception" ? 0 : 1);
+          ready = true;
+          await commands.mode("apex", ctx);
+        } else {
+          assert.equal(refreshes, 1);
+        }
+        assert.equal(await emit("input"), undefined);
+        assert.equal(ctx.model.id, "saved-model");
+        assert.ok(selections.every(id => id === "openai/saved-model"), "never adopts the remaining model as the saved choice");
+        assert.deepEqual(JSON.parse(readFileSync(prefsPath, "utf8")).models.apex, choice);
+      } finally {
+        clearParentCuaState();
+        for (const [key, value] of Object.entries(savedEnv)) {
+          if (value === undefined) delete process.env[key]; else process.env[key] = value;
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test("legacy modes restore without adopting a new global default", () => {
   const prefs = initialPreferences(); prefs.mode = "pi";
   assert.equal(restoreMode([], prefs, false).mode, "apex");
