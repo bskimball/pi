@@ -8,10 +8,10 @@ import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
 import { registerModes } from "../prompt-commands/modes.ts";
 import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-commands/hydra/usage.ts";
-import { restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork } from "../prompt-commands/mode-state.ts";
+import { clearParentCuaState, restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork, writeParentCuaState } from "../prompt-commands/mode-state.ts";
 import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
-import { parseCredentialsResponse, quotaMultiplierForModel, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
-import { rankModelsForHydra } from "../prompt-commands/hydra/scorer.ts";
+import { parseCredentialsResponse, quotaMultiplierForModel, quotaRemainingForModel, QUOTA_STALE_MS, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
+import { computeAaUtility, rankModelsForHydra, selectThinkingForModel } from "../prompt-commands/hydra/scorer.ts";
 import { resolveSubagentModelsAndThinking } from "../task/runtime/agent-discovery.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
@@ -33,15 +33,17 @@ test("stored orchestrate global default starts new sessions in Apex", () => {
     assert.equal(restoreMode([{ type: "custom", customType: "behavior-mode", data: { mode: "apex-orchestrate", models: {} } }], prefs, false).mode, "apex-orchestrate");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind from active tools", () => {
+test("Pi keeps installed extension tools; Fusion and Work exclude chain/rebind from active tools; computer_use_* is gated by default", () => {
   const tools = ["read", "write", "edit", "bash", "task", "task_chain", "task_rebind", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
+  const withCua = [...tools, "computer_use_click", "computer_use_get_window_state"];
   const collaborationTools = ["read", "write", "edit", "bash", "task", "task_start", "todo_write", "intercom", "fffind", "ffgrep"];
-  assert.deepEqual(toolsForMode("pi", tools), tools);
-  assert.deepEqual(toolsForMode("apex", tools), tools);
+  assert.deepEqual(toolsForMode("pi", withCua), tools);
+  assert.deepEqual(toolsForMode("apex", withCua), tools);
+  assert.deepEqual(toolsForMode("pi", withCua, true), withCua);
   assert.deepEqual(toolsForFusion(tools), collaborationTools);
   assert.deepEqual(toolsForWork(tools), collaborationTools);
-  assert.deepEqual(toolsForMode("fusion", tools), toolsForFusion(tools));
-  assert.deepEqual(toolsForMode("work", tools), toolsForWork(tools));
+  assert.deepEqual(toolsForMode("fusion", withCua), toolsForFusion(tools));
+  assert.deepEqual(toolsForMode("work", withCua), toolsForWork(tools));
 });
 test("custom UI switches replace stale themes with their canonical live theme", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-ui-themes-"));
@@ -120,6 +122,38 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     const emit = async (name: string, event: any = {}) => { let result; for (const handler of handlers[name] ?? []) result = await handler(event, ctx); return result; };
     await emit("session_start", { reason: "new" });
     assert.ok(statuses.has("fusion-pair") && pairStatus() === undefined, "non-Fusion startup clears the structured pair");
+    const baseTools = [...allTools];
+    allTools.push("computer_use_click", "computer_use_list_windows");
+    pi.getAllTools = () => allTools.map(name => ({ name, exposure: name === "computer_use_list_windows" ? "deferred" : "direct" }));
+    const desktopCall = { toolName: "computer_use_list_windows", parentToolCallId: "codemode/1" };
+    assert.equal((await emit("tool_call", desktopCall)).block, true, "off blocks nested deferred dispatch");
+    busy = true;
+    await commands.cua("on", ctx);
+    assert.equal((await emit("tool_call", desktopCall)).block, true, "busy command cannot enable execution");
+    busy = false;
+    workerBusy = true;
+    await commands.cua("on", ctx);
+    assert.equal((await emit("tool_call", desktopCall)).block, true, "live worker blocks /cua toggle");
+    workerBusy = false;
+    active = ["read"];
+    await commands.cua("on", ctx);
+    assert.equal(process.env.PI_CUA_ENABLED, "1", "on exports PI_CUA_ENABLED for spawned subagents/sidekicks");
+    assert.deepEqual(active, ["read", "computer_use_click"], "on respects profile and unrelated inactive tools");
+    assert.equal(await emit("tool_call", desktopCall), undefined, "explicit opt-in allows deferred dispatch");
+    await commands.cua("off", ctx);
+    assert.equal(process.env.PI_CUA_ENABLED, undefined, "off clears PI_CUA_ENABLED");
+    assert.deepEqual(active, ["read"]);
+    assert.equal((await emit("tool_call", { toolName: "computer_use_click" })).block, true);
+    active.push("computer_use_list_windows");
+    await emit("before_agent_start", { systemPromptOptions: {} });
+    assert.deepEqual(active, ["read"], "filtering discovery does not reactivate unrelated tools");
+    await commands.cua("on", ctx);
+    await emit("session_start", { reason: "new" });
+    assert.equal((await emit("tool_call", desktopCall)).block, true, "new sessions reset opt-in");
+    assert.equal(process.env.PI_CUA_ENABLED, undefined);
+    assert.equal(statuses.get("cua"), undefined);
+    allTools.splice(0, allTools.length, ...baseTools);
+    active = [...baseTools];
     const prompt = async (systemPrompt = "Apex base") => {
       const options = {
         cwd: dir,
@@ -155,7 +189,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     workerBusy = false;
     await commands.mode("pi", ctx);
     const piPrompt = (await prompt()).systemPrompt;
-    assert.match(piPrompt, /^You are an expert coding assistant operating inside pi/);
+    assert.match(piPrompt, /^You are a coding assistant running inside pi, a coding agent harness\./);
     assert.match(piPrompt, /Pi mode \(active\)/);
     assert.match(piPrompt, /explicit user direction only/);
     assert.doesNotMatch(piPrompt, /Apex base|Strict orchestrator|Regular mode \(active\)/);
@@ -198,7 +232,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     assert.deepEqual(persisted.models.fusion, newerGlobalPair.lead);
     const fused = (await prompt()).systemPrompt;
     assert.match(fused, /Fusion mode \(active\)/);
-    assert.match(fused, /^You are an expert coding assistant operating inside pi/, "Fusion preserves stock base without a custom prompt");
+    assert.match(fused, /^You are a coding assistant running inside pi, a coding agent harness\./, "Fusion preserves stock base without a custom prompt");
     assert.doesNotMatch(fused, /Regular mode \(active\)|Strict orchestrator mode \(active\)/);
     await commands.mode("fusion", ctx);
     persisted = JSON.parse(readFileSync(prefsPath, "utf8"));
@@ -254,7 +288,7 @@ test("mode commands switch prompts, enforce idle, persist and restore, and chang
     await emit("before_agent_start", { systemPrompt: buildSystemPrompt(workOptions), systemPromptOptions: workOptions });
     const retainedDynamic = buildSystemPrompt(workOptions);
     assert.match(retainedDynamic, /Caller-provided instruction\./, "Work preserves caller append instructions");
-    assert.doesNotMatch(retainedDynamic, /^You are an expert coding assistant operating inside pi/, "Work does not restore the stock coding base");
+    assert.doesNotMatch(retainedDynamic, /^You are a coding assistant running inside pi, a coding agent harness\./, "Work does not restore the stock coding base");
     assert.doesNotMatch(retainedDynamic, /Coding-first base that Work must replace/);
     assert.equal(WORK_SYSTEM_PROMPT.includes("operations-first lead"), true);
     await commands.mode("pi", ctx);
@@ -389,7 +423,7 @@ test("mode switch failure after tool change restores prior tools, model, env, an
     assert.equal(process.env.PI_BEHAVIOR_MODE, "pi", "mode env restored");
     const options = { cwd: dir };
     await emit("before_agent_start", { systemPrompt: "Apex base", systemPromptOptions: options });
-    assert.match(buildSystemPrompt(options), /^You are an expert coding assistant operating inside pi/, "still Pi prompt");
+    assert.match(buildSystemPrompt(options), /^You are a coding assistant running inside pi, a coding agent harness\./, "still Pi prompt");
     const lastEntry = [...entries].reverse().find(entry => entry.customType === "behavior-mode");
     assert.equal(lastEntry.data.mode, "pi", "compensation entry reflects restored state");
     assert.equal(JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8")).mode, "pi", "prefs default untouched");
@@ -739,9 +773,10 @@ test("Hydra actively reads Claude subscription usage and retains known quota whe
   let utilization = 100;
   let upstreamStatus = 200;
   let probes = 0;
+  let passiveRemaining = 80;
   const fetchImpl: typeof fetch = async (url, init) => {
     if (String(url).endsWith("/credentials")) {
-      return Response.json({ files: [{ provider: "claude", auth_index: "fixture-account", disabled: false, cooldowns: [], quota: { signals: upstreamStatus === 403 ? { stale: { remaining_percent: 80 } } : {} } }] });
+      return Response.json({ files: [{ provider: "claude", auth_index: "fixture-account", disabled: false, cooldowns: [], quota: { signals: upstreamStatus === 403 ? { stale: { remaining_percent: passiveRemaining } } : {} } }] });
     }
     assert.equal(String(url), "http://quota.test/v8/management/requests/api-call");
     const request = JSON.parse(String(init?.body));
@@ -757,16 +792,58 @@ test("Hydra actively reads Claude subscription usage and retains known quota whe
     }) });
   };
   try {
+    const now = Date.now();
+    const entry = { provider: "anthropic", remainingPercent: 2, disabled: false, inCooldown: false, successCount: 0, failureCount: 0 };
+    const snapshot = (updatedAt: number, overrides: Partial<typeof entry> & { remainingObservedAt?: number } = {}) => ({
+      schema: 1 as const, source: "live" as const, updatedAt, providers: { anthropic: { ...entry, ...overrides } },
+    });
+    const remaining = (snap: ReturnType<typeof snapshot>) => quotaRemainingForModel("claude-bridge", "claude-opus-5-5", snap);
+    const multiplier = (snap: ReturnType<typeof snapshot>, circuits = new Set<string>()) => quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "high", circuits, snap).multiplier;
+    assert.equal(remaining(snapshot(now)), 2, "fresh legacy timestamp is honored");
+    assert.equal(multiplier(snapshot(now)), 0);
+    assert.ok(multiplier(snapshot(now, { remainingPercent: 20 })) < 1, "fresh partial quota conserves");
+    assert.equal(multiplier(snapshot(now - QUOTA_STALE_MS - 1000, { remainingPercent: 20 })), 1, "expired partial quota does not conserve");
+    assert.equal(remaining(snapshot(now - QUOTA_STALE_MS - 1000)), null, "expired legacy timestamp is unknown");
+    assert.equal(multiplier(snapshot(now - QUOTA_STALE_MS - 1000)), 1);
+    assert.equal(remaining(snapshot(now, { remainingObservedAt: now - QUOTA_STALE_MS - 1000 })), null, "fresh snapshot cannot refresh old percentage");
+    assert.equal(remaining(snapshot(now - QUOTA_STALE_MS - 1000, { remainingObservedAt: now })), 2, "fresh per-entry timestamp takes priority");
+    for (const invalid of [NaN, Infinity, 0, -1, now + 60_000]) assert.equal(remaining(snapshot(now, { remainingObservedAt: invalid })), null);
+    assert.equal(multiplier(snapshot(now - QUOTA_STALE_MS - 1000, { disabled: true })), 0, "last-known disabled still excludes");
+    assert.equal(multiplier(snapshot(now - QUOTA_STALE_MS - 1000, { inCooldown: true })), 0, "last-known cooldown still excludes");
+    assert.equal(multiplier(snapshot(now - QUOTA_STALE_MS - 1000), new Set(["claude-bridge/claude-opus-5-5"])), 0, "open circuit still excludes");
+    assert.equal(multiplier(snapshot(now, { disabled: true })), 0, "fresh disabled still excludes");
+    assert.equal(multiplier(snapshot(now, { inCooldown: true })), 0, "fresh cooldown still excludes");
+
     const exhausted = await syncQuotaSnapshot({ path, configPath, fetchImpl });
     assert.equal(probes, 1, "empty passive signals require an active usage probe");
     assert.equal(exhausted.snapshot.providers.anthropic?.remainingPercent, 0);
     for (const provider of ["claude-bridge", "local-proxy"]) {
       assert.equal(quotaMultiplierForModel(provider, "claude-opus-5-5", "max", new Set(), readQuotaSnapshot(path)).multiplier, 0);
     }
+    assert.equal(exhausted.snapshot.providers.anthropic?.remainingObservedAt, exhausted.snapshot.updatedAt);
+    // Legacy previous snapshot must retain its original percentage age across refreshes.
+    const oldTime = Date.now() - QUOTA_STALE_MS - 5_000;
+    writeFileSync(path, JSON.stringify({ ...exhausted.snapshot, updatedAt: oldTime, providers: { anthropic: { ...exhausted.snapshot.providers.anthropic, remainingObservedAt: undefined } } }));
     upstreamStatus = 403;
     const unavailable = await syncQuotaSnapshot({ path, configPath, fetchImpl });
-    assert.equal(unavailable.snapshot.providers.anthropic?.remainingPercent, 0, "probe failure must not turn known exhaustion into healthy unknown quota");
+    assert.equal(unavailable.snapshot.providers.anthropic?.remainingPercent, 0);
+    assert.equal(unavailable.snapshot.providers.anthropic?.remainingObservedAt, oldTime);
+    assert.ok(unavailable.snapshot.updatedAt > oldTime);
+    assert.equal(quotaRemainingForModel("claude-bridge", "claude-opus-5-5", unavailable.snapshot), null);
+    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "max", new Set(), unavailable.snapshot).multiplier, 1);
+    const again = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(again.snapshot.providers.anthropic?.remainingObservedAt, oldTime, "repeated refresh cannot rejuvenate retained percentage");
     assert.match(unavailable.note, /Claude.*unavailable/i);
+    passiveRemaining = 0;
+    const equalBinding = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(equalBinding.snapshot.providers.anthropic?.remainingObservedAt, oldTime, "equal conservative minimum keeps prior age");
+    // New lower passive percentage binds the conservative minimum and has a fresh timestamp.
+    passiveRemaining = 1;
+    writeFileSync(path, JSON.stringify({ ...again.snapshot, providers: { anthropic: { ...again.snapshot.providers.anthropic, remainingPercent: 20, remainingObservedAt: oldTime } } }));
+    const freshBinding = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    assert.equal(freshBinding.snapshot.providers.anthropic?.remainingPercent, 1);
+    assert.equal(freshBinding.snapshot.providers.anthropic?.remainingObservedAt, freshBinding.snapshot.updatedAt);
+    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "max", new Set(), freshBinding.snapshot).multiplier, 0);
     upstreamStatus = 200;
     utilization = 20;
     const recovered = await syncQuotaSnapshot({ path, configPath, fetchImpl });
@@ -849,7 +926,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       files: [{ provider: "claude", quota: { signals: { weekly: { remaining_percent: 1 } } }, cooldowns: [], disabled: false, success: 3, failed: 1 }],
     });
     assert.equal(cpaExhausted.anthropic?.remainingPercent, 1, "nested remaining_percent keeps percent semantics below 5");
-    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "standard", new Set(), { schema: 1, updatedAt: 0, source: "live", providers: cpaExhausted }).multiplier, 0, "exhausted signal quota excludes the family");
+    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "standard", new Set(), { schema: 1, updatedAt: Date.now(), source: "live", providers: cpaExhausted }).multiplier, 0, "exhausted signal quota excludes the family");
     assert.equal(cpaCreds.xai?.inCooldown, true, "unavailable credential counts as cooling down");
 
     const catalogModels: any[] = [
@@ -1034,9 +1111,9 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     // Quota tilt: with Anthropic at 45% and OpenAI at 95%, the most-quota good-enough model wins;
     // with Anthropic exhausted (3%), bridge models drop out of the ranking entirely.
     const entry = (provider: string, remainingPercent: number) => ({ provider, remainingPercent, inCooldown: false, disabled: false, successCount: 9, failureCount: 0 });
-    const quotaTilt = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 45), openai: entry("openai", 95) } };
+    const quotaTilt = { schema: 1 as const, updatedAt: Date.now(), source: "live" as const, providers: { anthropic: entry("anthropic", 45), openai: entry("openai", 95) } };
     assert.equal(rankModelsForHydra({ ...ordinaryOptions, quota: quotaTilt })[0]?.key, "openai/gpt-6.1-sol", "quota and efficiency favor Sol among good-enough models");
-    const quotaExhausted = { schema: 1 as const, updatedAt: 0, source: "live" as const, providers: { anthropic: entry("anthropic", 3), openai: entry("openai", 95) } };
+    const quotaExhausted = { schema: 1 as const, updatedAt: Date.now(), source: "live" as const, providers: { anthropic: entry("anthropic", 3), openai: entry("openai", 95) } };
     assert.equal(rankModelsForHydra({ ...balanceBase, quota: quotaExhausted }).some(r => r.model.provider === "claude-bridge"), false, "exhausted family is excluded, not just deprioritized");
 
     const withArgon = [...catalogModels, { provider: "antigravity", id: "gemini-4-argon", name: "Gemini 4 Argon", reasoning: true }];
@@ -1050,6 +1127,23 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       "antigravity/gemini-4-argon",
       "an unused large subscription is not starved once others carry recent turns",
     );
+
+    const shallow = { reasoningDepth: 1, depthConfidence: 0.99, domain: "fast_edit" as const, domainConfidence: 0.99 };
+    const scorerOptions = { ...balanceBase, tier: "high" as const, models: openaiOnly, currentModelKey: "openai/gpt-6-astra", cacheWarm: true };
+    for (const uncertain of [
+      { ...shallow, domainConfidence: 0.01 },
+      { ...shallow, depthConfidence: 0.01 },
+      { ...shallow, domainConfidence: NaN },
+      { ...shallow, domainConfidence: 2 },
+      { ...shallow, depthConfidence: 2 },
+      { ...shallow, domain: "coding" as const, domainConfidence: 0 },
+      { ...shallow, domain: "conversation" as const, domainConfidence: 0.5 },
+    ]) {
+      assert.deepEqual(rankModelsForHydra({ ...scorerOptions, signal: uncertain }), rankModelsForHydra({ ...scorerOptions, signal: undefined }));
+      assert.equal(selectThinkingForModel(openaiOnly[0], "high", uncertain), selectThinkingForModel(openaiOnly[0], "high"));
+      assert.equal(computeAaUtility(SEED_AA_MODELS[0]!, "high", uncertain), computeAaUtility(SEED_AA_MODELS[0]!, "high"));
+    }
+    assert.equal(selectThinkingForModel(openaiOnly[0], "high", shallow), "low");
 
     // 3. End-to-end /mode hydra command & Jev turn signal routing
     const commands: Record<string, any> = {};
@@ -1136,42 +1230,85 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(currentThinking, "low");
 
     // Simulate warm session cache: add a recent message entry, then emit a low-depth Jev signal in hydra:high.
-    // Hydra should dynamically down-shift from frontier Opus to a faster workhorse model and populate payload outcome fields.
-    ctx.model = catalogModels.find(m => m.id === "claude-opus-5-5")!;
+    // Hydra keeps the warm eligible frontier lead model session-sticky to preserve prompt cache, while down-shifting thinking effort to low.
+    ctx.model = catalogModels.find(m => m.provider === "claude-bridge" && m.id === "claude-opus-5-5")!;
     currentThinking = "high";
     entries.push({ type: "message", role: "user", content: "hi", timestamp: Date.now() });
     const lowPayload: any = { reasoningDepth: 1.2, depthConfidence: 0.9, domain: "fast_edit", domainConfidence: 0.9, ctx };
     pi.events.emit("pi:jev:turn-signal", lowPayload);
     await lowPayload.promise;
-    assert.equal(ctx.model.id, "claude-haiku-5-5", "Jev fast_edit signal down-shifts Hydra high to fast model");
-    assert.equal(lowPayload.selectedModel, "local-proxy/claude-haiku-5-5", "turn-signal payload reports selected model for Jev receipt");
-    assert.equal(lowPayload.selectedThinking, "low", "turn-signal payload reports selected thinking level");
-    assert.equal(lowPayload.switchedModel, true);
-    assert.match(notices.at(-1) ?? "", /Jev Hydra \(high\): local-proxy\/claude-haiku-5-5 \(low\)/, "emits visible UI notification on Jev Hydra turn routing");
+    assert.equal(ctx.model.id, "claude-opus-5-5", "warm eligible lead stays session-sticky on a fast_edit turn");
+    assert.equal(lowPayload.selectedModel, "claude-bridge/claude-opus-5-5", "turn-signal payload reports sticky lead model for Jev receipt");
+    assert.equal(lowPayload.selectedThinking, "low", "turn-signal payload down-shifts thinking level on fast_edit");
+    assert.equal(lowPayload.switchedModel, false);
+    assert.match(notices.at(-1) ?? "", /Jev Hydra \(high\): claude-bridge\/claude-opus-5-5 \(low\)/, "emits visible UI notification on Jev Hydra turn routing");
 
-    // High-confidence shallow research lookup (depth 1.749 < 1.75, domainConfidence 0.84) routes to fast model (Haiku / low),
-    // while low-confidence research (domainConfidence 0.28) floors above the fast tier (capable model / medium).
+    const astra = catalogModels.find(m => m.id === "gpt-6-astra")!;
+    for (const partial of [
+      { domain: "fast_edit", depthConfidence: 0.99, domainConfidence: 0.01 },
+      { domain: "conversation", depthConfidence: 0.1, domainConfidence: 0.99 },
+      { domain: "coding", depthConfidence: 0.99, domainConfidence: 0 },
+      { domain: "fast_edit", depthConfidence: NaN, domainConfidence: 0.99 },
+    ]) {
+      ctx.model = astra;
+      currentThinking = "high";
+      const payload: any = { reasoningDepth: 1, ...partial, ctx };
+      pi.events.emit("pi:jev:turn-signal", payload);
+      await payload.promise;
+      assert.equal(ctx.model.id, "gpt-6-astra");
+      assert.equal(currentThinking, "high");
+      assert.equal(payload.switchedModel, false);
+    }
+    // A trusted prior signal must not leak into a later turn without a signal.
+    const prior: any = { reasoningDepth: 3.8, depthConfidence: 0.9, domain: "coding", domainConfidence: 0.9, ctx };
+    pi.events.emit("pi:jev:turn-signal", prior);
+    await prior.promise;
+    for (const h of handlers.before_agent_start ?? []) await h({ prompt: "trusted turn", systemPromptOptions: {} }, ctx);
+    ctx.model = astra;
+    currentThinking = "high";
+    for (const h of handlers.before_agent_start ?? []) await h({ prompt: "no classification", systemPromptOptions: {} }, ctx);
+    assert.equal(ctx.model.id, "gpt-6-astra");
+    assert.equal(currentThinking, "high");
+    const afterMissing: any = { agent: "machinist", ctx };
+    pi.events.emit("pi:hydra:subagent-route", afterMissing);
+    assert.equal(afterMissing.thinking, "medium", "missing signal clears prior deep coding before subagent routing");
+    // An explicit tier selection ranks defaults even without a signal.
+    ctx.model = haikuModel;
+    await commands.mode("hydra max", ctx);
+    assert.notEqual(ctx.model.id, haikuModel.id);
+    await commands.mode("hydra high", ctx);
+    // Excluded or unavailable incumbents are not held on an uncertain turn.
+    for (const invalid of [catalogModels[0], { provider: "openai", id: "unavailable", reasoning: true }]) {
+      ctx.model = invalid;
+      const payload: any = { reasoningDepth: 1, domain: "fast_edit", depthConfidence: 0.1, domainConfidence: 0.9, ctx };
+      pi.events.emit("pi:jev:turn-signal", payload);
+      await payload.promise;
+      assert.notEqual(`${ctx.model.provider}/${ctx.model.id}`, `${invalid.provider}/${invalid.id}`);
+    }
+
+    // High-confidence shallow research on a warm capable lead adjusts thinking to low while keeping the warm lead model sticky;
+    // when the incumbent fails the quality gate (e.g. Haiku on a design turn), Hydra upgrades the lead.
     await commands.mode("hydra standard", ctx);
     const shallowResearchPayload: any = { reasoningDepth: 1.749, depthConfidence: 0.83, domain: "research", domainConfidence: 0.84, ctx };
     pi.events.emit("pi:jev:turn-signal", shallowResearchPayload);
     await shallowResearchPayload.promise;
-    assert.equal(ctx.model.id, "claude-haiku-5-5", "shallow high-confidence research lookup selects fast model");
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "warm capable lead stays sticky on shallow research while adjusting effort");
     assert.equal(currentThinking, "low");
 
     const ambiguousResearchPayload: any = { reasoningDepth: 1.0, depthConfidence: 0.69, domain: "research", domainConfidence: 0.28, ctx };
     pi.events.emit("pi:jev:turn-signal", ambiguousResearchPayload);
     await ambiguousResearchPayload.promise;
-    assert.notEqual(ctx.model.id, "claude-haiku-5-5", "low-confidence research prompt floors above the fast model");
-    assert.equal(currentThinking, "medium");
+    assert.equal(ctx.model.id, "gpt-6.1-sol", "uncertain research holds an eligible incumbent");
+    assert.equal(currentThinking, "low");
 
-    // Coding domain with underscored depth (1.4, low confidence 0.48) must NOT pick Haiku/low;
-    // it floors to a capable coding model at medium thinking.
+    // Uncertain coding cannot downgrade an eligible incumbent or its effort.
     ctx.model = catalogModels.find(m => m.id === "gpt-6-astra")!;
+    currentThinking = "high";
     const codingPayload: any = { reasoningDepth: 1.4, depthConfidence: 0.48, domain: "coding", domainConfidence: 0.52, ctx };
     pi.events.emit("pi:jev:turn-signal", codingPayload);
     await codingPayload.promise;
-    assert.equal(ctx.model.id, "gpt-6.1-sol", "ordinary coding switches a warm Astra session to efficient Sol, not lightweight Haiku");
-    assert.equal(currentThinking, "medium", "coding domain uses at least medium thinking");
+    assert.equal(ctx.model.id, "gpt-6-astra");
+    assert.equal(currentThinking, "high");
 
     // Even immediately after an ordinary coding turn that selected Sol, Artisan subagent routing
     // uses the design domain (never inheriting coding/Sol) and selects Claude/Astra/Antigravity.
@@ -1182,6 +1319,8 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(artisanAfterCoding.thinking, "high");
 
     // Direct UI/design turn switches a warm Sol session onto a design-capable model.
+    ctx.model = solModel;
+    currentThinking = "medium";
     const designPayload: any = { reasoningDepth: 2.2, depthConfidence: 0.85, domain: "design", domainConfidence: 0.9, ctx };
     pi.events.emit("pi:jev:turn-signal", designPayload);
     await designPayload.promise;
@@ -1371,6 +1510,8 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
 
     await commands.mode("hydra status", ctx);
     assert.match(notices.at(-1) ?? "", /Hydra: max/);
+    assert.match(notices.at(-1) ?? "", /AA=(?:seed|live) snapshot age=/);
+    assert.match(notices.at(-1) ?? "", /quota=(?:none|live) snapshot age=/);
 
     catalogModels.push(...contributorModels);
     ctx.scopedModels = contributorModels.map(model => ({ model, thinkingLevel: "low" }));
@@ -1392,10 +1533,45 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     }
     assert.deepEqual(readUsageCounts(), { openai: 2 }, "each completed call counts; zero-usage failures do not");
     const workerHandlers: Record<string, any> = {};
+    let workerTools = ["read", "computer_use_click"];
+    const workerAllTools = [
+      { name: "read", exposure: "direct" },
+      { name: "write", exposure: "direct" },
+      { name: "computer_use_click", exposure: "direct" },
+      { name: "computer_use_tools", exposure: "model-only" },
+      { name: "computer_use_list_windows", exposure: "deferred" },
+    ];
     process.env.PI_SUBAGENT = "1";
-    registerModes({ on: (name: string, handler: any) => { workerHandlers[name] = handler; } } as any, "", "", "", "");
+    delete process.env.PI_CUA_ENABLED;
+    delete process.env.PI_CUA_PARENT_PID;
+    registerModes({
+      on: (name: string, handler: any) => { workerHandlers[name] = handler; },
+      getAllTools: () => workerAllTools,
+      getActiveTools: () => workerTools,
+      setActiveTools: (names: string[]) => { workerTools = names; },
+    } as any, "", "", "", "");
     delete process.env.PI_SUBAGENT;
-    assert.deepEqual(Object.keys(workerHandlers), ["message_end"], "workers install accounting without lead routing");
+    assert.deepEqual(Object.keys(workerHandlers), ["message_end", "before_agent_start", "tool_call"], "workers install accounting and /cua soft gate without lead routing");
+    workerHandlers.before_agent_start();
+    assert.deepEqual(workerTools, ["read"], "subagents strip active computer_use_* tools when PI_CUA_ENABLED is unset");
+    assert.equal(workerHandlers.tool_call({ toolName: "computer_use_click" })?.block, true, "subagents block computer_use_* execution when PI_CUA_ENABLED is unset");
+    process.env.PI_CUA_ENABLED = "1";
+    workerHandlers.before_agent_start();
+    assert.deepEqual(workerTools, ["read", "computer_use_click", "computer_use_tools"], "subagents reactivate direct/model-only computer_use_* tools on resumed off-loadout without adding deferred or unrelated tools");
+    assert.equal(workerHandlers.tool_call({ toolName: "computer_use_click" }), undefined, "subagents allow computer_use_* execution when PI_CUA_ENABLED=1");
+    // A reused child process started with PI_CUA_ENABLED=1 still obeys parent /cua off via PI_CUA_PARENT_PID.
+    process.env.PI_CUA_PARENT_PID = String(process.pid);
+    writeParentCuaState(false);
+    workerHandlers.before_agent_start();
+    assert.deepEqual(workerTools, ["read"], "parent /cua off revokes active computer_use_* tools in a reused child process");
+    assert.equal(workerHandlers.tool_call({ toolName: "computer_use_click" })?.block, true, "parent /cua off blocks computer_use_* execution in a reused child process");
+    writeParentCuaState(true);
+    workerHandlers.before_agent_start();
+    assert.deepEqual(workerTools, ["read", "computer_use_click", "computer_use_tools"], "parent /cua on re-enables direct/model-only computer_use_* tools in a reused child process");
+    assert.equal(workerHandlers.tool_call({ toolName: "computer_use_click" }), undefined);
+    clearParentCuaState();
+    delete process.env.PI_CUA_PARENT_PID;
+    delete process.env.PI_CUA_ENABLED;
     await workerHandlers.message_end(response("claude-bridge", "claude-opus-5-5"));
     assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1 }, "worker fallback provider is counted from the actual response");
     const now = Date.now();
@@ -1446,7 +1622,13 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     for (const h of handlers.message_end ?? []) await h(response("openai", "gpt-6-astra"), ctx);
     assert.deepEqual(readUsageCounts(), { openai: 2, anthropic: 1, google: 1 }, "manual-mode calls are excluded");
     assert.equal(process.env.PI_HYDRA_TIER, undefined, "switching to an explicit mode turns off Hydra");
+    assert.equal(statuses.get("mode"), "Apex \u00b7 Inline");
     assert.equal(statuses.get("hydra"), undefined);
+    await commands.mode("utopia", ctx);
+    assert.equal(process.env.PI_BEHAVIOR_MODE, "utopia", "switching to utopia activates utopia mode");
+    assert.equal(process.env.PI_HYDRA_TIER, "high", "utopia automatically activates Hydra high by default");
+    assert.equal(statuses.get("mode"), "Utopia \u00b7 +Sidekick");
+    assert.equal(statuses.get("hydra"), "hydra:high");
   } finally {
     for (const [key, value] of Object.entries({
       PI_CODING_AGENT_DIR: saved.dir,

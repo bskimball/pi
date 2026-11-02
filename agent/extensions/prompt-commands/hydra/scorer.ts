@@ -36,6 +36,13 @@ export interface HydraTurnSignalInput {
 
 export type HydraDomain = "coding" | "design" | "reasoning" | "fast_edit" | "research" | "writing" | "conversation";
 
+export function isReliableHydraSignal(signal?: HydraTurnSignalInput): signal is HydraTurnSignalInput {
+  return !!signal && Number.isFinite(signal.reasoningDepth) && signal.reasoningDepth >= 1 && signal.reasoningDepth <= 4 &&
+    Number.isFinite(signal.depthConfidence) && signal.depthConfidence >= 0.65 && signal.depthConfidence <= 1 &&
+    Number.isFinite(signal.domainConfidence) && signal.domainConfidence >= 0.65 && signal.domainConfidence <= 1 &&
+    ["coding", "design", "reasoning", "fast_edit", "research", "writing", "conversation"].includes(signal.domain);
+}
+
 export type SubagentHydraRole = {
   tier?: ActiveHydraTier;
   signal: HydraTurnSignalInput;
@@ -66,6 +73,17 @@ export function subagentHydraProfile(
       tier: parentTier,
       signal: {
         reasoningDepth: 2.6,
+        depthConfidence: 1,
+        domain: "coding",
+        domainConfidence: 1,
+      },
+    };
+  }
+  if (name === "sidekick") {
+    return {
+      tier: "standard",
+      signal: {
+        reasoningDepth: 2,
         depthConfidence: 1,
         domain: "coding",
         domainConfidence: 1,
@@ -240,6 +258,7 @@ export function selectThinkingForModel(
   tier: ActiveHydraTier,
   signal?: HydraTurnSignalInput,
 ): string {
+  signal = isReliableHydraSignal(signal) ? signal : undefined;
   const depth = effectiveSignalDepth(tier, signal);
   const isFastLookup = isShallowTurn(signal?.domain ?? "coding", depth);
   let desired: string;
@@ -397,6 +416,7 @@ export function computeAaUtility(
   signal?: HydraTurnSignalInput,
   ranges: AaMetricRanges = {},
 ): number {
+  signal = isReliableHydraSignal(signal) ? signal : undefined;
   const domain = signal?.domain ?? "coding";
   const depth = effectiveSignalDepth(tier, signal);
   const shallow = isShallowTurn(domain, depth);
@@ -449,11 +469,11 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
     quota,
     openCircuits,
     tier,
-    signal,
     currentModelKey,
     cacheWarm = false,
     usage,
   } = options;
+  const signal = isReliableHydraSignal(options.signal) ? options.signal : undefined;
 
   // Filter out API-priced/excluded providers first, then prefer user's scoped models when non-empty.
   const allowedModels = models.filter((m) => !EXCLUDED_HYDRA_PROVIDERS.has(m.provider.toLowerCase()));

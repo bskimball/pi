@@ -58,19 +58,28 @@ export function queueExec(root: string): Exec {
     writeFileSync(childFile, JSON.stringify({ state: "starting", host: hostname() }), { mode: 0o600 });
     const child = spawn(command, args, { cwd: options?.cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], signal: options?.signal });
     let stdout = "", stderr = "";
+    let truncated = false;
     let cancelled = options?.signal?.aborted === true;
     const onAbort = () => { cancelled = true; };
     options?.signal?.addEventListener("abort", onAbort, { once: true });
     if (child.pid) writeFileSync(childFile, JSON.stringify({ state: "running", pid: child.pid, host: hostname() }), { mode: 0o600 });
-    child.stdout.on("data", data => { stdout = (stdout + String(data)).slice(-24000); });
-    child.stderr.on("data", data => { stderr = (stderr + String(data)).slice(-24000); });
+    child.stdout.on("data", data => {
+      const output = stdout + String(data);
+      if (output.length > 24000) truncated = true;
+      stdout = output.slice(-24000);
+    });
+    child.stderr.on("data", data => {
+      const output = stderr + String(data);
+      if (output.length > 24000) truncated = true;
+      stderr = output.slice(-24000);
+    });
     const timer = setTimeout(() => { cancelled = true; child.kill(); }, options?.timeout ?? 900000);
     child.on("error", error => { clearTimeout(timer); reject(error); });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       options?.signal?.removeEventListener("abort", onAbort);
       if (existsSync(childFile)) unlinkSync(childFile);
-      resolve({ stdout, stderr, code: code ?? 1, killed: cancelled || signal !== null });
+      resolve({ stdout, stderr, code: code ?? 1, killed: cancelled || signal !== null, truncated });
     });
   });
 }

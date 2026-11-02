@@ -7,12 +7,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { build } from "esbuild";
 import { registerModes } from "../prompt-commands/modes.ts";
+import { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK, UTOPIA_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { initialPreferences } from "../prompt-commands/mode-state.ts";
 import memory from "../continual-memory.ts";
 import profile from "../user-profile.ts";
 import jev from "../jev/index.ts";
 import { prepareRequest, parseResponse, parseUsage } from "../muse/protocol.ts";
-import { Type, type Context, type Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { streamMuse } from "../muse/index.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -92,12 +94,12 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
       events: { emit(name: string, data: any) { if (name === "pi:fusion:configure") data.acknowledged = true; } }, getAllTools: () => [], getActiveTools: () => [], setActiveTools() {},
       getThinkingLevel: () => "off", setThinkingLevel() {}, setModel: async () => true,
     };
-    registerModes(pi, "## Regular mode (active)", "## Strict orchestrator mode (active)", "## Fusion mode (active)", "## Work mode (active)", "Fusion preface\n", "## Pi mode (active)");
+    registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK, UTOPIA_SYSTEM_BLOCK);
     memory(pi); profile(pi); jev(pi);
     const { default: crashLogger } = await import("../crash-logger.ts");
     crashLogger(pi);
     const ctx: any = { cwd: dir, hasUI: true, isIdle: () => true, modelRegistry: { find: () => ({ provider: "test", id: "lead" }) }, sessionManager: { getBranch: () => [] }, ui: { setStatus() {}, notify() {} } };
-    for (const [mode, marker] of [["apex", "Regular mode"], ["apex-orchestrate", "Strict orchestrator"], ["fusion", "Fusion mode"], ["pi", "Pi mode"], ["work", "Work mode"]]) {
+    for (const [mode, marker] of [["apex", "Regular mode"], ["utopia", "Utopia mode"], ["apex-orchestrate", "Strict orchestrator"], ["fusion", "Fusion mode"], ["pi", "Pi mode"], ["work", "Work mode"]]) {
       if (mode !== "apex") await commands.mode(mode, ctx);
       process.env.PI_BEHAVIOR_MODE = mode;
       const options = normalizeBuildSystemPromptOptions({ cwd: dir, customPrompt: mode === "fusion" ? undefined : "Caller base", appendSystemPrompt: "Caller append" });
@@ -114,13 +116,24 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
         assert.match(musePrompt, /Profile delivery token/);
         assert.match(musePrompt, /Continual memory/);
       }
-      if (mode === "fusion") assert.match(current, /^You are an expert coding assistant operating inside pi/, "Fusion retains the stock base without a custom prompt");
+      if (mode === "fusion") assert.match(current, /^You are a coding assistant running inside pi, a coding agent harness\./, "Fusion retains the stock base without a custom prompt");
       const captures = new PromptCaptures();
       captures.record(current, { custom: options.customPrompt, append: options.appendSystemPrompt, contextFiles: options.contextFiles, skills: options.skills });
       const capture = captures.resolve(current);
       assert.ok(capture);
       const projected = projectPromptCapture(capture, { skillReadTool: "none" });
       assert.match(projected!, new RegExp(marker), `${mode} bridge projection lost mode block`);
+      const contracts: Record<string, RegExp[]> = {
+        pi: [/targeted, bounded reads/, /actual diff and direct callers/, /self-review, not independent review/, /explicit user direction only/],
+        apex: [/When delegation is warranted, select the specialist by deliverable/, /required Oracle review and Inspector live-proof gates/, /personal broad local exploration instead of scout/],
+        utopia: [/Utopia combines Apex inline-first ownership and the full specialist roster with a warm, reusable execution `sidekick`/, /Inline-first lead:/, /Warm sidekick \(<100k reuse\):/, /Ephemeral specialists when distinct judgment or isolation pays:/],
+        "apex-orchestrate": [/read-only outcome gets one appropriate evidence-returning role/, /one writer, and independent Oracle review/, /exact integrated content and environment are unchanged/, /User-visible live-page changes still need Inspector proof/],
+        fusion: [/Coherent bounded edits, narrow known-path lookups, and small subtle integration work may stay inline/, /inspect the actual diff, boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/],
+        work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/],
+      };
+      for (const [projection, text] of [["Pi", current], ["Muse", musePrompt], ["bridge", projected!]]) {
+        for (const contract of contracts[mode]!) assert.match(text, contract, `${mode} ${projection} missing ${contract}`);
+      }
       assert.equal(options.forceSystemPrompt, undefined, `${mode} forced prompt`);
       if (mode !== "pi") {
         assert.match(current, /Profile delivery token/);

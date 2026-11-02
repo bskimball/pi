@@ -129,7 +129,7 @@ after(() => shippingTemps.forEach(p => rmSync(p, { recursive: true, force: true 
 const checks = [{ command: "node", args: ["-e", "process.exit(0)"] }];
 const realExec: Exec = async (command, args, options) => {
   const r = spawnSync(command, args, { cwd: options?.cwd, encoding: "utf8", timeout: options?.timeout, windowsHide: true });
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? r.error?.message ?? "", code: r.status ?? 1, killed: !!r.error };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? r.error?.message ?? "", code: r.status ?? 1, killed: !!r.error, truncated: r.error !== undefined && "code" in r.error && r.error.code === "ENOBUFS" };
 };
 function shippingFixture() {
   const dir = mkdtempSync(join(tmpdir(), "pi-shipping-test-")); shippingTemps.push(dir);
@@ -251,6 +251,14 @@ test("queue timeout is a failed command even if its termination handler exits cl
   const f = shippingFixture(); mkdirSync(queueDir(f.root), { recursive: true });
   const r = await queueExec(f.root)(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},100)"], { cwd: f.root, timeout: 1000 });
   assert.equal(r.killed, true);
+  assert.equal(r.truncated, false);
+  for (const stream of ["stdout", "stderr"] as const) {
+    const output = await queueExec(f.root)(process.execPath, ["-e", `process.${stream}.write('x'.repeat(24001))`], { cwd: f.root });
+    assert.equal(output.code, 0);
+    assert.equal(output.killed, false);
+    assert.equal(output.truncated, true);
+    assert.equal(output[stream], "x".repeat(24000));
+  }
 });
 
 test("durable queue blocks failed gates, changed heads, and changed approval contracts", async () => {
@@ -260,7 +268,7 @@ test("durable queue blocks failed gates, changed heads, and changed approval con
     await enqueue(f.root, "session-one", "demo", candidate, true);
     if (change === "head") f.change("advanced\n");
     if (change === "contract") await f.call({ operation: "amend", task: "demo", paths: ["README.md", "new.txt", "outside.txt"], confirm: true });
-    await runQueue(f.root, change === "gate" ? async () => ({ stdout: "", stderr: "gate failed", code: 1, killed: false }) : realExec);
+    await runQueue(f.root, change === "gate" ? async () => ({ stdout: "", stderr: "gate failed", code: 1, killed: false, truncated: false }) : realExec);
     assert.equal(loadTask(f.root, "demo").landed, undefined);
     assert.match(JSON.stringify(queueStatus(f.root)), /blocked/);
     assert.equal(shippingGit(f.remote, ["rev-parse", "main"]), f.base);
@@ -333,7 +341,7 @@ test("verification resumes only matching commands/revision, rejects failed and m
   let first = 0, second = 0, fail = true;
   const exec: Exec = async command => {
     if (command === "node") first++; else second++;
-    return { code: command === "second" && fail ? 1 : 0, stdout: "gate", stderr: "", killed: false };
+    return { code: command === "second" && fail ? 1 : 0, stdout: "gate", stderr: "", killed: false, truncated: false };
   };
   const verify = (fresh = false) => f.call({ operation: "verify", task: "demo", expectedHead: head(f.root), fresh }, exec);
   await assert.rejects(verify(), /Gate 2\/2 failed/); assert.equal(loadTask(f.root, "demo").gates?.passed, 1);
@@ -342,7 +350,7 @@ test("verification resumes only matching commands/revision, rejects failed and m
   await verify(true); assert.equal(first, 2);
   f.change("new revision\n"); await verify(); assert.equal(first, 3);
   await assert.rejects(f.call({ operation: "land", task: "demo", expectedHead: head(f.root), confirm: true }), /review verdict/);
-  const mutating: Exec = async () => { writeFileSync(join(f.root, "README.md"), "formatter mutation\n"); return { code: 0, stdout: "", stderr: "", killed: false }; };
+  const mutating: Exec = async () => { writeFileSync(join(f.root, "README.md"), "formatter mutation\n"); return { code: 0, stdout: "", stderr: "", killed: false, truncated: false }; };
   await assert.rejects(f.call({ operation: "verify", task: "demo", expectedHead: head(f.root), fresh: true }, mutating), /must be clean/);
   assert.equal(loadTask(f.root, "demo").gates?.passed, 0);
 });
@@ -406,7 +414,7 @@ function githubFixture(f: ReturnType<typeof shippingFixture>) {
     } else if (command === "git" && args[0] === "ls-remote") stdout = remoteTip ? `${remoteTip}\trefs/heads/feat/task` : "";
     else if (command === "git" && args[0] === "fetch") shippingGit(f.root, ["update-ref", "refs/remotes/origin/main", target]);
     else return realExec(command, args, options);
-    return { code: 0, stdout, stderr: "", killed: false };
+    return { code: 0, stdout, stderr: "", killed: false, truncated: false };
   };
   return { exec, calls, setPending(v: boolean) { pending = v; }, getPR: () => pr };
 }

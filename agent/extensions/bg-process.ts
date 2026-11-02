@@ -9,19 +9,23 @@ import {
   type ChildProcess,
   type ChildProcessByStdio,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { watch, type FSWatcher } from "node:fs";
+import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { killProcessTree, killProcessTreeSync } from "./bg-process/internal/process-tree-kill.ts";
 import { JobRegistry } from "./bg-process/internal/job-registry.ts";
 import { shellInvocation } from "./bg-process/internal/shell-invocation.ts";
 import { textResult, resolveCwd, validateCwd } from "./bg-process/internal/tool-result.ts";
+import { appendStream, emptyStream, type JobState, type JobStatus, type StreamBuf } from "./bg-process/internal/job-state.ts";
+import { readSessionJobs, removeJob, sessionJobDirectory, startPersistentJob, stopPersistentJob } from "./bg-process/internal/persistent-store.ts";
 
 // ---------------------------------------------------------------- constants
 
 const MAX_RUNNING = 8;
 const MAX_SETTLED = 24;
-const STREAM_CAP = 48_000;
 const STATUS_STREAM_CAP = 12_000;
 const STATUS_LINE_CAP = 80;
 const LIST_CMD_CAP = 120;
@@ -30,50 +34,13 @@ const BG_SETTLED_HINT =
   "Use bg_status for bounded logs, or bg_list to see jobs.";
 const TITLE_CAP = 80;
 
-type JobStatus = "running" | "completed" | "failed" | "killed";
-
-interface StreamBuf {
-  text: string;
-  truncated: boolean;
-  bytes: number;
-}
-
-interface BgJob {
-  id: string;
-  title: string;
-  command: string;
-  cwd: string;
-  pid: number | undefined;
-  status: JobStatus;
-  startedAt: number;
-  endedAt?: number;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: StreamBuf;
-  stderr: StreamBuf;
-  killRequested: boolean;
+interface BgJob extends JobState {
   notified: boolean;
   child?: ChildProcess;
+  directory?: string;
 }
 
 // ---------------------------------------------------------------- helpers
-
-function emptyStream(): StreamBuf {
-  return { text: "", truncated: false, bytes: 0 };
-}
-
-function appendStream(buf: StreamBuf, chunk: Buffer | string): void {
-  const piece = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-  if (!piece) return;
-  buf.bytes += Buffer.byteLength(piece, "utf8");
-  const next = buf.text + piece;
-  if (next.length <= STREAM_CAP) {
-    buf.text = next;
-    return;
-  }
-  buf.truncated = true;
-  buf.text = next.slice(next.length - STREAM_CAP);
-}
 
 function cleanOneLine(value: unknown, max: number): string {
   const text = String(value ?? "")
@@ -139,6 +106,9 @@ function jobView(job: BgJob, withOutput: boolean): BgJobView {
     exitCode: job.exitCode,
     signal: job.signal,
     killRequested: job.killRequested,
+    persistent: job.persistent,
+    runnerPid: job.runnerPid,
+    runnerUnavailable: job.runnerUnavailable,
     stdoutTail: stdout?.text,
     stderrTail: stderr?.text,
     stdoutBytes: stdout?.bytes ?? job.stdout.bytes,
@@ -155,12 +125,20 @@ export default function (pi: ExtensionAPI) {
   let nextId = 1;
   let agentBusy = false;
   let shuttingDown = false;
+  let persistentRoot: string | undefined;
+  const persistentWatchers = new Map<string, FSWatcher>();
 
   const runningCount = () =>
     [...jobs.values()].filter((job) => job.status === "running").length;
 
   const pruneSettled = () => {
-    jobs.pruneSettled((job) => job.status !== "running", MAX_SETTLED);
+    const settled = jobs.entries().filter(({ item }) => item.status !== "running" && !item.runnerUnavailable);
+    for (const { id, item } of settled.slice(0, Math.max(0, settled.length - MAX_SETTLED))) {
+      if (item.directory) removeJob(item.directory);
+      persistentWatchers.get(id)?.close();
+      persistentWatchers.delete(id);
+      jobs.delete(id);
+    }
   };
 
   const summarizeJob = (job: BgJob, now = Date.now()): string => {
@@ -170,7 +148,7 @@ export default function (pi: ExtensionAPI) {
       job.status === "running"
         ? "exit=-"
         : `exit=${job.exitCode ?? "null"}${job.signal ? ` signal=${job.signal}` : ""}`;
-    return `${job.id}  ${job.status.padEnd(9)} pid=${pid}  ${exit}  age=${age}  ${cleanOneLine(job.title, TITLE_CAP)}  cwd=${job.cwd}`;
+    return `${job.id}  ${job.status.padEnd(9)} pid=${pid}  ${exit}  age=${age}${job.persistent ? "  persistent" : ""}  ${cleanOneLine(job.title, TITLE_CAP)}  cwd=${job.cwd}`;
   };
 
   const formatStatus = (job: BgJob): string => {
@@ -350,19 +328,53 @@ export default function (pi: ExtensionAPI) {
     return `${job.id} kill requested (${reason}); process tree target pid=${pid}.`;
   };
 
+  const refreshPersistentJobs = (ctx?: ExtensionContext) => {
+    if (ctx) persistentRoot = sessionJobDirectory(getAgentDir(), ctx.sessionManager.getSessionId());
+    if (!persistentRoot) return;
+    for (const { directory, job } of readSessionJobs(persistentRoot)) {
+      const previous = jobs.get(job.id);
+      jobs.set(job.id, { ...job, directory, notified: previous?.notified ?? job.status !== "running" });
+      if (job.status === "running" && !persistentWatchers.has(job.id) && !shuttingDown) {
+        const watcher = watch(directory, (_event, filename) => {
+          if (shuttingDown || String(filename) !== "state.json") return;
+          try {
+            refreshPersistentJobs();
+            drainSettledNotifications();
+          } catch {
+            // A tool refresh reports unreadable records; watcher callbacks must
+            // never throw into the host's process event loop.
+          }
+        });
+        watcher.on("error", () => {
+          watcher.close();
+          persistentWatchers.delete(job.id);
+        });
+        watcher.unref();
+        persistentWatchers.set(job.id, watcher);
+      } else if (job.status !== "running") {
+        persistentWatchers.get(job.id)?.close();
+        persistentWatchers.delete(job.id);
+      }
+    }
+    pruneSettled();
+  };
+
   // ------------------------------------------------------------ tools
 
   pi.registerTool({
     name: "bg_start",
     label: "Bg Start",
     description:
-      "Start a long-running shell command in the background (dev servers, watchers). Returns immediately with a job id. Use bg_status/bg_list/bg_kill to inspect or stop. Prefer bash for short commands.",
+      "Start a long-running shell command in the background. Set persistent=true for a dev server that must survive Pi shutdown/restart; otherwise the job stops with this session. Uses cmd.exe on Windows, the POSIX shell elsewhere. Use bg_status/bg_list/bg_kill to manage jobs. Prefer bash for short commands.",
     promptSnippet:
       "Start long-running background shell jobs (dev servers/watchers) without blocking.",
     promptGuidelines: [
       "Use bg_start for servers/watchers that must keep running; use bash for short commands.",
+      "Pass the foreground server command, not start/nohup or a command that daemonizes; bg_start supplies the background lifetime.",
       "Do not pass interactive prompts; there is no stdin.",
-      "Inspect with bg_status/bg_list and stop with bg_kill when finished.",
+      "Use persistent=true for a user-requested dev server that must survive Pi restarts; omit it for temporary verification jobs.",
+      "On Windows commands run in cmd.exe, not bash; Bash-style NAME=value command syntax does not work.",
+      "Inspect with bg_status/bg_list and stop with bg_kill when finished. Persistent jobs require explicit cleanup.",
     ],
     parameters: Type.Object({
       command: Type.String({
@@ -374,6 +386,9 @@ export default function (pi: ExtensionAPI) {
           description: "Short label for listings (defaults to the command).",
         }),
       ),
+      persistent: Type.Optional(Type.Boolean({
+        description: "Survive Pi shutdown/restart, recoverable in this conversation (default false). Stop explicitly with bg_kill.",
+      })),
       working_dir: Type.Optional(
         Type.String({
           description:
@@ -390,6 +405,7 @@ export default function (pi: ExtensionAPI) {
         });
       }
 
+      refreshPersistentJobs(ctx);
       // Reserve the slot before any yield so parallel bg_start calls cannot
       // exceed MAX_RUNNING even if this path later gains an await.
       if (runningCount() >= MAX_RUNNING) {
@@ -401,7 +417,8 @@ export default function (pi: ExtensionAPI) {
       const cwdError = validateCwd(cwd);
       if (cwdError) return textResult(cwdError, true, { bg: { message: cwdError } });
 
-      const id = `bg_${nextId++}`;
+      const persistent = params.persistent === true;
+      const id = persistent ? `bg_${randomUUID()}` : `bg_${nextId++}`;
       const title = cleanOneLine(params.title?.trim() || command, TITLE_CAP);
       const job: BgJob = {
         id,
@@ -417,9 +434,32 @@ export default function (pi: ExtensionAPI) {
         stderr: emptyStream(),
         killRequested: false,
         notified: false,
+        persistent,
       };
 
       jobs.set(id, job);
+
+      if (persistent) {
+        const directory = join(persistentRoot!, id);
+        try {
+          const state = await startPersistentJob(directory, job);
+          jobs.set(id, { ...state, directory, notified: false });
+          refreshPersistentJobs(ctx);
+          const pending = state.status === "running" && !state.pid;
+          let action = "settled";
+          if (state.status === "running") action = pending ? "Still starting" : "started";
+          const message = [
+            `${action} ${id} (persistent)`,
+            formatStatus(jobs.get(id)!),
+            "Survives Pi shutdown/restart. Resume this conversation to recover it; stop explicitly with bg_kill.",
+            `Use bg_status id="${id}" for logs; bg_kill id="${id}" to stop.`,
+          ].join("\n");
+          return textResult(message, state.status === "failed", { bg: { job: jobView(jobs.get(id)!, true) } });
+        } catch (error) {
+          const message = `Could not finish starting ${id}: ${error instanceof Error ? error.message : String(error)}. Check bg_list/bg_status before retrying; a persistent launch record may exist.`;
+          return textResult(message, true, { bg: { message } });
+        }
+      }
 
       const shell = shellInvocation(command);
       let child: ChildProcessByStdio<Writable, Readable, Readable>;
@@ -468,7 +508,8 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      refreshPersistentJobs(ctx);
       const id = params.id?.trim();
       if (!id) {
         return textResult("id is required.", true, {
@@ -501,7 +542,8 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      refreshPersistentJobs(ctx);
       const includeSettled = params.include_settled !== false;
       const now = Date.now();
       const rows = jobs
@@ -547,7 +589,8 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Job id from bg_start (e.g. bg_1)." }),
     }),
     executionMode: "parallel",
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      refreshPersistentJobs(ctx);
       const id = params.id?.trim();
       if (!id) {
         return textResult("id is required.", true, {
@@ -558,6 +601,21 @@ export default function (pi: ExtensionAPI) {
       if (!job) {
         const message = `Unknown job "${id}". Use bg_list to see current jobs.`;
         return textResult(message, true, { bg: { message } });
+      }
+      if (job.persistent && job.directory) {
+        const state = await stopPersistentJob(job.directory);
+        const updated = { ...state, directory: job.directory, notified: job.notified };
+        jobs.set(id, updated);
+        const pending = state.status === "running";
+        let message = `${id}: ${state.status} (exit=${state.exitCode ?? "null"}).`;
+        if (state.runnerUnavailable) {
+          message = `${id}: runner unavailable; no PID-based kill attempted. Command and descendants require inspection.`;
+        } else if (pending) {
+          message = `${id}: stop requested but exit not confirmed. Request retained; use bg_status before retrying.`;
+        }
+        return textResult(`${message}\n\n${formatStatus(updated)}`, pending || state.runnerUnavailable === true, {
+          bg: { job: jobView(updated, true), message },
+        });
       }
       const message = killJob(job, "bg_kill");
       // Give the tree a brief moment so status often reflects the kill.
@@ -570,6 +628,11 @@ export default function (pi: ExtensionAPI) {
 
   // ------------------------------------------------------------ lifecycle
 
+  pi.on("session_start", (_event, ctx) => {
+    shuttingDown = false;
+    refreshPersistentJobs(ctx);
+  });
+
   // Busy gate is start → settled only. Do not clear on agent_end: Pi may still
   // compact/retry/continue before agent_settled, and triggerTurn is unsafe then.
   pi.on("agent_start", () => {
@@ -577,14 +640,17 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("agent_settled", () => {
     agentBusy = false;
+    refreshPersistentJobs();
     drainSettledNotifications();
   });
 
   pi.on("session_shutdown", () => {
     shuttingDown = true;
+    for (const watcher of persistentWatchers.values()) watcher.close();
+    persistentWatchers.clear();
     try {
       for (const { item: job } of jobs.entries()) {
-        if (job.status !== "running") continue;
+        if (job.persistent || job.status !== "running") continue;
         try {
           killJob(job, "session_shutdown", "sync");
         } catch {

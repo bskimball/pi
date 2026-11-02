@@ -1,8 +1,9 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { isHydraScope, isHydraTier, type HydraScope, type HydraTier } from "./hydra/scorer.ts";
 
-export const MODES = ["pi", "apex", "apex-orchestrate", "fusion", "work"] as const;
+export const MODES = ["pi", "apex", "apex-orchestrate", "fusion", "utopia", "work"] as const;
 export type Mode = typeof MODES[number];
 export type ModelChoice = { provider: string; modelId: string; thinking: string };
 export type FusionPair = { lead: ModelChoice; sidekick: ModelChoice };
@@ -82,6 +83,47 @@ export function restoreMode(entries: readonly any[], defaults: Preferences, fres
   }
   return restored;
 }
+export const isComputerUseTool = (name: string): boolean => name.startsWith("computer_use_");
+
+const cuaParentGatePath = (pid: string | number): string => join(tmpdir(), `pi-cua-gate-${pid}.json`);
+
+export function writeParentCuaState(enabled: boolean, pid: number = process.pid): void {
+  const file = cuaParentGatePath(pid);
+  if (!enabled) {
+    try {
+      unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return;
+  }
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify({ enabled: true, updatedAt: Date.now() }), { mode: 0o600 });
+    renameSync(temp, file);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* ignore */ }
+    throw error;
+  }
+}
+
+export function clearParentCuaState(pid: number = process.pid): void {
+  try { unlinkSync(cuaParentGatePath(pid)); } catch { /* ignore */ }
+}
+
+export function isSubagentCuaEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const parentPid = env.PI_CUA_PARENT_PID?.trim();
+  if (parentPid && /^\d+$/.test(parentPid)) {
+    try {
+      const raw = JSON.parse(readFileSync(cuaParentGatePath(parentPid), "utf8"));
+      if (typeof raw?.enabled === "boolean") return raw.enabled;
+    } catch {
+      return false;
+    }
+  }
+  return env.PI_CUA_ENABLED === "1";
+}
+
 /** Fusion-owned: persistent-sidekick modes do not expose chain/rebind. */
 export function toolsForFusion(names: string[]): string[] {
   return names.filter(name => name !== "task_chain" && name !== "task_rebind");
@@ -92,8 +134,9 @@ export function toolsForWork(names: string[]): string[] {
   return names.filter(name => name !== "task_chain" && name !== "task_rebind");
 }
 
-export function toolsForMode(mode: Mode, names: string[]): string[] {
-  if (mode === "fusion") return toolsForFusion(names);
-  if (mode === "work") return toolsForWork(names);
-  return names;
+export function toolsForMode(mode: Mode, names: string[], cuaEnabled = false): string[] {
+  const filtered = cuaEnabled ? names : names.filter(name => !isComputerUseTool(name));
+  if (mode === "fusion") return toolsForFusion(filtered);
+  if (mode === "work") return toolsForWork(filtered);
+  return filtered;
 }

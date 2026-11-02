@@ -23,19 +23,16 @@ import {
 import type { Component } from "@earendil-works/pi-tui";
 import {
   agentParamDescription,
-  apexAgentList,
-  piAgentParamDescription,
   composeSpecialistSharedPrompts,
   discoverAgents,
   isApexRosterAgent,
   isFusionOnlyAgent,
   isWorkCrewAgent,
-  orchestrateAgentList,
   orchestrateAgentParamDescription,
+  piAgentParamDescription,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
   stderrDiagnostic,
-  workCrewList,
   WORK_CREW_AGENTS,
 } from "./runtime/agent-discovery.ts";
 import { childToolArgs, isolatedChildEnv } from "./runtime/child-process.ts";
@@ -564,13 +561,12 @@ export default function (pi: ExtensionAPI) {
     ),
   });
 
-  const apexAgentCatalog = apexAgentList(agents);
-  const orchestrateAgentCatalog = orchestrateAgentList(agents);
-  const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${apexAgentCatalog}`;
-  const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate. Do not auto-route. Returns the agent's final report.\n\nAvailable agents:\n${apexAgentCatalog}`;
-  const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist running in its own process with a fresh context window. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), author (all email drafting and substantive email rewriting; other human-readable prose when separate context pays), or clerk (broad recon, monotonous reversible execution) when its routing trigger fires. Email reading, factual extraction, and summarization remain inline unless another trigger fires. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${workCrewList(agents)}`;
+  const apexAgentNames = [...apexAgents.keys()].join(", ");
+  const taskFullDescription = `Delegate a bounded unit of work to a specialist subagent in a fresh context window and return its final report.\nIssue multiple task calls in one message to run agents in parallel (disjoint file ownership for writers); Ordinary frontend implementation stays with the lead in regular mode.\nAvailable agents (see task_start for full descriptions): ${apexAgentNames}.`;
+  const taskPiDescription = `Delegate a bounded unit of work to a specialist only when the user names that specialist or asks you to delegate.\nDo not auto-route; returns the agent's final report.\nAvailable agents (see task_start for full descriptions): ${apexAgentNames}.`;
+  const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist in a fresh context window and return its final report.\nWork is inline-first: dispatch strategist, researcher, author (all email drafting and substantive email rewriting; Email reading, factual extraction, and summarization remain inline unless another trigger fires), or clerk when its routing trigger fires. Issue multiple task calls in one message to run agents in parallel.\nAvailable agents (see task_start for full descriptions): ${WORK_CREW_AGENTS.join(", ")}.`;
   const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Always route email drafting and substantive email rewriting to author; keep email reading, factual extraction, and summarization inline unless another trigger fires. Route other human-readable or kindly worded prose to author when separate context pays, business/productivity planning to strategist, external research to researcher, and broad recon or monotonous reversible execution to clerk.`;
-  const taskOrchestrateDescription = `Delegate a bounded unit of work to a specialist subagent running in its own process with a fresh context window. In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist. Returns the agent's final report. Issue multiple task calls in one message to run agents in parallel (only with disjoint file ownership for writers).\n\nAvailable agents:\n${orchestrateAgentCatalog}`;
+  const taskOrchestrateDescription = `Delegate a bounded unit of work to a specialist subagent in a fresh context window and return its final report.\nIn this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist. Issue multiple task calls in one message to run agents in parallel.\nAvailable agents (see task_start for full descriptions): ${apexAgentNames}.`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",

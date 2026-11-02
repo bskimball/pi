@@ -42,4 +42,10 @@ describe("childToolArgs", () => {
     const args = childToolArgs({ apexBrowser: true, tools: "read,browser_tabs" }, "task", env);
     assert.equal(args.at(-1)?.split(",").filter((tool) => tool === "browser_tabs").length, 1);
   });
+
+  it("does not hard-exclude computer_use_* tools for sidekick so discovery and /cua on remain available", () => {
+    assert.deepEqual(childToolArgs({ name: "sidekick" }, "task", env), [
+      "--exclude-tools", "task",
+    ]);
+  });
 });

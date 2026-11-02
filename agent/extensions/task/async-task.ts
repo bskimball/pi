@@ -788,12 +788,16 @@ export default function (pi: ExtensionAPI) {
   const apexAgentCatalog = apexAgentList(agents);
   const orchestrateAgentCatalog = orchestrateAgentList(agents);
   const sidekickDef = agents.get("sidekick");
+  const utopiaAgentCatalog = sidekickDef
+    ? `${apexAgentCatalog}\n- sidekick: ${sidekickDef.description}`
+    : apexAgentCatalog;
   const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Use synchronous \`task\` for one blocking result, such as a final verification gate or review verdict, when no specific independent lead work is ready and the engagement needs no follow-up. Use task_start when specific independent work is ready or the engagement needs steering or follow-up. If a worker is already started and no independent work is ready, call task_wait as the very next action; do not invent work to fill the wait.
 
 Available agents:
 ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
+  const taskStartUtopiaDescription = taskStartFullDescription.replace(apexAgentCatalog, utopiaAgentCatalog);
   const taskStartOrchestrateDescription = taskStartFullDescription
     .replace(
       "Multi-file, long-running, or frontend work may remain inline in regular mode.",
@@ -818,9 +822,11 @@ ${apexAgentCatalog}
 
 At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   const persistentSidekickMode = (): "fusion" | undefined => behaviorMode === "fusion" ? behaviorMode : undefined;
+  const allowsPersistentSidekick = (): boolean => behaviorMode === "fusion" || behaviorMode === "utopia";
   const taskStartDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) return taskStartPersistentDescription;
     if (behaviorMode === "work") return taskStartWorkDescription;
+    if (behaviorMode === "utopia") return taskStartUtopiaDescription;
     return behaviorMode === "pi" ? taskStartPiDescription : behaviorMode === "apex-orchestrate" ? taskStartOrchestrateDescription : taskStartFullDescription;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
@@ -828,6 +834,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, while disjoint units may use parallel sidekicks.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
+    if (behaviorMode === "utopia" && sidekickDef) {
+      return `${agentParamDescription(apexAgents)} Also available: sidekick (warm reusable execution partner across sequential units up to ~100k tokens).`;
+    }
     return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : behaviorMode === "apex-orchestrate" ? orchestrateAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
   };
   const applyTaskStartAdvertisement = (mode = persistentSidekickMode()) => {
@@ -1136,7 +1145,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
    * model. Returns a rejection reason, or undefined when continuation may run.
    */
   const reconcileWorkerScope = (worker: Worker): string | undefined => {
-    if (worker.fusion || worker.explicitModel || !hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) return undefined;
+    if ((worker.fusion && fusionModel() !== undefined) || worker.explicitModel || !hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) return undefined;
     const scoped = scopeAttemptChain(worker.modelAttempts, worker.agent);
     if (scoped.error) return scoped.error;
     if (!modelInHydraScope(worker.model)) {
@@ -1565,7 +1574,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   // Last-known branch for transcript verification paths that run without a
   // calling context (configure rollback). Tool calls pass their own branch.
   let lastBranchSnapshot: readonly unknown[] = [];
-  const fusionModel = () => fusionModelId(fusionLifecycle.configured);
+  const fusionModel = () =>
+    behaviorMode === "fusion" ? fusionModelId(fusionLifecycle.configured) : undefined;
 
   const spawnWorker = async (
     def: AgentDef,
@@ -1597,11 +1607,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     // A rebound sidekick keeps its Fusion identity while the pair is still
     // configured; otherwise it resumes as an ordinary worker. Explicit
     // params.fusion (task_start/task_chain) always wins; `false` stays false.
-    const rebindFusionState = rebindFusion(params.rebind, fusionModel() !== undefined);
+    const rebindFusionState = rebindFusion(params.rebind, fusionModel() !== undefined || allowsPersistentSidekick());
     const isFusion = params.fusion ?? rebindFusionState.fusion;
     const maxTurns = isFusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
     const forcedFusionModel = isFusion ? fusionModel() : undefined;
-    const resolved = (!isFusion && !params.rebind)
+    const resolved = ((!isFusion || !forcedFusionModel) && !params.rebind)
       ? resolveSubagentModelsAndThinking({
           def,
           parentThinking: pi.getThinkingLevel(),
@@ -1612,25 +1622,25 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         })
       : undefined;
     if (resolved?.error) return { error: resolved.error };
-    if (isFusion && !modelInHydraScope(forcedFusionModel)) {
+    if (isFusion && forcedFusionModel && !modelInHydraScope(forcedFusionModel)) {
       return { error: `Hydra scope "${process.env.PI_HYDRA_SCOPE}" excludes the configured Fusion sidekick (${forcedFusionModel ?? "none"}); refusing out-of-scope spawn. Run /jippity off or reconfigure the pair.` };
     }
-    const thinking = isFusion
+    const thinking = isFusion && forcedFusionModel
       ? fusionLifecycle.configured?.sidekick.thinking
       : params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
-    let attempts = isFusion
+    let attempts = isFusion && forcedFusionModel
       ? [forcedFusionModel]
       : resolved?.attempts ?? modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
     // Rebinds bypass the Hydra resolver, so scope-filter their reconstructed
     // fallback chain here; an empty remainder fails closed.
-    if (!isFusion && params.rebind) {
+    if ((!isFusion || !forcedFusionModel) && params.rebind) {
       const scoped = scopeAttemptChain(attempts, def.name);
       if (scoped.error) return { error: scoped.error };
       attempts = scoped.attempts;
     }
-    // Fusion has exactly one configured model and deliberately bypasses the
-    // circuit/fallback chain; preserving its transcript matters more than retry.
-    const initial = isFusion
+    // Fusion has a configured sidekick model when set; in Utopia without a pair,
+    // sidekick resolves via Hydra or static frontmatter.
+    const initial = isFusion && forcedFusionModel
       ? { index: 0, model: forcedFusionModel, skipped: [], failSafe: false }
       : getSharedModelCircuitBreaker().selectAttempt(attempts, 0);
     const model = initial.model;
@@ -2185,13 +2195,27 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult("prompt is required.", true);
       }
       const sidekickMode = persistentSidekickMode();
+      const isSidekickSpawn = Boolean(sidekickMode || (allowsPersistentSidekick() && params.agent === "sidekick"));
       // Only the first sidekick resumes the persisted transcript; parallel
       // clean units start fresh so workers never share one transcript file.
       let fusionResume = false;
       let priorContextTokens: number | undefined;
-      if (sidekickMode) {
+      if (sidekickMode && params.agent !== "sidekick") {
+        return textResult(`Fusion permits task_start only for sidekick.`, true);
+      }
+      if (isSidekickSpawn) {
         if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`Fusion sidekick cannot spawn workers.`, true);
-        if (params.agent !== "sidekick") return textResult(`Fusion permits task_start only for sidekick.`, true);
+        if (hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) {
+          for (const candidate of fusionLifecycle.findAll()) {
+            if (
+              !candidate.closed &&
+              (candidate.lifecycle === "settled" || candidate.lifecycle === "failed") &&
+              !modelInHydraScope(candidate.model)
+            ) {
+              closeWorker(candidate, `Hydra scope changed (${process.env.PI_HYDRA_SCOPE}); parking out-of-scope sidekick`, "sync");
+            }
+          }
+        }
         const outcome = await fusionLifecycle.reuse(
           params.prompt,
           {
@@ -2202,7 +2226,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           },
           PROMPT_ACCEPT_TIMEOUT_MS,
         );
-        const sidekickLabel = "Fusion";
+        const sidekickLabel = behaviorMode === "utopia" ? "Utopia" : "Fusion";
         if (outcome.kind === "conflict" || outcome.kind === "invalid") return textResult(outcome.reason, true);
         if (outcome.kind === "reused") {
           const pair = fusionLifecycle.configured;
@@ -2217,7 +2241,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         // "parked" resumes a saved transcript; "none" creates the first
         // sidekick or a fresh parallel worker for a disjoint clean unit.
         // "fresh" declined the cached findings, so it never resumes one.
-        if (!fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
+        if (sidekickMode && !fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
         fusionResume = outcome.kind !== "fresh"
           && (outcome.kind === "parked" || fusionLifecycle.findAll().length === 0);
         if (!runtime.canStart()) {
@@ -2231,8 +2255,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (behaviorMode !== "work" && isWorkCrewAgent(params.agent)) {
         return textResult(`Work crew agents (${WORK_CREW_AGENTS.join(", ")}) are Work-only — ${params.agent} cannot run in this mode; switch to Work or dispatch advisor, librarian, or scout.`, true);
       }
-      if (behaviorMode !== "fusion" && isFusionOnlyAgent(params.agent)) {
-        return textResult(`sidekick is Fusion-only — ${params.agent} cannot run in this mode; switch to Fusion or dispatch an Apex specialist.`, true);
+      if (!allowsPersistentSidekick() && isFusionOnlyAgent(params.agent)) {
+        return textResult(`sidekick is Fusion/Utopia-only — ${params.agent} cannot run in this mode; switch to Fusion or Utopia, or dispatch an Apex specialist.`, true);
       }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
         return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, author, or clerk, or switch modes.`, true);
@@ -2276,7 +2300,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const attachedTranscripts = new Set(
         fusionLifecycle.findAll().map((worker) => worker.sessionFile).filter((file): file is string => !!file),
       );
-      const savedFusion = sidekickMode !== undefined && fusionResume
+      const savedFusion = isSidekickSpawn && fusionResume
         ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.(), attachedTranscripts)
         : undefined;
       const { worker, error, fusionObserved, priorContextTokens: restoredContextTokens } = await spawnWorker(def, {
@@ -2286,7 +2310,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         allowFallback: params.allowFallback,
         reportSchema,
         forkSessionFile,
-        fusion: sidekickMode !== undefined,
+        fusion: isSidekickSpawn,
         fusionParentSessionId: parentSessionId,
         resumeSessionFile: savedFusion?.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
         ctx,
@@ -2466,7 +2490,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     parameters: Type.Object({
       steps: Type.Array(
         Type.Object({
-          agent: Type.String({ description: agentParamDescription(apexAgents) }),
+          agent: Type.String({
+            description: `Agent to run. One of: ${[...apexAgents.keys()].join(", ")}. See task_start for specialist routing.`,
+          }),
           prompt: Type.String({
             description:
               "Work order for this step. Use {{prev}} to insert the previous step's bounded report.",
@@ -4113,9 +4139,9 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   pi.events.on("pi:modes:changed", (payload: unknown) => {
     const event = payload as { mode?: string; fusion?: FusionPair };
     behaviorMode = event.mode ?? "pi";
-    fusionLifecycle.trackPair(event.fusion);
+    fusionLifecycle.trackPair(behaviorMode === "fusion" ? event.fusion : undefined);
     applyTaskStartAdvertisement();
-    if (behaviorMode !== "fusion") {
+    if (!allowsPersistentSidekick()) {
       fusionLifecycle.parkForModeLeave();
     }
   });

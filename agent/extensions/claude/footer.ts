@@ -33,7 +33,7 @@ function joinDropping(segs: Seg[], sep: string, width: number): string {
   const cur = [...segs];
   for (;;) {
     const joined = cur.map((s) => s.text).join(sep);
-    if (safeVisibleWidth(joined) <= width) return joined;
+    if (safeVisibleWidth(joined) <= width || cur.length <= 1) return joined;
     let idx = -1;
     let best = -Infinity;
     cur.forEach((s, i) => {
@@ -42,11 +42,34 @@ function joinDropping(segs: Seg[], sep: string, width: number): string {
         idx = i;
       }
     });
-    if (idx < 0 || best < 0 || cur.length <= 1) {
-      return safeTruncateToWidth(joined, width);
-    }
+    if (idx < 0 || best < 0) return joined;
     cur.splice(idx, 1);
   }
+}
+
+function parseModeCluster(s: FooterSnapshot): {
+  modeName: string;
+  modePosture: string;
+  hydraText: string;
+} {
+  const raw = (s.mode ?? "").trim();
+  if (!raw) {
+    return { modeName: "", modePosture: "", hydraText: "" };
+  }
+  const dotIdx = raw.indexOf("\u00B7");
+  const modeName = (dotIdx >= 0 ? raw.slice(0, dotIdx) : raw).trim();
+  const modePosture = (dotIdx >= 0 ? raw.slice(dotIdx + 1) : "").trim();
+  const hydraStatus = s.statuses.find((st) => st.key === "hydra")?.text.trim() ?? "";
+  const hydraText =
+    hydraStatus && !raw.toLowerCase().includes(hydraStatus.toLowerCase()) ? hydraStatus : "";
+  return { modeName, modePosture, hydraText };
+}
+
+function statusPriority(key: string): number {
+  if (key === "hydra") return -1;
+  if (key === "jev") return 12;
+  if (key === "cua") return 8;
+  return 10;
 }
 
 function contextTone(pct: number | null): "dim" | "warning" | "error" {
@@ -77,27 +100,31 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
   const w = Math.max(0, Math.floor(width));
   if (w <= 0) return [];
   const narrow = w < 50;
-  const mode = (s.mode ?? "").trim();
+  const { modeName, modePosture, hydraText } = parseModeCluster(s);
   const pct = s.context.percent;
   const modelId = s.model?.id ?? "no model";
   const think = (s.thinking ?? "").trim();
   const provName = s.multiProvider && s.model ? s.model.provider : "";
 
   // Line 1: mode + model cluster left, context readout right. Shed thinking,
-  // then provider, then the tokens/window detail; the model id and percent
-  // never drop.
+  // then provider, then mode posture/hydra detail, then the tokens/window
+  // detail; the mode badge, model id, and percent never drop.
+  let useModePosture = Boolean(modePosture) && !narrow;
+  let useModeHydra = Boolean(hydraText) && !narrow;
   let useProv = !!provName && !narrow;
   let useThink = !!think && !narrow;
   let useCtxDetail = !narrow;
   const buildLeft = () => {
+    const modeSeg = modeName
+      ? paint.fg("accent", `  \u25B8\u25B8 ${modeName.toLowerCase()} mode`) +
+        (useModePosture && modePosture ? paint.fg("muted", ` \u00B7 ${modePosture.toLowerCase()}`) : "") +
+        (useModeHydra && hydraText ? paint.fg("accent", ` (${hydraText.toLowerCase()})`) : "")
+      : "";
     const modelSeg =
       (useProv ? `(${provName}) ` : "") +
       modelId +
       (useThink ? ` \u00B7 ${think}` : "");
-    return (
-      (mode ? paint.fg("accent", `  \u25B8\u25B8 ${mode.toLowerCase()} mode`) : "") +
-      (mode ? paint.fg("dim", ` \u00B7 ${modelSeg}`) : paint.fg("dim", `  ${modelSeg}`))
-    );
+    return modeSeg + (modeSeg ? paint.fg("dim", ` \u00B7 ${modelSeg}`) : paint.fg("dim", `  ${modelSeg}`));
   };
   const buildCtx = () => {
     if (!useCtxDetail) {
@@ -113,6 +140,8 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
     if (gap >= 1) break;
     if (useThink) useThink = false;
     else if (useProv) useProv = false;
+    else if (useModePosture) useModePosture = false;
+    else if (useModeHydra) useModeHydra = false;
     else if (useCtxDetail) useCtxDetail = false;
     else break;
     left = buildLeft();
@@ -121,9 +150,12 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
   // fitLine truncates the model side first, so the context readout survives.
   const line1 = fitLine(left, right, w);
 
-  // Line 2: dim place cluster plus session details. Shed statuses, then
-  // cost, then usage, then branch; the cwd truncates only as a last resort.
-  // Narrow keeps just the truncated cwd.
+  // Line 2: dim place cluster plus session details. Shed low-priority
+  // statuses first via joinDropping against the remaining width after place,
+  // then all statuses, then cost, then usage, then branch; the cwd truncates
+  // only as a last resort. Narrow keeps just the truncated cwd.
+  const hydraOnLine1 = Boolean(modeName && hydraText && useModeHydra);
+  const line2Statuses = hydraOnLine1 ? s.statuses.filter((st) => st.key !== "hydra") : s.statuses;
   const usageParts: string[] = [];
   if (s.usage.input > 0) usageParts.push(`${formatTokens(s.usage.input)} in`);
   if (s.usage.output > 0) usageParts.push(`${formatTokens(s.usage.output)} out`);
@@ -131,21 +163,22 @@ export const buildFooter: BuildFooter = (s, width, paint) => {
   let useBranch = !!s.branch && !narrow;
   let useUsage = !narrow && usageParts.length > 0;
   let useCost = !narrow;
-  let useStatuses = !narrow && s.statuses.length > 0;
+  let useStatuses = !narrow && line2Statuses.length > 0;
   let line2: string;
   for (;;) {
     const place =
       paint.fg("dim", `  ${s.cwd}`) +
       (useBranch ? paint.fg("dim", ` \u00B7 ${s.branch}`) : "");
     const groups: Seg[] = [];
-    if (useUsage) groups.push({ text: paint.fg("dim", usageParts.join(" \u00B7 ")), pri: 5 });
-    if (useCost) groups.push({ text: paint.fg("dim", costText), pri: 6 });
+    if (useUsage) groups.push({ text: paint.fg("dim", usageParts.join(" \u00B7 ")), pri: -1 });
+    if (useCost) groups.push({ text: paint.fg("dim", costText), pri: -1 });
     if (useStatuses) {
-      for (const st of s.statuses) {
-        groups.push({ text: paint.fg("dim", st.text), pri: 10 });
+      for (const st of line2Statuses) {
+        groups.push({ text: paint.fg("dim", st.text), pri: statusPriority(st.key) });
       }
     }
-    const rest = groups.length > 0 ? joinDropping(groups, paint.fg("dim", " \u00B7 "), w) : "";
+    const restAvail = Math.max(0, w - safeVisibleWidth(place) - 1);
+    const rest = groups.length > 0 ? joinDropping(groups, paint.fg("dim", " \u00B7 "), restAvail) : "";
     const total = safeVisibleWidth(place) + (rest ? 1 + safeVisibleWidth(rest) : 0);
     if (total <= w) {
       line2 = rest ? fitLine(place, rest, w) : safeTruncateToWidth(place, w);

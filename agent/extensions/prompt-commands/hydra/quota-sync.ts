@@ -18,6 +18,8 @@ export interface ProviderQuotaEntry {
   provider: string;
   /** Remaining quota percentage on [0..100], or null when only health/cooldown is known. */
   remainingPercent: number | null;
+  /** When remainingPercent was observed; absent on legacy snapshots. */
+  remainingObservedAt?: number;
   inCooldown: boolean;
   disabled: boolean;
   successCount: number;
@@ -275,14 +277,23 @@ export async function syncQuotaSnapshot(options?: {
         return rec;
       }
     }));
+    const observedAt = Date.now();
     const providers = parseCredentialsResponse({ files: enrichedFiles });
-    const previousClaude = readQuotaSnapshot(path).providers.anthropic;
-    if (claudeProbeFailed && !claudeProbeSucceeded && providers.anthropic && previousClaude?.remainingPercent != null) {
-      providers.anthropic.remainingPercent = Math.min(providers.anthropic.remainingPercent ?? 100, previousClaude.remainingPercent);
+    for (const entry of Object.values(providers)) {
+      if (entry.remainingPercent !== null) entry.remainingObservedAt = observedAt;
+    }
+    const previous = readQuotaSnapshot(path);
+    const previousClaude = previous.providers.anthropic;
+    if (claudeProbeFailed && !claudeProbeSucceeded && providers.anthropic && previousClaude?.remainingPercent != null &&
+      (providers.anthropic.remainingPercent === null || previousClaude.remainingPercent <= providers.anthropic.remainingPercent)) {
+      providers.anthropic.remainingPercent = previousClaude.remainingPercent;
+      // Preserve even an invalid explicit timestamp; only legacy absence falls back.
+      providers.anthropic.remainingObservedAt = previousClaude.remainingObservedAt === undefined
+        ? previous.updatedAt : previousClaude.remainingObservedAt;
     }
     const snapshot: QuotaSnapshot = {
       schema: 1,
-      updatedAt: Date.now(),
+      updatedAt: observedAt,
       source: "live",
       providers,
     };
@@ -309,13 +320,19 @@ export function inferModelFamily(provider: string, modelId: string): string {
   return provider.toLowerCase();
 }
 
-/** Remaining quota percent for a model's family, or null when CPA has not reported it. */
+/** Fresh remaining percentage, or null when unknown, invalid, or expired. */
 export function quotaRemainingForModel(
   provider: string,
   modelId: string,
   quota: QuotaSnapshot,
 ): number | null {
-  return quota.providers[inferModelFamily(provider, modelId)]?.remainingPercent ?? null;
+  const entry = quota.providers[inferModelFamily(provider, modelId)];
+  if (!entry) return null;
+  const observedAt = entry.remainingObservedAt === undefined ? quota.updatedAt : entry.remainingObservedAt;
+  const now = Date.now();
+  if (typeof observedAt !== "number" || !Number.isFinite(observedAt) || observedAt <= 0 || observedAt > now || now - observedAt > QUOTA_STALE_MS) return null;
+  const value = entry.remainingPercent;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
 }
 
 /**
@@ -340,15 +357,16 @@ export function quotaMultiplierForModel(
   if (!entry) return { multiplier: 1 };
   if (entry.disabled) return { multiplier: 0, reason: "credential-disabled" };
   if (entry.inCooldown) return { multiplier: 0, reason: "quota-cooldown" };
-  if (entry.remainingPercent !== null) {
-    if (entry.remainingPercent < 5) {
-      return { multiplier: 0, reason: `quota-exhausted (${entry.remainingPercent.toFixed(0)}%)` };
+  const remaining = quotaRemainingForModel(provider, modelId, quota);
+  if (remaining !== null) {
+    if (remaining < 5) {
+      return { multiplier: 0, reason: `quota-exhausted (${remaining.toFixed(0)}%)` };
     }
-    if (entry.remainingPercent < 40 && tier !== "max") {
-      const scaled = 0.35 + ((entry.remainingPercent - 5) / 35) * 0.65;
+    if (remaining < 40 && tier !== "max") {
+      const scaled = 0.35 + ((remaining - 5) / 35) * 0.65;
       return {
         multiplier: Number(scaled.toFixed(3)),
-        reason: `quota-conserve (${entry.remainingPercent.toFixed(0)}%)`,
+        reason: `quota-conserve (${remaining.toFixed(0)}%)`,
       };
     }
   }

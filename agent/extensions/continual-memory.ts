@@ -7,7 +7,6 @@
 // Store logic lives in continual-memory/store.ts; this file is the tool adapter.
 
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -186,12 +185,12 @@ export default function (pi: ExtensionAPI): void {
     ],
     parameters: Type.Object({
       scope: Type.Optional(
-        StringEnum(["local", "project", "global", "all"] as const, {
+        Type.Union([Type.Literal("local"), Type.Literal("project"), Type.Literal("global"), Type.Literal("all")], {
           description: "local | project | global | all (default all).",
         }),
       ),
       kind: Type.Optional(
-        StringEnum(["memory", "prompt"] as const, {
+        Type.Union([Type.Literal("memory"), Type.Literal("prompt")], {
           description: "Optional kind filter: memory | prompt.",
         }),
       ),
@@ -252,16 +251,16 @@ export default function (pi: ExtensionAPI): void {
       "Do not store secrets, tokens, credentials, or full transcripts.",
     ],
     parameters: Type.Object({
-      action: StringEnum(["create", "update", "delete"] as const, {
+      action: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("delete")], {
         description: "create | update | delete",
       }),
       scope: Type.Optional(
-        StringEnum(["local", "project", "global"] as const, {
+        Type.Union([Type.Literal("local"), Type.Literal("project"), Type.Literal("global")], {
           description: "local | project | global (default global).",
         }),
       ),
       kind: Type.Optional(
-        StringEnum(["memory", "prompt"] as const, {
+        Type.Union([Type.Literal("memory"), Type.Literal("prompt")], {
           description: "Required for create; memory | prompt.",
         }),
       ),

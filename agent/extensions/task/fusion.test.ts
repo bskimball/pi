@@ -189,7 +189,17 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(apexSyncSidekick.content[0].text, /Fusion-only.*switch to Fusion/);
     const apexAsyncSidekick = await tools.get("task_start").execute("call", { agent: "sidekick", prompt: "do work" }, undefined, undefined, ctx);
     assert.equal(apexAsyncSidekick.isError, true);
-    assert.match(apexAsyncSidekick.content[0].text, /Fusion-only.*switch to Fusion/);
+    assert.match(apexAsyncSidekick.content[0].text, /Fusion.*only.*switch to Fusion/);
+    emitBus("pi:modes:changed", { mode: "utopia" });
+    process.env.PI_BEHAVIOR_MODE = "utopia";
+    assert.match(advertised().description, /sidekick/);
+    assert.match(advertised().description, /machinist|advisor|librarian|scout/);
+    assert.match(agentParam(), /sidekick/);
+    assert.match(agentParam(), /machinist|advisor|librarian|scout/);
+    const utopiaSyncSidekick = await tools.get("task").execute("call", { agent: "sidekick", prompt: "do work" }, undefined, undefined, ctx);
+    assert.equal(utopiaSyncSidekick.isError, true, "sidekick remains async task_start only even in Utopia");
+    emitBus("pi:modes:changed", { mode: "apex" });
+    process.env.PI_BEHAVIOR_MODE = "apex";
     const apexChainSidekick = await tools.get("task_chain").execute("call", { steps: [{ agent: "sidekick", prompt: "do work" }] }, undefined, undefined, ctx);
     assert.equal(apexChainSidekick.isError, true);
     assert.match(apexChainSidekick.content[0].text, /Fusion-only.*step 1.*switch to Fusion|Fusion-only.*switch to Fusion.*step 1/);
@@ -949,5 +959,60 @@ test("Orchestrate inline backstop classifies specialist work per turn", () => {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
     if (priorSubagent === undefined) delete process.env.PI_SUBAGENT; else process.env.PI_SUBAGENT = priorSubagent;
+  }
+});
+
+test("Utopia ignores retained Fusion pair so sidekicks route dynamically under Hydra scope", async () => {
+  const priorMode = process.env.PI_BEHAVIOR_MODE;
+  const priorTier = process.env.PI_HYDRA_TIER;
+  const priorScope = process.env.PI_HYDRA_SCOPE;
+  process.env.PI_BEHAVIOR_MODE = "utopia";
+  process.env.PI_HYDRA_TIER = "high";
+  process.env.PI_HYDRA_SCOPE = "openai";
+  const bus = new Map<string, Function[]>();
+  const tools = new Map<string, any>();
+  let hydraRouteQueried = false;
+  const emitBus = (name: string, payload: any) => { for (const fn of bus.get(name) ?? []) fn(payload); };
+  const pi: any = {
+    registerTool: (tool: any) => { tools.set(tool.name, tool); },
+    registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on() {},
+    events: {
+      on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); },
+      emit(name: string, payload: any) {
+        if (name === "pi:hydra:subagent-route") {
+          hydraRouteQueried = true;
+          payload.scope = "openai";
+          payload.scopeExhausted = true;
+          payload.models = [];
+          payload.fallbackModels = [];
+        }
+        emitBus(name, payload);
+      },
+    },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi);
+    const stalePair = {
+      lead: { provider: "claude-bridge", modelId: "claude-opus-5-5", thinking: "high" },
+      sidekick: { provider: "claude-bridge", modelId: "claude-haiku-5-5", thinking: "low" },
+    };
+    emitBus("pi:modes:changed", { mode: "utopia", fusion: stalePair });
+    const res = await tools.get("task_start").execute(
+      "call_1",
+      { agent: "sidekick", prompt: "test unit" },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), sessionManager: { getSessionId: () => "s1", getBranch: () => [] } },
+    );
+    const text = res.content?.[0]?.text ?? "";
+    assert.equal(hydraRouteQueried, true, "Utopia sidekick queries dynamic Hydra subagent router instead of forcing retained Fusion pair");
+    assert.doesNotMatch(text, /excludes the configured Fusion sidekick/, "does not reject on retained Fusion pair in Utopia");
+    assert.match(text, /Hydra scope "openai" has no available model for sidekick/);
+  } finally {
+    if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = priorMode;
+    if (priorTier === undefined) delete process.env.PI_HYDRA_TIER; else process.env.PI_HYDRA_TIER = priorTier;
+    if (priorScope === undefined) delete process.env.PI_HYDRA_SCOPE; else process.env.PI_HYDRA_SCOPE = priorScope;
   }
 });

@@ -1,16 +1,35 @@
 import { join } from "node:path";
 import { clampThinkingLevel, getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
-import { MODES, hasCliFlag, isMode, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
+import { MODES, clearParentCuaState, hasCliFlag, isComputerUseTool, isMode, isSubagentCuaEnabled, readPreferences, restoreMode, savePreferences, synchronizeFusionModel, toolsForMode, writeParentCuaState, type Mode, type ModelChoice, type ModeState, type FusionPair, type Preferences } from "./mode-state.ts";
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
-import { inferModelFamily, QUOTA_STALE_MS, quotaMultiplierForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
-import { HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
+import { inferModelFamily, QUOTA_STALE_MS, quotaMultiplierForModel, quotaRemainingForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
+import { EXCLUDED_HYDRA_PROVIDERS, HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, isReliableHydraSignal, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
 import { readUsageCounts, recordHydraUsage } from "./hydra/usage.ts";
 
-const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", work: "Work" };
+const labels: Record<Mode, string> = { pi: "Pi", apex: "Apex", "apex-orchestrate": "Apex Orchestrate", fusion: "Fusion", utopia: "Utopia", work: "Work" };
 const usesPersistentSidekick = (mode: Mode): mode is "fusion" => mode === "fusion";
+
+export function formatModeStatus(state: Pick<ModeState, "mode" | "fusion">): string {
+  switch (state.mode) {
+    case "pi":
+      return "Pi \u00b7 Direct";
+    case "apex":
+      return "Apex \u00b7 Inline";
+    case "apex-orchestrate":
+      return "Apex Orchestrate \u00b7 Pipeline";
+    case "fusion": {
+      const sidekick = state.fusion?.sidekick?.modelId?.trim();
+      return sidekick ? `Fusion \u00b7 +${sidekick}` : "Fusion \u00b7 Sidekick";
+    }
+    case "utopia":
+      return "Utopia \u00b7 +Sidekick";
+    case "work":
+      return "Work \u00b7 Crew";
+  }
+}
 const CACHE_TTL_MS = 30 * 60_000;
 /** Subscription-wide exhaustion (not transient per-request 429s, which Pi retries). */
 const SUBSCRIPTION_LIMIT_PATTERN = /quota (?:exceeded|exhausted)|session limit|usage limit|weekly limit|five_hour|seven_day/i;
@@ -51,8 +70,8 @@ function joinPromptAppends(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
-export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = ""): void {
-  // Workers inherit Hydra's tier but must not install lead routing or commands.
+export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = "", utopia = ""): void {
+  // Workers inherit Hydra's tier and /cua state without installing lead routing or commands.
   // Count their actual responses here, including fallback models, just like the lead.
   pi.on("message_end", (event) => {
     const tier = process.env.PI_HYDRA_TIER;
@@ -61,13 +80,40 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if ((message.stopReason === "error" || message.stopReason === "aborted") && message.usage.totalTokens === 0) return;
     recordHydraUsage(message.provider, message.model);
   });
-  if (process.env.PI_SUBAGENT === "1") return;
+  if (process.env.PI_SUBAGENT === "1") {
+    const subagentCuaEnabled = () => isSubagentCuaEnabled();
+    pi.on("before_agent_start", () => {
+      const active = pi.getActiveTools();
+      if (!subagentCuaEnabled()) {
+        if (active.some(isComputerUseTool)) {
+          pi.setActiveTools(active.filter(name => !isComputerUseTool(name)));
+        }
+        return;
+      }
+      const directCua = (pi.getAllTools?.() ?? [])
+        .filter(tool => isComputerUseTool(tool.name) && (!tool.exposure || tool.exposure === "direct" || (tool.exposure as string) === "model-only"))
+        .map(tool => tool.name);
+      if (directCua.some(name => !active.includes(name))) {
+        pi.setActiveTools([...new Set([...active, ...directCua])]);
+      }
+    });
+    pi.on("tool_call", (event) => {
+      if (!subagentCuaEnabled() && isComputerUseTool(event.toolName)) {
+        return { block: true, reason: "Computer-use execution is off. Ask the user to enable /cua on first." };
+      }
+      return undefined;
+    });
+    return;
+  }
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
   let state: ModeState = structuredClone(preferences);
   let changing = false;
-  const availableTools = () => pi.getAllTools().map(tool => tool.name);
-  const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools()));
+  let cuaEnabled = false;
+  const availableTools = () => pi.getAllTools()
+    .filter(tool => !isComputerUseTool(tool.name) || !tool.exposure || tool.exposure === "direct" || (tool.exposure as string) === "model-only")
+    .map(tool => tool.name);
+  const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools(), cuaEnabled));
   let modelBlocked = false;
   // Set when a mode switch fails and its compensation is incomplete: input
   // stays blocked until a later /mode succeeds. Deliberately separate from
@@ -97,6 +143,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   const publishPair = (ctx: ExtensionContext) => {
     const tier = activeHydra();
     if (ctx.hasUI) {
+      ctx.ui.setStatus("mode", formatModeStatus(state));
       const scope = tier && state.hydraScope === "openai" ? "\u00b7jippity" : "";
       ctx.ui.setStatus("hydra", tier ? `hydra:${tier}${scope}` : undefined);
     }
@@ -110,7 +157,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     else delete process.env.PI_HYDRA_TIER;
     if (tier && state.hydraScope) process.env.PI_HYDRA_SCOPE = state.hydraScope;
     else delete process.env.PI_HYDRA_SCOPE;
-    pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra, hydraScope: state.hydraScope });
+    if (cuaEnabled) process.env.PI_CUA_ENABLED = "1";
+    else delete process.env.PI_CUA_ENABLED;
+    process.env.PI_CUA_PARENT_PID = String(process.pid);
+    writeParentCuaState(cuaEnabled);
+    pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra, hydraScope: state.hydraScope, cuaEnabled });
   };
   const idle = (ctx: ExtensionContext) => {
     const query = { busy: !ctx.isIdle() || changing };
@@ -251,7 +302,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     let outcome: HydraRouteResult | undefined;
     const run = async () => {
       await refreshQuotaIfStale();
-      if (signal) lastJevTurnSignal = signal;
+      signal = isReliableHydraSignal(signal) ? signal : undefined;
+      if (!forceModelPick) lastJevTurnSignal = signal;
       if (forceModelPick) manualPin = false;
       if (manualPin && ctx.model) {
         outcome = {
@@ -265,22 +317,36 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
       const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
       const winner = ranked[0];
-      if (!winner) return;
-
       const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      // A missing catalog match is not itself evidence that an available model is unhealthy.
+      const scope = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
+      const allowed = (ctx.modelRegistry?.getAvailable?.() ?? []).filter(m =>
+        !EXCLUDED_HYDRA_PROVIDERS.has(m.provider.toLowerCase()) && (!scope || scope.has(m.provider)));
+      const scopedKeys = new Set((ctx.scopedModels ?? []).map(({ model }: any) => `${model.provider}/${model.id}`));
+      const scoped = allowed.filter(m => scopedKeys.has(`${m.provider}/${m.id}`));
+      const pool = scoped.length ? scoped : allowed;
+      const eligible = !!currentKey && !!ctx.model && pool.some(m => `${m.provider}/${m.id}` === currentKey) &&
+        quotaMultiplierForModel(ctx.model.provider, ctx.model.id, tier, openCircuitsFor([currentKey]), readQuotaSnapshot()).multiplier > 0;
+      if (!winner) {
+        if (eligible && ctx.model) outcome = { summary: `${currentKey} (${pi.getThinkingLevel()}, held)`, model: currentKey!, thinking: pi.getThinkingLevel(), switchedModel: false };
+        return;
+      }
+      const holdUncertain = !forceModelPick && !signal && eligible;
       const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey ||
         (ctx.model?.id.startsWith("muse-") && c.key === `${currentKey}-contributor`)) : undefined;
-      const scoreMargin = winner.finalScore - (currentRanked?.finalScore ?? 0);
-      const shouldSwitchModel =
+      const shallowTurn = !!signal && (signal.domain === "fast_edit" || signal.reasoningDepth < 1.75);
+      const capableForShallow = shallowTurn && (currentRanked?.aa.codingScore ?? 0) >= 40;
+      // Keep the lead model session-sticky while its cache is warm and it remains
+      // eligible and meets the task's quality floor (or is a capable model on a
+      // shallow turn where speed weights would otherwise down-shift to a fast model);
+      // modulate thinking effort per turn.
+      const shouldSwitchModel = !holdUncertain && (
         forceModelPick ||
         !cacheWarm ||
         !currentKey ||
         !currentRanked ||
-        (signal !== undefined && !currentRanked.meetsQuality) ||
-        (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`) ||
-        (winner.key !== currentKey &&
-          signal !== undefined &&
-          scoreMargin >= 0.02);
+        (signal !== undefined && !currentRanked.meetsQuality && !capableForShallow) ||
+        (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`));
 
       const prevState = structuredClone(state);
       const prevModel = current(ctx);
@@ -353,9 +419,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         // Keep current lead model and dynamically adjust thinking effort.
         const activeModel = ctx.model ?? winner.model;
         const activeKey = `${activeModel.provider}/${activeModel.id}`;
-        const activeScore = (ranked.find((c) => c.key === activeKey ||
-          (activeModel.id.startsWith("muse-") && c.key === `${activeKey}-contributor`)) ?? winner).finalScore;
-        const nextThinking = selectThinkingForModel(activeModel, tier, signal);
+        const activeScore = ranked.find((c) => c.key === activeKey ||
+          (activeModel.id.startsWith("muse-") && c.key === `${activeKey}-contributor`))?.finalScore;
+        const nextThinking = holdUncertain ? pi.getThinkingLevel() : selectThinkingForModel(activeModel, tier, signal);
         if (nextThinking !== pi.getThinkingLevel()) {
           pi.setThinkingLevel(nextThinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
           const actualThinking = pi.getThinkingLevel();
@@ -405,7 +471,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         publishPair(ctx);
         const actualThinking = pi.getThinkingLevel();
         outcome = {
-          summary: `${activeKey} (${actualThinking}, score ${activeScore.toFixed(2)})`,
+          summary: `${activeKey} (${actualThinking}, ${activeScore === undefined ? "held; no AA score" : `score ${activeScore.toFixed(2)}`})`,
           model: activeKey,
           thinking: actualThinking,
           score: activeScore,
@@ -474,8 +540,13 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     if (!nextState.models[mode] && prevModel) nextState.models[mode] = structuredClone(prevModel);
     nextState.mode = mode;
     nextState.fusion = structuredClone(nextFusion);
-    delete nextState.hydra;
-    delete nextState.hydraScope;
+    if (mode === "utopia") {
+      nextState.hydra = activeHydra() ?? "high";
+      if (!state.hydra || state.hydra === "off") delete nextState.hydraScope;
+    } else {
+      delete nextState.hydra;
+      delete nextState.hydraScope;
+    }
     const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : nextState.models[mode];
     let persisted = false;
     let rollback: (() => Promise<void>) | undefined;
@@ -508,11 +579,15 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       announce();
       modelBlocked = false;
       recoveryBlocked = false;
-      ctx.ui.setStatus("mode", labels[mode]);
+      ctx.ui.setStatus("mode", formatModeStatus(state));
       publishPair(ctx);
+      const switchedHydra = activeHydra();
+      const routed = switchedHydra ? await routeWithHydra(ctx, switchedHydra, undefined, false) : undefined;
       const identity = usesPersistentSidekick(mode) && state.fusion
         ? ` ${fusionPairLabel(state.fusion)}`
-        : "";
+        : routed
+          ? ` Hydra (${switchedHydra}): ${routed.summary}.`
+          : "";
       ctx.ui.notify(`Mode: ${labels[mode]}. ${mode === "apex-orchestrate" ? "Current session only." : "Default for new sessions updated."}${identity}`, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -562,7 +637,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       } else {
         recoveryBlocked = false;
       }
-      try { ctx.ui.setStatus("mode", labels[prevState.mode]); publishPair(ctx); } catch { /* cosmetic */ }
+      try { ctx.ui.setStatus("mode", formatModeStatus(prevState)); publishPair(ctx); } catch { /* cosmetic */ }
       let note = `Mode switch to ${labels[mode]} failed (${message}); restored ${labels[prevState.mode]}.`;
       if (typeof recoveryBlocked === "string") {
         note = failures.length ? recoveryBlocked : `${note} Prior recovery block still in effect: ${recoveryBlocked}`;
@@ -603,10 +678,21 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const top = ranked.slice(0, 4).map((r, idx) =>
         `${idx + 1}. ${r.key} (${r.recommendedThinking}) score=${r.finalScore.toFixed(2)} [code=${r.aa.codingScore.toFixed(0)} intel=${(r.aa.intelligenceIndex ?? 0).toFixed(0)}${typeof r.aa.designArenaElo === "number" ? ` da=${r.aa.designArenaElo.toFixed(0)}` : ""} tps=${(r.aa.outputSpeedTps ?? 0).toFixed(0)} $${(r.aa.blendedPricePer1m ?? 0).toFixed(2)}${r.quotaReason ? ` ${r.quotaReason}` : ""}]`
       );
-      const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} ${aaSnap.models.length} models, quota=${quotaSnap.source}, openCircuits=${openCircuits.size})`;
+      const now = Date.now();
+      const age = (timestamp: unknown) => typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0 && timestamp <= now
+        ? `${Math.floor((now - timestamp) / 60_000)}m` : "unknown";
+      const aaStale = !Number.isFinite(aaSnap.updatedAt) || aaSnap.updatedAt <= 0 || aaSnap.updatedAt > now || now - aaSnap.updatedAt > AA_STALE_MS;
+      const quotaStale = !Number.isFinite(quotaSnap.updatedAt) || quotaSnap.updatedAt <= 0 || quotaSnap.updatedAt > now || now - quotaSnap.updatedAt > QUOTA_STALE_MS;
+      const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} snapshot age=${age(aaSnap.updatedAt)}${aaStale ? " stale/last-known" : ""} ${aaSnap.models.length} models, quota=${quotaSnap.source} snapshot age=${age(quotaSnap.updatedAt)}${quotaStale ? " stale/last-known" : ""}, openCircuits=${openCircuits.size})`;
+      const quotaDetails = Object.entries(quotaSnap.providers).map(([family, entry]) => {
+        const observed = entry.remainingObservedAt === undefined ? quotaSnap.updatedAt : entry.remainingObservedAt;
+        const raw = typeof entry.remainingPercent === "number" && Number.isFinite(entry.remainingPercent) ? `${entry.remainingPercent}%` : "unknown";
+        const stale = entry.remainingPercent != null && quotaRemainingForModel(family, "", quotaSnap) === null;
+        return `${family}: ${raw} age=${age(observed)}${stale ? " stale/last-known (ignored)" : ""}${entry.disabled ? " disabled (last-known)" : ""}${entry.inCooldown ? " cooldown (last-known)" : ""}`;
+      });
       const usage = Object.entries(readUsageCounts()).sort((a, b) => b[1] - a[1]);
-      const usageLine = `24h calls: ${usage.length ? usage.map(([family, n]) => `${family} ${n}`).join(", ") : "none"}`;
-      ctx.ui.notify([header, usageLine, ...(top.length ? top : ["No matching AA models in current provider scope."])].join("\n"), "info");
+      const usageLine = `24h calls: (not cost) ${usage.length ? usage.map(([family, n]) => `${family} ${n}`).join(", ") : "none"}`;
+      ctx.ui.notify([header, ...(quotaDetails.length ? [`Quota: ${quotaDetails.join("; ")}`] : []), usageLine, ...(top.length ? top : ["No matching AA models in current provider scope."])].join("\n"), "info");
       return;
     }
     if (sub === "on" || sub === "toggle") {
@@ -706,7 +792,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           return;
         }
       }
-      if (!isMode(value)) { ctx.ui.notify("Usage: /mode [pi|apex|apex-orchestrate|fusion|work|hydra|configure]", "warning"); return; }
+      if (!isMode(value)) { ctx.ui.notify("Usage: /mode [pi|apex|apex-orchestrate|fusion|utopia|work|hydra|configure]", "warning"); return; }
       await switchMode(value, ctx);
     },
   });
@@ -774,7 +860,45 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       await switchMode(value === "on" || ((value === "" || value === "toggle") && state.mode !== "apex-orchestrate") ? "apex-orchestrate" : "apex", ctx);
     },
   });
+  pi.registerCommand("cua", {
+    description: "Toggle @amaster.ai/pi-computer-use tools in active model context: /cua [on|off|toggle]",
+    handler: async (args, ctx) => {
+      const value = args.trim().toLowerCase();
+      if (!["", "toggle", "on", "off"].includes(value)) { ctx.ui.notify("Usage: /cua [on|off|toggle]", "warning"); return; }
+      if (!idle(ctx)) return;
+      const nextCua = value === "on" || ((value === "" || value === "toggle") && !cuaEnabled);
+      try {
+        writeParentCuaState(nextCua);
+      } catch (error) {
+        ctx.ui.notify(`Failed to sync /cua state (${error instanceof Error ? error.message : String(error)}); state unchanged.`, "error");
+        return;
+      }
+      cuaEnabled = nextCua;
+      if (cuaEnabled) process.env.PI_CUA_ENABLED = "1";
+      else delete process.env.PI_CUA_ENABLED;
+      process.env.PI_CUA_PARENT_PID = String(process.pid);
+      const active = pi.getActiveTools();
+      pi.setActiveTools(toolsForMode(state.mode, cuaEnabled
+        ? [...new Set([...active, ...availableTools().filter(isComputerUseTool)])]
+        : active, cuaEnabled));
+      if (ctx.hasUI) ctx.ui.setStatus("cua", cuaEnabled ? "cua:on" : undefined);
+      ctx.ui.notify(
+        cuaEnabled
+          ? "Computer-use tools enabled in active toolset."
+          : "Computer-use execution disabled; discovery remains available (use /cua on when needed).",
+        "info",
+      );
+    },
+  });
+  pi.on("tool_call", (event) => {
+    if (!cuaEnabled && isComputerUseTool(event.toolName)) {
+      return { block: true, reason: "Computer-use execution is off. Ask the user to enable /cua on first." };
+    }
+    return undefined;
+  });
   pi.on("session_start", async (event, ctx) => {
+    cuaEnabled = false;
+    if (ctx.hasUI) ctx.ui.setStatus("cua", undefined);
     preferences = readPreferences(preferencePath);
     recoveryBlocked = false;
     lastTurnAt = 0;
@@ -805,7 +929,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     announce();
     if (cliModelOverride || cliThinkingOverride) persist();
     else pi.appendEntry("behavior-mode", structuredClone(state));
-    if (ctx.hasUI) ctx.ui.setStatus("mode", labels[state.mode]);
+    if (ctx.hasUI) ctx.ui.setStatus("mode", formatModeStatus(state));
     publishPair(ctx);
     const startupHydra = activeHydra();
     if (startupHydra && !cliModelOverride) {
@@ -942,15 +1066,20 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     return undefined;
   });
   pi.on("before_agent_start", async (event, ctx) => {
+    if (!cuaEnabled && pi.getActiveTools().some(isComputerUseTool)) {
+      pi.setActiveTools(toolsForMode(state.mode, pi.getActiveTools()));
+    }
     await hydraRouteChain;
     const tier = activeHydra();
     if (tier && ctx && !jevRoutedThisTurn) {
+      lastJevTurnSignal = undefined;
       await routeWithHydra(ctx, tier, undefined, false);
     }
     jevRoutedThisTurn = false;
     lastTurnAt = Date.now();
     const options = event.systemPromptOptions;
     if (state.mode === "apex") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, regular);
+    else if (state.mode === "utopia") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, utopia || regular);
     else if (state.mode === "apex-orchestrate") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, orchestrate);
     else if (state.mode === "fusion") {
       if (options.customPrompt) options.customPrompt = fusionPreface + options.customPrompt;
@@ -967,13 +1096,16 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("context_with_system", (event, ctx) => {
     const system = getCurrentSystemMessage(event.messages);
     if (!system) return;
-    const marker = ({ apex: regular, "apex-orchestrate": orchestrate, fusion, pi: piBlock, work })[state.mode].trim().split("\n")[0];
+    const marker = ({ apex: regular, utopia: utopia || regular, "apex-orchestrate": orchestrate, fusion, pi: piBlock, work })[state.mode].trim().split("\n")[0];
     const problem = marker && !Object.values(system.sections ?? {}).join("\n").includes(marker)
       ? `missing ${labels[state.mode]} mode block` : undefined;
     if (problem && !warned.has(problem)) {
       warned.add(problem);
       ctx.ui.notify(`Prompt delivery: ${problem}; check option-projecting providers such as claude-bridge.`, "warning");
     }
+  });
+  pi.on("session_shutdown", () => {
+    clearParentCuaState();
   });
   registerPresentationSwitch(pi);
 }

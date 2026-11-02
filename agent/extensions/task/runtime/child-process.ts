@@ -15,7 +15,7 @@ const BROWSER_TOOLS = [
 
 /** Child tool policy shared by sync tasks and RPC workers. */
 export function childToolArgs(
-  def: { apexBrowser?: boolean; tools?: string },
+  def: { name?: string; apexBrowser?: boolean; tools?: string },
   excludedTools: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {

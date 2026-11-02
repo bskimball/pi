@@ -17,6 +17,7 @@ jev.json
 
 # Pi runtime state
 agent/sessions/
+agent/bg-process/
 agent/run-history.jsonl
 agent/models-store.json
 agent/mode-settings.json

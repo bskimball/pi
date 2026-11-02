@@ -17,6 +17,7 @@ import type {
 import { buildFooter as buildApexFooter } from "../apex/footer.ts";
 import { buildFooter as buildClaudeFooter } from "../claude/footer.ts";
 import { buildFooter as buildHalFooter } from "../hal/footer.ts";
+import { formatModeStatus } from "../prompt-commands/modes.ts";
 
 const paint: FooterPaint = {
   fg: (_color, text) => text,
@@ -59,6 +60,7 @@ describe("footer renderers", () => {
     const text = joined(lines);
     const line1 = lines[0] ?? "";
     const line2 = lines[1] ?? "";
+    assert.match(line1, /MODE: FUSION/);
     assert.match(line1, /opus-4-5/);
     assert.match(line1, /high/);
     assert.match(line1, /48%/);
@@ -97,6 +99,7 @@ describe("footer renderers", () => {
     const text = joined(lines);
     const line1 = lines[0] ?? "";
     const line2 = lines[1] ?? "";
+    assert.match(line1, /MODE: FUSION/);
     assert.match(line1, /OPUS-4-5/);
     assert.match(line1, /HIGH/);
     assert.match(line1, /48%/);
@@ -157,5 +160,101 @@ describe("footer renderers", () => {
       for (const line of lines) assert.ok(safeVisibleWidth(line) <= 80);
       assert.match(joined(lines), /opus-4-5/i);
     }
+  });
+
+  it("formats descriptive mode statuses with posture and sidekick model (Option C)", () => {
+    assert.equal(formatModeStatus({ mode: "pi" }), "Pi \u00B7 Direct");
+    assert.equal(formatModeStatus({ mode: "apex" }), "Apex \u00B7 Inline");
+    assert.equal(formatModeStatus({ mode: "apex-orchestrate" }), "Apex Orchestrate \u00B7 Pipeline");
+    assert.equal(formatModeStatus({ mode: "utopia" }), "Utopia \u00B7 +Sidekick");
+    assert.equal(formatModeStatus({ mode: "work" }), "Work \u00B7 Crew");
+    assert.equal(formatModeStatus({ mode: "fusion" }), "Fusion \u00B7 Sidekick");
+    assert.equal(
+      formatModeStatus({
+        mode: "fusion",
+        fusion: {
+          lead: { provider: "anthropic", modelId: "opus-4-5", thinking: "high" },
+          sidekick: { provider: "openai", modelId: "gpt-5.4-mini", thinking: "low" },
+        },
+      }),
+      "Fusion \u00B7 +gpt-5.4-mini",
+    );
+  });
+
+  it("combines explicit MODE badge, posture, and inline hydra modifier on line 1 without duplicating hydra on line 2", () => {
+    const s = snapshot({
+      mode: formatModeStatus({ mode: "utopia" }),
+      statuses: [
+        { key: "cua", text: "cua:on" },
+        { key: "hydra", text: "hydra:high\u00B7jippity" },
+      ],
+    });
+    const apexLines = buildApexFooter(s, 140, paint);
+    assert.match(apexLines[0] ?? "", /MODE: UTOPIA \u00B7 \+SIDEKICK \(HYDRA:HIGH\u00B7JIPPITY\)/);
+    assert.doesNotMatch(apexLines[1] ?? "", /hydra/i);
+    assert.match(apexLines[1] ?? "", /cua:on/);
+
+    const claudeLines = buildClaudeFooter(s, 140, paint);
+    assert.match(claudeLines[0] ?? "", /\u25B8\u25B8 utopia mode \u00B7 \+sidekick \(hydra:high\u00B7jippity\)/);
+    assert.doesNotMatch(claudeLines[1] ?? "", /hydra/i);
+    assert.match(claudeLines[1] ?? "", /cua:on/);
+
+    const halLines = buildHalFooter(s, 140, paint);
+    assert.match(halLines[0] ?? "", /MODE: UTOPIA \u00B7 \+SIDEKICK \(HYDRA:HIGH\u00B7JIPPITY\)/);
+    assert.doesNotMatch(halLines[1] ?? "", /hydra/i);
+    assert.match(halLines[1] ?? "", /CUA:ON/);
+  });
+
+  it("keeps Apex and Apex Orchestrate distinct at medium width (55) when posture detail drops", () => {
+    const inlineSnap = snapshot({ mode: formatModeStatus({ mode: "apex" }) });
+    const orchSnap = snapshot({ mode: formatModeStatus({ mode: "apex-orchestrate" }) });
+    for (const build of [buildApexFooter, buildClaudeFooter, buildHalFooter]) {
+      const inlineLine1 = build(inlineSnap, 55, paint)[0] ?? "";
+      const orchLine1 = build(orchSnap, 55, paint)[0] ?? "";
+      assert.notEqual(inlineLine1, orchLine1);
+      assert.match(orchLine1, /orchestrate/i);
+    }
+  });
+
+  it("retains hydra status on line 2 when line 1 sheds mode detail at width 80", () => {
+    const s = snapshot({
+      mode: formatModeStatus({ mode: "utopia" }),
+      statuses: [{ key: "hydra", text: "hydra:high\u00B7jippity" }],
+    });
+    for (const build of [buildApexFooter, buildClaudeFooter, buildHalFooter]) {
+      const lines = build(s, 80, paint);
+      assert.match(joined(lines), /hydra:high\u00B7jippity/i);
+    }
+  });
+
+  it("hal drops system phrase before cost at width 60", () => {
+    const s = snapshot({ statuses: [] });
+    const lines = buildHalFooter(s, 60, paint);
+    const line2 = lines[1] ?? "";
+    assert.match(line2, /COST \$1\.234 SUB/);
+    assert.doesNotMatch(line2, /ALL SYSTEMS NOMINAL/);
+  });
+
+  it("sheds verbose jev telemetry on line 2 before dropping cua:on", () => {
+    const s = snapshot({
+      mode: formatModeStatus({ mode: "apex" }),
+      statuses: [
+        { key: "cua", text: "cua:on" },
+        { key: "jev", text: "jev route \u00B7 12 calls, 48,920 tok (advisory)" },
+      ],
+    });
+    // Width 65 fits place + usage + cost + cua:on (~50 cols), but not the 43-col jev telemetry.
+    const apexLines = buildApexFooter(s, 65, paint);
+    assert.match(apexLines[1] ?? "", /cua:on/);
+    assert.doesNotMatch(apexLines[1] ?? "", /jev route/);
+
+    const claudeLines = buildClaudeFooter(s, 65, paint);
+    assert.match(claudeLines[1] ?? "", /cua:on/);
+    assert.doesNotMatch(claudeLines[1] ?? "", /jev route/);
+
+    // HAL includes the right-aligned system phrase ("ALL SYSTEMS NOMINAL", 19 cols), so test at width 85.
+    const halLines = buildHalFooter(s, 85, paint);
+    assert.match(halLines[1] ?? "", /CUA:ON/);
+    assert.doesNotMatch(halLines[1] ?? "", /JEV ROUTE/);
   });
 });

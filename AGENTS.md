@@ -11,7 +11,7 @@ Do not redirect requests to an unrelated application repository based on terms s
 ```text
 agent/
 ├── SYSTEM.md              # base system prompt
-├── settings.json          # model, theme (currently claude-dark), tuiMode, compaction
+├── settings.json          # model, theme (currently apex-dark), tuiMode, compaction
 ├── models.json / mcp.json # provider + native Pi MCP configuration
 ├── agents/                # specialist briefs (_shared*.md are composed in)
 ├── prompts/               # slash-command prompts (inactive/ = extension-owned; poteto/ = /poteto playbooks, not slash commands)
@@ -34,17 +34,20 @@ agent/extensions/
 ├── hal/             → hal-ui.ts           HAL UI (orb landing, square glyphs, HAL panel footer)
 ├── task/            → amp-task.ts, async-task.ts   sync `task` + async task_* RPC workers
 ├── lsp/             → index.ts            language-server navigation
+├── jev/             → index.ts            Advisory Jev Choice/Score/Noul classifier + ambient turn/tool guards
+├── muse/            → index.ts            Muse CLI subscription provider adapter
 ├── bg-process.ts    + bg-process/         bg_start/status/list/kill
 ├── powershell.ts    + powershell/         direct PowerShell child process
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
-├── prompt-commands.ts + prompt-commands/  /browser, /deploy, /orchestrate, /jippity
-├── worktree.ts   + worktree/               isolated Git worktree add/list/remove
-├── read-guard.ts                          duplicate-image + downscale guard
-├── toolchain-guard.ts                   blocks Node runtime/pin changes
+├── prompt-commands.ts + prompt-commands/  /mode (/mode hydra), /jippity, /orchestrate, /cua, /browser, /deploy
+├── worktree.ts      + worktree/           isolated Git worktree add/list/remove + shipping helper
+├── read-guard.ts                          duplicate-image + downscale + text re-read guard
+├── tool-loop.ts                           identical repeated tool-call loop nudge
+├── antigravity-ua.ts                      Antigravity client fingerprint override
+├── computer-use-wayland.ts                Wayland env gate for Cua driver on Linux
 ├── user-profile.ts                        private user context injection
 ├── web-search.ts                          Exa search + fetch_content
-├── jev/                     → index.ts              Advisory Jev Choice/Score/Noul classifier (single tool)
 ├── at-path-complete.ts                    scoped @ listing for gitignored paths
 └── test/                                  cross-extension tests
 ```
@@ -68,7 +71,8 @@ When editing a duplicated helper, decide deliberately whether the change belongs
 - `/mode work` is operations-first and uses its own prompt rather than the coding-first `agent/SYSTEM.md`. HAL records Brian's commitments in Autotask (ticket or project task) or Microsoft To Do through the `~/Work` CLIs, acts on them, and closes them. The lead works inline-first and dispatches a closed four-specialist crew (strategist, researcher, author, clerk) — no persistent sidekick, no other agents. Business workflows and integrations remain owned by their project.
 - Async workers in every mode, including Fusion's sidekicks, use the shared above-editor Agents tab (`alt+a` / `/agents`; `alt+t` / `/todos` still collapse). Click or Enter opens a bounded read-only peek. Settled/failed sessions switch directly only from `/agents peek <id>` or `/agents open <id>` command context; pointer/shortcut peeks prepare that explicit command without replacing a draft. Live JSONL writers are never switched into. Triggers and chrome-off behavior: [`CONTEXT.md` § Todo dock](CONTEXT.md#todo-dock).
 - `task/` renders its own cards through its own gate: `PI_TASK_UI=0` disables task cards alone; `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) disables them too. Task children are spawned with chrome off so workers never paint chrome.
-- Headless by design (execute, not chrome): `bg-process`, `powershell`, `web-search`, `continual-memory`, `read-guard`, `toolchain-guard`, `lsp`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
+- Headless by design (execute, not chrome): `bg-process`, `powershell`, `web-search`, `continual-memory`, `read-guard`, `tool-loop`, `antigravity-ua`, `computer-use-wayland`, `lsp`, `prompt-commands` (`browser_attach`). The kit attaches receipt chrome to several of these, skipped entirely when `PI_UI_CHROME=0`. `at-path-complete` is also headless: it only wraps scoped `@` autocomplete. Pi owns standard `read`/`edit` execution and skill invocation lifecycle; the kit owns their interactive chrome.
+- Behavior-mode tool and advisory gates: `/mode` supports `pi`, `apex`, `apex-orchestrate`, `fusion`, `utopia` (Apex inline-first ownership + full specialist roster + warm reusable `sidekick`), and `work`, plus `/mode hydra` (session-sticky lead when warm and qualified, per-turn thinking adjustment, dynamic subagent routing). `computer_use_*` tools are gated off by default (`/cua on|off` is a session opt-in that syncs to spawned subagents/sidekicks via `PI_CUA_PARENT_PID` / `PI_CUA_ENABLED`, keeping desktop tools discoverable while off and executable when on). Jev advisories default to `enabled: false`; root `jev.json` keeps `codeJudge` disabled (`false`) while enabling the other advisories.
 - Custom footer: each UI owns its look via a pure `buildFooter` renderer passed to `installUiHost` (at most 3 lines; event-cached data only, never a render-time session scan). The kit owns snapshot collection and install/teardown. `/ui pi` and `PI_UI_CHROME=0` (alias `PI_APEX_UI=0`) restore Pi's stock footer.
 
 ### Prompt Delivery
