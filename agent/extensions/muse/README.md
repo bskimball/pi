@@ -33,7 +33,7 @@ Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS
 
 - Responses are buffered until the terminal structured envelope is validated. Output is not token-incremental; text and tool calls arrive at once.
 - Every Pi model turn pays CLI process startup plus a full-transcript prompt, so latency is higher than a native provider.
-- Reasoning content is not exposed. Pi's reasoning level maps to `--reasoning-effort` (`off` becomes `none`, `max` becomes `ultra`).
+- Reasoning content is not exposed. Pi's reasoning level maps to `--reasoning-effort` (`off` becomes `minimal`, because the CLI rejects `none` with `--provider meta`; `max` becomes `ultra`).
 - PNG, JPEG, WebP, and GIF images are written to the temp workspace and passed as `--image`. The transcript holds numbered placeholders. Other MIME types fail the turn.
 - Each turn uses Pi's working directory as Muse's workspace and process directory. Prompt, schema, and image files are held in a temporary directory that is deleted when the turn finishes.
 - CLI output over 16 MiB, a failed or missing terminal event, or an invalid envelope fails the turn. Abort and session shutdown kill the process tree.

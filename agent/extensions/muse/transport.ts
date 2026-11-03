@@ -36,7 +36,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
       "--disable-web-tools", "--disable-request-user-input",
       "--disable-reminders", "--no-foreign-personal-context", "--approval-judge", "off",
     ];
-    const effort = options?.reasoning === "max" ? "ultra" : options?.reasoning ?? "none";
+    const effort = options?.reasoning === "max" ? "ultra" : options?.reasoning ?? "minimal";
     args.push("--reasoning-effort", effort);
     for (const [index, image] of request.images.entries()) {
       const extension = extensions[image.mimeType];
