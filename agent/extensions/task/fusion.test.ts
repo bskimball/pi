@@ -648,17 +648,16 @@ test("Fusion sidekick model updates apply sequentially with compensation", async
   );
 });
 
-test("Fusion discovery backstop nudges every 6 undispatched discovery calls", () => {
+test("Fusion lead discovery tool results do not append a discovery-count nudge", () => {
   const prior = process.env.PI_BEHAVIOR_MODE;
   const priorSidekick = process.env.PI_FUSION_SIDEKICK;
   process.env.PI_BEHAVIOR_MODE = "fusion";
   delete process.env.PI_FUSION_SIDEKICK;
   const handlers = new Map<string, Function[]>();
-  const bus = new Map<string, Function>();
   const pi: any = {
     registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
     on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
-    events: { on(name: string, fn: Function) { bus.set(name, fn); } },
+    events: { on() {} },
     getThinkingLevel: () => "medium",
   };
   try {
@@ -671,49 +670,10 @@ test("Fusion discovery backstop nudges every 6 undispatched discovery calls", ()
       }
       return undefined;
     };
-    const fireToolCall = (toolName: string) => {
-      for (const fn of handlers.get("tool_call") ?? []) fn({ toolName, input: {} });
-    };
-    const fireAgentStart = () => {
-      for (const fn of handlers.get("agent_start") ?? []) fn();
-    };
-    const nudgeText = (out: any) => out?.content?.at(-1)?.text as string | undefined;
-
-    fireAgentStart();
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined, `call ${i + 1}: no nudge`);
-    const sixth = fireToolResult("read", [{ type: "image", data: "a", mimeType: "image/png" }]);
-    assert.ok(sixth, "6th discovery call nudges");
-    assert.equal(sixth.content.length, 2, "nudge appended, original blocks kept");
-    assert.equal(sixth.content[0].type, "image", "non-text result block preserved");
-    const first = nudgeText(sixth);
-    assert.match(first!, /^\[fusion\] 6 lead discovery calls this turn/);
-    assert.match(first!, /task_send/, "continue the open sidekick instead of spawning another");
-    assert.equal(first!.includes("\n"), false, "nudge is a single line");
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("bash"), undefined);
-    assert.match(nudgeText(fireToolResult("fffind"))!, /^\[fusion\] 12 lead discovery calls this turn/, "second nudge at 12");
-    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("edit"), undefined, "non-discovery tools never nudge");
-
-    fireToolCall("task_start");
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("read"), undefined, "no nudge within 5 calls of dispatch");
-    assert.match(nudgeText(fireToolResult("ls"))!, /6 lead discovery calls/, "nudge resumes 6 calls after dispatch");
-
-    fireToolCall("task_send");
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("lsp"), undefined, "task_send resets too");
-
-    fireAgentStart();
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("powershell"), undefined, "new user turn resets");
-    assert.match(nudgeText(fireToolResult("ffgrep"))!, /6 lead discovery calls/, "nudge resumes 6 calls into the new turn");
-
-    bus.get("pi:modes:changed")!({ mode: "apex" });
-    fireAgentStart();
-    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("read"), undefined, "no nudge outside fusion mode");
-    bus.get("pi:modes:changed")!({ mode: "fusion" });
-    process.env.PI_FUSION_SIDEKICK = "1";
-    for (let i = 0; i < 6; i++) assert.equal(fireToolResult("read"), undefined, "no nudge for the sidekick itself");
-    delete process.env.PI_FUSION_SIDEKICK;
-    fireAgentStart();
-    for (let i = 0; i < 5; i++) assert.equal(fireToolResult("grep"), undefined);
-    assert.match(nudgeText(fireToolResult("find"))!, /6 lead discovery calls/, "lead nudges again after sidekick check");
+    for (const fn of handlers.get("agent_start") ?? []) fn();
+    for (const tool of ["read", "grep", "ls", "find", "bash", "ffgrep", "fffind", "lsp", "powershell", "read", "bash", "fffind"]) {
+      assert.equal(fireToolResult(tool), undefined, `${tool}: no discovery-count nudge`);
+    }
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;
@@ -752,15 +712,6 @@ test("Fusion delivers a one-shot compaction nudge on the next lead tool result",
     assert.match(first.content[1].text, /\/mode configure/);
     assert.equal(first.content[1].text.includes("\n"), false, "nudge is a single line");
     assert.equal(fireToolResult("read"), undefined, "one-shot: cleared on delivery");
-    // A compaction landing on a due discovery nudge delivers both together.
-    // (Two reads already counted above, so three more reach the 6th.)
-    for (let i = 0; i < 3; i++) assert.equal(fireToolResult("read"), undefined);
-    compact();
-    const both = fireToolResult("read");
-    assert.equal(both.content.length, 3, "compaction + 6th-discovery nudges together");
-    assert.match(both.content[1].text, /session compacted/);
-    assert.match(both.content[2].text, /6 lead discovery calls/);
-    assert.equal(fireToolResult("read"), undefined, "both cleared after delivery");
   } finally {
     if (prior === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = prior;
     if (priorSidekick === undefined) delete process.env.PI_FUSION_SIDEKICK; else process.env.PI_FUSION_SIDEKICK = priorSidekick;

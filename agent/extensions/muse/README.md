@@ -27,7 +27,7 @@ Before submission, Pi's `onPayload` callback receives `{ prompt, images, tools }
 2. Pi executes the tools itself.
 3. The next request resends the whole transcript, including the full tool results.
 
-Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS`), not as a native Muse system override. Every call passes `--yolo` to skip Muse approval and sandbox permissions, without `--disable-shell` or `--disable-write` restrictions that can cause the model to refuse Pi tool requests. This does not change Pi's own permissions. The empty preset keeps Muse's native tools out of the turn; Pi executes the returned tool calls. Web tools and reminders remain disabled. The CLI runs with `--max-model-steps 1` and `--no-session-log`.
+Pi system instructions travel as labeled prompt content (`PI SYSTEM INSTRUCTIONS`), not as a native Muse system override. Every call passes `--yolo` to skip Muse approval and sandbox permissions, without `--disable-shell` or `--disable-write` restrictions that can cause the model to refuse Pi tool requests. This does not change Pi's own permissions. The empty preset keeps Muse's native tools out of the turn; Pi executes the returned tool calls. Web tools and reminders remain disabled. The CLI uses its default model-step budget and runs with `--no-session-log`. Do not cap it at one model step: producing a terminal structured envelope can require additional internal steps, even though Pi owns tool execution.
 
 ## Behavior and limits
 

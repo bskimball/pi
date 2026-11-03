@@ -212,36 +212,17 @@ const DEFAULT_MAX_TURNS = 30;
 const ABORT_GRACE_MS = 5_000;
 const PROMPT_ACCEPT_TIMEOUT_MS = 60_000;
 
-/** Lead discovery tool calls per user turn that trigger one Fusion dispatch nudge. */
-export const FUSION_DISCOVERY_NUDGE_EVERY = 6;
-
-/** Tool names that count as lead discovery for the Fusion dispatch nudge. */
-const FUSION_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
-  "read",
-  "grep",
-  "ls",
-  "find",
-  "bash",
-  "ffgrep",
-  "fffind",
-  "lsp",
-  "powershell",
-]);
-
-/** Single-line plain-text nudge appended to every Nth undispatched discovery result. */
-function fusionDiscoveryNudge(count: number): string {
-  return `[fusion] ${count} lead discovery calls this turn. Send the remaining discovery to the open sidekick with task_send. task_start one sidekick only when none is live.`;
-}
-
 /** Lead inline implementation edits per user turn that trigger one orchestrate dispatch nudge. */
 export const ORCHESTRATE_INLINE_NUDGE_EVERY = 2;
+/** Lead discovery tool calls per user turn that trigger one orchestrate dispatch nudge. */
+export const ORCHESTRATE_DISCOVERY_NUDGE_EVERY = 6;
 
 type OrchestrateCategory = "implementation" | "live-page" | "gates" | "discovery";
 const ORCHESTRATE_THRESHOLDS: Record<OrchestrateCategory, number> = {
   implementation: ORCHESTRATE_INLINE_NUDGE_EVERY,
   "live-page": 1,
   gates: 2,
-  discovery: FUSION_DISCOVERY_NUDGE_EVERY,
+  discovery: ORCHESTRATE_DISCOVERY_NUDGE_EVERY,
 };
 
 function orchestrateCategory(tool: string, input: unknown): OrchestrateCategory | undefined {
@@ -1530,9 +1511,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     sidekick: { provider: string; modelId: string; thinking?: string };
   };
   let behaviorMode = process.env.PI_BEHAVIOR_MODE ?? "pi";
-  // Lead discovery calls since the last user-turn start or task_start/task_send.
-  // Counted in tool_result (fusion lead only); drives the dispatch nudge below.
-  let fusionDiscoveryCalls = 0;
   // Lead inline implementation edits since the last user-turn start or
   // task_start/task_send. Counted in tool_result (orchestrate lead only);
   // drives the dispatch nudge below.
@@ -4158,7 +4136,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
       ? fusionLifecycle.gateSidekick(event.toolName)
       : undefined;
     if (sidekickReason) return { block: true, reason: sidekickReason };
-    if (event.toolName === "task_start" || event.toolName === "task_send") { fusionDiscoveryCalls = 0; resetOrchestrateCounts(); }
+    if (event.toolName === "task_start" || event.toolName === "task_send") resetOrchestrateCounts();
     if (behaviorMode !== "fusion") return;
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
@@ -4174,12 +4152,8 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         fusionCompactionPending = false;
         nudges.push(fusionCompactionNudge());
       }
-      if (FUSION_DISCOVERY_TOOLS.has((event.toolName ?? "").toLowerCase())) {
-        fusionDiscoveryCalls += 1;
-        if (fusionDiscoveryCalls % FUSION_DISCOVERY_NUDGE_EVERY === 0) nudges.push(fusionDiscoveryNudge(fusionDiscoveryCalls));
-      }
     }
-    // Orchestrate sibling of the Fusion backstop above: the lead stays off
+    // Orchestrate backstop: the lead stays off
     // the tools while a writer is live, so local glue never nudges.
     if (behaviorMode === "apex-orchestrate" && !sidekick && process.env.PI_SUBAGENT !== "1") {
       const category = orchestrateCategory((event.toolName ?? "").toLowerCase(), event.input);
@@ -4212,11 +4186,9 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
 
   // Busy gate is start → settled only (same pattern as bg-process).
-  // agent_start also bounds the Fusion discovery-nudge and orchestrate
-  // inline-edit windows: one user turn.
+  // agent_start also bounds the orchestrate inline-edit window: one user turn.
   pi.on("agent_start", () => {
     agentBusy = true;
-    fusionDiscoveryCalls = 0;
     resetOrchestrateCounts();
   });
   pi.on("agent_settled", () => {

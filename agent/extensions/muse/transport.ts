@@ -32,7 +32,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     const args = [
       "exec", "--json", "--provider", "meta", "--model", model, "--preset", "empty", "--yolo",
       "--prompt-file", promptPath, "--output-schema", schemaPath,
-      "--workspace", process.cwd(), "--worktree", "off", "--max-model-steps", "1", "--no-session-log",
+      "--workspace", process.cwd(), "--worktree", "off", "--no-session-log",
       "--disable-web-tools", "--disable-request-user-input",
       "--disable-reminders", "--no-foreign-personal-context", "--approval-judge", "off",
     ];
