@@ -1,6 +1,6 @@
 # Behavior modes and presentation
 
-`/mode` opens the behavior picker. Direct choices are `pi`, `apex`, `apex-orchestrate`, `fusion`, and `work`. `/orchestrate on` selects Apex Orchestrate; `off` selects Apex. `/mode configure` configures the Fusion lead/sidekick pair and activates that mode after successful setup. Work no longer uses a persistent pair.
+`/mode` opens the behavior picker. Direct choices are `pi`, `apex`, `apex-orchestrate`, `fusion`, `utopia`, and `work`, plus `hydra` (`/mode hydra [off|standard|high|max|status|sync]`) for stats- and quota-driven model and thinking routing (`/jippity [on|off]` restricts Hydra to OpenAI models). `/orchestrate on` selects Apex Orchestrate; `off` selects Apex. `/mode configure` configures the Fusion lead/sidekick pair and activates that mode after successful setup. Work no longer uses a persistent pair; Utopia uses a warm reusable `sidekick` routed via Hydra without a preconfigured pair.
 
 The persisted `fusion` pair schema, configuration handshake, and transcript entry key are Fusion's. Work no longer uses a persistent sidekick pair and keeps no sidekick transcript across modes.
 
@@ -8,7 +8,7 @@ The model picker uses the same available-provider catalog as Pi's `/model`, init
 
 Mode changes preserve the conversation and require an idle lead and idle workers. Running dev servers do not block switching. Selection is staged: apply model/thinking, acknowledge sidekick configuration, persist the session/default choices, then announce the mode. A failed switch restores prior tools, model, and mode; incomplete recovery blocks input until a successful `/mode` switch. Model and thinking changes update the active Work or Fusion lead choice.
 
-Pi uses the installed Pi system-prompt builder and keeps installed extension tools, including intercom, fffind, and ffgrep. Subagents remain available only when the user names a specialist or asks to delegate; Pi does not inherit Apex auto-routing. Apex, Apex Orchestrate, and Fusion overlay the configured base prompt. Work instead invokes the installed builder with its dedicated operations-first custom prompt, retaining project context, installed skills, and selected-tool guidance without inheriting the coding-first base prompt.
+Pi uses the installed Pi system-prompt builder and keeps installed extension tools, including intercom, fffind, and ffgrep. Subagents remain available only when the user names a specialist or asks to delegate; Pi does not inherit Apex auto-routing. Apex, Apex Orchestrate, Fusion, and Utopia overlay the configured base prompt. Work instead invokes the installed builder with its dedicated operations-first custom prompt, retaining project context, installed skills, and selected-tool guidance without inheriting the coding-first base prompt.
 
 ## Work
 
@@ -32,7 +32,7 @@ Global defaults live in `agent/mode-settings.json`; session choices use `behavio
 
 Event contracts:
 - `pi:modes:query-busy`: mutable `{ busy }`, synchronously augmented by task listeners.
-- `pi:modes:changed`: `{ mode, fusion, hydra }`, updates task policy and parks settled sidekicks when leaving Work or Fusion.
+- `pi:modes:changed`: `{ mode, fusion, hydra, hydraScope, cuaEnabled }`, updates task policy and parks settled sidekicks when leaving Work or Fusion.
 - `pi:fusion:configure`: `{ fusion, acknowledged?, promise?, error?, rollback? }`; Fusion's transactional sidekick configuration handshake.
 - `pi:jev:turn-signal`: `{ reasoningDepth, depthConfidence, domain, domainConfidence, ctx }`, piggybacked Jev turn classification consumed by Hydra (`/mode hydra [off|standard|high|max|status|sync]`) to adjust thinking effort and select AA + quota-ranked models across cache boundaries.
 - `pi:ui:changed`: `{ ui, ctx }`, updates presentation without restarting the session.
