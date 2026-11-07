@@ -260,14 +260,14 @@ describe("dispatch steer copy", () => {
     assert.notEqual(a, b);
     const prompt = formatDispatchPrompt(a, "add a second slice");
     assert.match(prompt, /Preserve existing tasks/i);
-    assert.match(prompt, /isolated worktrees/i);
-    assert.match(prompt, /active delegation policy/i);
-    assert.match(prompt, /Do NOT perform substantial work inline ahead of running workers/i);
-    assert.match(prompt, /artisan for visual\/UI/i);
+    assert.match(prompt, /launch a subagent as soon as you receive it/i);
+    assert.match(prompt, /call task_start promptly/i);
+    assert.match(prompt, /whether the worker needs an isolated worktree/i);
+    assert.match(prompt, /steer that owner or wait/i);
     assert.match(prompt, /add a second slice/);
     assert.match(
       formatDispatchAck(a),
-      /Recorded .* parent steering requested\. Route under active delegation policy/,
+      /Recorded .* parent steering requested to launch a worker\. Launch is not yet confirmed/,
     );
     assert.match(formatDispatchWaitYield(a), /not a timeout/);
     assert.equal(DISPATCH_USAGE, "Usage: /dispatch <request>");

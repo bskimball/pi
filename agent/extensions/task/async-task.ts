@@ -4068,7 +4068,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   pi.registerCommand("dispatch", {
     description:
-      "Queue additional work for the same parent orchestrator; it routes via the active delegation policy and may launch a worker",
+      "Ask the parent to launch a worker for additional work as soon as it can safely do so",
     handler: async (args, ctx) => {
       const request = args.trim();
       if (!request) {

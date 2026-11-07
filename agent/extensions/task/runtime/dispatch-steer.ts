@@ -11,10 +11,9 @@ export function formatDispatchPrompt(id: string, request: string): string {
   return [
     `Concurrent user dispatch (id=${id}). This is additional work for the SAME orchestrator, not a new session. It arrives while workers may still be running.`,
     "",
-    "Route it under the active delegation policy (Regular inline-by-default vs strict-orchestrator specialist-first). Do NOT perform substantial work inline ahead of running workers: if the request outgrows trivial glue, delegate via task_start with the correct specialist (artisan for visual/UI, machinist for non-visual code/config/tests, scribe for prose) in an isolated worktree when parallel.",
+    "Treat this as a request to launch a subagent as soon as you receive it. Choose the appropriate available specialist and call task_start promptly; do not first do the requested investigation or implementation yourself. This explicit dispatch takes precedence over an inline-by-default preference.",
     "",
-    "Preserve existing tasks. Assess overlap and capacity.",
-    "Independent work: isolated worktrees. Overlapping requests: steer the owner or wait.",
+    "Preserve existing tasks and assess overlap, capacity, and ownership. Choose whether the worker needs an isolated worktree; never allow concurrent writers to overlap in a shared worktree. If an existing worker owns overlapping work, steer that owner or wait rather than start a conflicting writer. If capacity or another prerequisite prevents a launch, tell the user and launch when safe.",
     "Review and integrate centrally.",
     "",
     "Request:",
@@ -23,7 +22,7 @@ export function formatDispatchPrompt(id: string, request: string): string {
 }
 
 export function formatDispatchAck(id: string): string {
-  return `Recorded ${id}; parent steering requested. Route under active delegation policy; delegate via task_start when it outgrows trivial glue.`;
+  return `Recorded ${id}; parent steering requested to launch a worker. Launch is not yet confirmed.`;
 }
 
 export function formatDispatchWaitYield(id: string): string {
