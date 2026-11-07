@@ -82,7 +82,9 @@ export function formatRewaitRejected(options: {
 }
 
 export type WaitOutcome<T> = T | "timeout" | "interrupted";
-export type DispatchWaitOutcome<T> = WaitOutcome<T> | { dispatchId: string };
+export type DispatchWaitOutcome<T> =
+  | WaitOutcome<T>
+  | { dispatchId: string; dispatchRequest?: string };
 
 type WaitSnapshotOptions<T> = {
   signal?: AbortSignal;
@@ -91,7 +93,9 @@ type WaitSnapshotOptions<T> = {
 };
 
 type WaitSnapshotDispatchOptions<T> = WaitSnapshotOptions<T> & {
-  registerDispatchWake: (wake: (dispatchId: string) => void) => () => void;
+  registerDispatchWake: (
+    wake: (dispatchId: string, dispatchRequest?: string) => void,
+  ) => () => void;
 };
 
 /**
@@ -109,7 +113,9 @@ export function waitForSnapshot<T>(
   options: WaitSnapshotOptions<T>,
 ): Promise<WaitOutcome<T>>;
 export function waitForSnapshot<T>(options: WaitSnapshotOptions<T> & {
-  registerDispatchWake?: (wake: (dispatchId: string) => void) => () => void;
+  registerDispatchWake?: (
+    wake: (dispatchId: string, dispatchRequest?: string) => void,
+  ) => () => void;
 }): Promise<DispatchWaitOutcome<T>> {
   return new Promise((resolve) => {
     let done = false;
@@ -142,8 +148,9 @@ export function waitForSnapshot<T>(options: WaitSnapshotOptions<T> & {
     }
 
     if (options.registerDispatchWake) {
-      unregisterDispatch = options.registerDispatchWake((dispatchId) =>
-        finish({ dispatchId }),
+      unregisterDispatch = options.registerDispatchWake(
+        (dispatchId, dispatchRequest) =>
+          finish({ dispatchId, dispatchRequest }),
       );
       // Sync dispatch registration may resolve before unregisterDispatch is
       // assigned; finish() then ran a no-op. Run the real cleanup once.

@@ -578,9 +578,36 @@ describe("WorkerRuntime control plane", () => {
     assert.equal(item.lifecycle, "running");
     assert.equal(item.killReason, undefined);
     runtime.settleGeneration(item, "settled", {}, eventHooks);
+    assert.equal(item.recoveryConcern, undefined, "clean settlement clears stale recoveryConcern so late warnings do not fire after completion");
     runtime.startGeneration(item);
     tool("6", true);
     assert.equal(notices, 1);
+    runtime.clearTimers(item);
+  });
+
+  it("defers recovery steer while a waiter is attached and drops it if the worker settles cleanly", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker & { waiters: unknown[] }>();
+    const item = { ...worker({ disableIdleTimeout: true }), waiters: [{}] };
+    const steered: string[] = [];
+    const notifyRecoveryConcern = (w: typeof item) => {
+      if (w.closed || w.lifecycle === "settled" || w.waiters.length > 0 || !w.recoveryConcern || w.recoveryNotified) return;
+      steered.push(w.recoveryConcern);
+      w.recoveryNotified = true;
+    };
+    const eventHooks = hooks({ onRecoveryConcern: notifyRecoveryConcern });
+    const tool = (id: string) => {
+      runtime.handleEvent(item, { type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command: "sqlite" } }, eventHooks);
+      runtime.handleEvent(item, { type: "tool_execution_end", toolCallId: id, isError: true }, eventHooks);
+    };
+    tool("1");
+    tool("2");
+    assert.match(item.recoveryConcern ?? "", /Consecutive failed bash/);
+    assert.equal(Boolean(item.recoveryNotified), false, "concern is not sent into steer queue while task_wait is blocking");
+    assert.deepEqual(steered, []);
+    item.waiters = [];
+    runtime.settleGeneration(item, "settled", {}, eventHooks);
+    notifyRecoveryConcern(item);
+    assert.deepEqual(steered, [], "clean settlement clears the concern before any post-wait delivery");
     runtime.clearTimers(item);
   });
 

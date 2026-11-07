@@ -856,14 +856,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   let agentBusy = false;
   let shuttingDown = false;
   let lastFleetKey = "";
-  const dispatchWaitWakes = new Set<(dispatchId: string) => void>();
-  const wakeActiveTaskWaits = (dispatchId: string) => {
+  const dispatchWaitWakes = new Set<
+    (dispatchId: string, dispatchRequest?: string) => void
+  >();
+  const wakeActiveTaskWaits = (dispatchId: string, dispatchRequest?: string) => {
     // Defensive copy: each woken waiter synchronously deletes itself from
     // dispatchWaitWakes via unregisterDispatch, so iterate a snapshot.
     // oxlint-disable-next-line unicorn/no-useless-spread
     for (const wake of [...dispatchWaitWakes]) {
       try {
-        wake(dispatchId);
+        wake(dispatchId, dispatchRequest);
       } catch {
         // ignore listener errors
       }
@@ -1394,7 +1396,16 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const notifyRecoveryConcern = (worker: Worker) => {
-    if (shuttingDown || worker.closed || !worker.recoveryConcern || worker.recoveryNotified) return;
+    if (
+      shuttingDown ||
+      worker.closed ||
+      !isLiveLifecycle(worker.lifecycle) ||
+      worker.waiters.length > 0 ||
+      !worker.recoveryConcern ||
+      worker.recoveryNotified
+    ) {
+      return;
+    }
     try {
       pi.sendMessage(
         {
@@ -1537,7 +1548,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       settleGeneration(worker, "failed", { error });
     },
     parkWorker: (worker, reason) => {
-      closeWorker(worker, reason, "sync");
+      closeWorker(worker, reason, "sync", { cleanPark: true });
     },
     abortAndPark: async (worker, reason) => {
       const result = await abortWorkerAndEscalate(worker);
@@ -1828,7 +1839,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             closeWorker(worker, "Fusion transcript restore rejected", "sync");
             return { error: `${id} could not restore Fusion transcript: ${switched.error ?? "unknown"}` };
           }
-          const stats = await client.request({ type: "get_session_stats" }, 10_000).catch(() => undefined);
+          const stats = await client.request({ type: "get_session_stats" }, 30_000).catch(() => undefined);
           const statsData = stats?.success ? stats.data as { contextUsage?: { tokens?: unknown } } | undefined : undefined;
           const tokens = statsData?.contextUsage?.tokens;
           if (typeof tokens === "number" && Number.isFinite(tokens)) {
@@ -1853,7 +1864,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             if (!configured.success) { closeWorker(worker, "Fusion thinking configuration rejected", "sync"); return { error: "Fusion thinking configuration rejected." }; }
           }
         }
-        const stateResponse = await client.request({ type: "get_state" }, 10_000);
+        const stateResponse = await client.request({ type: "get_state" }, 30_000);
         applyState(stateResponse);
         fusionObserved = fusionIdentityFromState(stateResponse);
         if (!worker.sessionFile) {
@@ -1863,7 +1874,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!worker.closed) closeWorker(worker, `Fusion setup failed: ${message}`, "sync");
-        return { error: `${id} Fusion setup failed: ${message}` };
+        return { error: `${id} Fusion setup failed during cold spawn (live workers were not affected): ${message}` };
       }
     } else {
       runtime.armHard(worker, timeoutMs);
@@ -2035,23 +2046,29 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     worker: Worker,
     reason: string,
     mode: "async" | "sync" = "async",
+    options?: { cleanPark?: boolean },
   ): string => {
     if (worker.closed) {
       return `${worker.id} is already closed.`;
     }
+    const priorLifecycle = worker.lifecycle;
+    const cleanCompletion =
+      reason === "task_close" ||
+      (options?.cleanPark === true && priorLifecycle === "settled");
     // Preserve the work lifecycle while cleanup updates the canonical card's
     // final child row in place. Normal close is a successful completion, not a
     // failure or a separate detached receipt.
-    if (worker.hasPinnedSurface) worker.pinnedLifecycle = worker.lifecycle;
+    if (worker.hasPinnedSurface) worker.pinnedLifecycle = priorLifecycle;
     worker.fallbackEpoch += 1;
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
     worker.closed = true;
     worker.lifecycle = "closed";
     worker.countsTowardCap = false;
-    // Normal cleanup is not a failure and must not become a red `× task_close`
-    // reason on the pinned work card. Preserve only real stop/kill reasons.
-    if (reason !== "task_close") worker.killReason = worker.killReason ?? reason;
+    // Normal cleanup and routine transcript parking of a settled sidekick are
+    // not failures and must not become a red `×` killReason on the work card.
+    // Preserve only real stop/kill reasons.
+    if (!cleanCompletion) worker.killReason = worker.killReason ?? reason;
     clearHard(worker);
     clearIdle(worker);
     clearAbortTimer(worker);
@@ -2094,7 +2111,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     } catch {
       // Clean shutdown must not revive this worker; deletion is best effort.
     }
-    if (worker.hasPinnedSurface && reason === "task_close") {
+    if (worker.hasPinnedSurface && cleanCompletion) {
       worker.cleanupComplete = true;
       worker.cleanupWorkers = liveCount();
       worker.cleanupMaxWorkers = MAX_LIVE_WORKERS;
@@ -2190,7 +2207,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
               (candidate.lifecycle === "settled" || candidate.lifecycle === "failed") &&
               !modelInHydraScope(candidate.model)
             ) {
-              closeWorker(candidate, `Hydra scope changed (${process.env.PI_HYDRA_SCOPE}); parking out-of-scope sidekick`, "sync");
+              closeWorker(candidate, `Hydra scope changed (${process.env.PI_HYDRA_SCOPE}); parking out-of-scope sidekick`, "sync", { cleanPark: true });
             }
           }
         }
@@ -2313,7 +2330,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         }
       }
       if (error || !worker) {
-        return textResult(error ?? "Failed to start worker.", true);
+        const priorNote =
+          priorContextTokens !== undefined
+            ? ` (prior sidekick transcript was ~${Math.round(priorContextTokens / 1000)}k tokens and was parked after exceeding the 100k reuse limit)`
+            : "";
+        return textResult(`${error ?? "Failed to start worker."}${priorNote}`, true);
       }
 
       priorContextTokens ??= restoredContextTokens;
@@ -3320,9 +3341,13 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         worker.lastWaitTimeoutAt = undefined;
         worker.lastWaitTimeoutSec = undefined;
         worker.lastWaitGeneration = undefined;
+        notifyRecoveryConcern(worker);
         return textResult(
           [
-            formatDispatchWaitYield(snapshot.dispatchId),
+            formatDispatchWaitYield(
+              snapshot.dispatchId,
+              snapshot.dispatchRequest,
+            ),
             "",
             formatWorkerWaitStatus(worker),
           ].join("\n"),
@@ -3332,6 +3357,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       }
 
       if (snapshot === "interrupted") {
+        notifyRecoveryConcern(worker);
         // A cancelled parent turn must not become an implicit task_abort. The
         // worker is independent and may still be doing useful work; callers
         // that intend to stop it have the explicit task_abort control.
@@ -3351,6 +3377,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         worker.lastWaitTimeoutAt = Date.now();
         worker.lastWaitTimeoutSec = timeoutSec;
         worker.lastWaitGeneration = targetGen;
+        notifyRecoveryConcern(worker);
         let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
         try {
           contextUsage = ctx.getContextUsage();
@@ -4103,7 +4130,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         },
         { triggerTurn: true, deliverAs: "steer" },
       );
-      wakeActiveTaskWaits(id);
+      wakeActiveTaskWaits(id, request);
       ctx.ui.notify(formatDispatchAck(id), "info");
     },
   });

@@ -462,6 +462,8 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     if (!worker.latestResult && worker.latestAssistantText) {
       worker.latestResult = worker.latestAssistantText;
     }
+    worker.lastFailedTool = undefined;
+    worker.recoveryConcern = undefined;
     if (lifecycle === "settled" && !worker.killReason) {
       hooks?.onSuccessfulSettlement?.(worker);
     } else if (lifecycle === "failed") {

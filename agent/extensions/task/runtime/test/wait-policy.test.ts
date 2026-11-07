@@ -199,7 +199,7 @@ describe("same-generation re-wait cooldown", () => {
 describe("dispatch wait wake vs timeout", () => {
   it("wakes waitForSnapshot with dispatchId without timeout cooldown semantics", async () => {
     let detached = 0;
-    let wake: ((id: string) => void) | undefined;
+    let wake: ((id: string, req?: string) => void) | undefined;
     const waiting = waitForSnapshot({
       timeoutMs: 5_000,
       register() {
@@ -214,9 +214,9 @@ describe("dispatch wait wake vs timeout", () => {
         };
       },
     });
-    wake?.("d-test-1");
+    wake?.("d-test-1", "extra request");
     const outcome = await waiting;
-    assert.deepEqual(outcome, { dispatchId: "d-test-1" });
+    assert.deepEqual(outcome, { dispatchId: "d-test-1", dispatchRequest: "extra request" });
     assert.equal(detached, 2);
     assert.notEqual(outcome, "timeout");
     assert.notEqual(outcome, "interrupted");
@@ -236,7 +236,7 @@ describe("dispatch wait wake vs timeout", () => {
         };
       },
     });
-    assert.deepEqual(outcome, { dispatchId: "d-sync" });
+    assert.deepEqual(outcome, { dispatchId: "d-sync", dispatchRequest: undefined });
     assert.equal(dispatchDetached, 1);
   });
 
@@ -270,6 +270,9 @@ describe("dispatch steer copy", () => {
       /Recorded .* parent steering requested to launch a worker\. Launch is not yet confirmed/,
     );
     assert.match(formatDispatchWaitYield(a), /not a timeout/);
+    const yieldWithReq = formatDispatchWaitYield(a, "investigate opportunity 2103");
+    assert.match(yieldWithReq, /not a timeout/);
+    assert.match(yieldWithReq, /Request: investigate opportunity 2103/);
     assert.equal(DISPATCH_USAGE, "Usage: /dispatch <request>");
   });
 });
