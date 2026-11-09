@@ -5,7 +5,7 @@ import { MODES, clearParentCuaState, hasCliFlag, isComputerUseTool, isMode, isSu
 import { pickFusionModel } from "./model-picker.ts";
 import { registerPresentationSwitch } from "./presentation-switch.ts";
 import { AA_STALE_MS, readAaCatalog, syncAaCatalog } from "./hydra/aa-sync.ts";
-import { inferModelFamily, QUOTA_STALE_MS, quotaMultiplierForModel, quotaRemainingForModel, readOpenCircuits, readQuotaSnapshot, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
+import { inferModelFamily, QUOTA_STALE_MS, quotaMultiplierForModel, quotaRemainingForModel, readOpenCircuits, readQuotaSnapshot, recordQuotaHeaders, syncQuotaSnapshot } from "./hydra/quota-sync.ts";
 import { EXCLUDED_HYDRA_PROVIDERS, HYDRA_SCOPE_PROVIDERS, HYDRA_TIERS, isHydraTier, isReliableHydraSignal, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile, type ActiveHydraTier, type HydraScope, type HydraTier, type HydraTurnSignalInput } from "./hydra/scorer.ts";
 import { readUsageCounts, recordHydraUsage } from "./hydra/usage.ts";
 
@@ -36,7 +36,12 @@ const SUBSCRIPTION_LIMIT_PATTERN = /quota (?:exceeded|exhausted)|session limit|u
 const DEFAULT_FAMILY_COOLDOWN_MS = 30 * 60_000;
 
 /** Parse a provider's "resets 5:40:00 PM" notice as the next local occurrence of that time. */
-function parseLimitResetAt(message: string, now = Date.now()): number | undefined {
+export function parseLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const iso = /resets?\s+at\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))/i.exec(message);
+  if (iso) {
+    const reset = Date.parse(iso[1]!);
+    if (Number.isFinite(reset) && reset > now) return reset;
+  }
   const match = /resets\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)/i.exec(message);
   if (!match) return undefined;
   const hour12 = Number(match[1]);
@@ -71,6 +76,9 @@ function joinPromptAppends(...sections: Array<string | undefined>): string {
 }
 
 export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: string, fusion: string, work: string, fusionPreface = "", piBlock = "", utopia = ""): void {
+  pi.on("after_provider_response", (event, ctx) => {
+    if (ctx.model) recordQuotaHeaders(event.headers, ctx.model.provider, ctx.model.id);
+  });
   // Workers inherit Hydra's tier and /cua state without installing lead routing or commands.
   // Count their actual responses here, including fallback models, just like the lead.
   pi.on("message_end", (event) => {
@@ -285,11 +293,10 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   let lastQuotaAttempt = 0;
   async function refreshQuotaIfStale(): Promise<void> {
     const now = Date.now();
-    const quota = readQuotaSnapshot();
-    const unknownClaude = quota.providers.anthropic?.remainingPercent === null;
     const forced = quotaRefreshForced;
     quotaRefreshForced = false;
-    if (!forced && ((!unknownClaude && now - quota.updatedAt <= QUOTA_STALE_MS) || now - lastQuotaAttempt <= QUOTA_STALE_MS)) return;
+    // Passive observations must not postpone polling other subscriptions.
+    if (!forced && now - lastQuotaAttempt <= QUOTA_STALE_MS) return;
     lastQuotaAttempt = now;
     try { await syncQuotaSnapshot(); }
     catch { /* Keep the last known snapshot when the management API is unavailable. */ }
@@ -667,7 +674,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const options = [
         ...HYDRA_TIERS.map(t => `${t} — ${t === "off" ? "Disable automatic stats routing" : `Hydra ${t} effort routing`}${t === currentTier ? " (active)" : ""}`),
         "status — Show ranked AA models, quota health, and current selection",
-        "sync — Refresh Artificial Analysis metrics and 8317 quota snapshot",
+        "sync — Refresh Artificial Analysis metrics and native subscription quotas",
       ];
       const picked = await ctx.ui.select("Hydra model router", options);
       if (!picked) return;
@@ -699,10 +706,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       const aaStale = !Number.isFinite(aaSnap.updatedAt) || aaSnap.updatedAt <= 0 || aaSnap.updatedAt > now || now - aaSnap.updatedAt > AA_STALE_MS;
       const quotaStale = !Number.isFinite(quotaSnap.updatedAt) || quotaSnap.updatedAt <= 0 || quotaSnap.updatedAt > now || now - quotaSnap.updatedAt > QUOTA_STALE_MS;
       const header = `Hydra: ${state.hydra ?? "off"}${state.hydraScope ? ` [${state.hydraScope} only]` : ""} (previewing tier=${tier}, AA=${aaSnap.source} snapshot age=${age(aaSnap.updatedAt)}${aaStale ? " stale/last-known" : ""} ${aaSnap.models.length} models, quota=${quotaSnap.source} snapshot age=${age(quotaSnap.updatedAt)}${quotaStale ? " stale/last-known" : ""}, openCircuits=${openCircuits.size})`;
-      const quotaDetails = Object.entries(quotaSnap.providers).map(([family, entry]) => {
+      const quotaDetails = Object.entries({ ...quotaSnap.providers, ...quotaSnap.models }).map(([family, entry]) => {
         const observed = entry.remainingObservedAt === undefined ? quotaSnap.updatedAt : entry.remainingObservedAt;
         const raw = typeof entry.remainingPercent === "number" && Number.isFinite(entry.remainingPercent) ? `${entry.remainingPercent}%` : "unknown";
-        const stale = entry.remainingPercent != null && quotaRemainingForModel(family, "", quotaSnap) === null;
+        const slash = family.indexOf("/");
+        const stale = entry.remainingPercent != null && quotaRemainingForModel(slash < 0 ? family : family.slice(0, slash), slash < 0 ? "" : family.slice(slash + 1), quotaSnap) === null;
         return `${family}: ${raw} age=${age(observed)}${stale ? " stale/last-known (ignored)" : ""}${entry.disabled ? " disabled (last-known)" : ""}${entry.inCooldown ? " cooldown (last-known)" : ""}`;
       });
       const usage = Object.entries(readUsageCounts()).sort((a, b) => b[1] - a[1]);

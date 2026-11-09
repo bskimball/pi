@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import promptCommands, { REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, PI_SYSTEM_BLOCK } from "../prompt-commands.ts";
 import { registerPresentationSwitch } from "../prompt-commands/presentation-switch.ts";
-import { registerModes } from "../prompt-commands/modes.ts";
+import { parseLimitResetAt, registerModes } from "../prompt-commands/modes.ts";
 import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-commands/hydra/usage.ts";
 import { clearParentCuaState, restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork, writeParentCuaState } from "../prompt-commands/mode-state.ts";
-import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS } from "../prompt-commands/hydra/aa-sync.ts";
-import { parseCredentialsResponse, quotaMultiplierForModel, quotaRemainingForModel, QUOTA_STALE_MS, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
+import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS, syncAaCatalog, readAaCatalog } from "../prompt-commands/hydra/aa-sync.ts";
+import { recordQuotaHeaders, quotaMultiplierForModel, quotaRemainingForModel, QUOTA_STALE_MS, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
 import { computeAaUtility, rankModelsForHydra, selectThinkingForModel } from "../prompt-commands/hydra/scorer.ts";
 import { resolveSubagentModelsAndThinking } from "../task/runtime/agent-discovery.ts";
 
@@ -857,29 +857,28 @@ test("non-Work modes scope project-context Work crew routing to Work mode", () =
 test("Hydra actively reads Claude subscription usage and retains known quota when probing fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-hydra-quota-"));
   const path = join(dir, "quota-snapshot.json");
-  const configPath = join(dir, "hydra.json");
-  writeFileSync(configPath, JSON.stringify({ cpaManagementKey: "fixture-key", cpaBaseUrl: "http://quota.test" }));
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ anthropic: { access: "fixture-token" }, antigravity: { access: "google-token", projectId: "fixture" } }));
+  mkdirSync(join(dir, ".codex"));
+  writeFileSync(join(dir, ".codex", "auth.json"), JSON.stringify({ tokens: { access_token: "codex-fixture", account_id: "account-fixture" } }));
   let utilization = 100;
   let upstreamStatus = 200;
   let probes = 0;
-  let passiveRemaining = 80;
+  let astraAvailable = false;
   const fetchImpl: typeof fetch = async (url, init) => {
-    if (String(url).endsWith("/credentials")) {
-      return Response.json({ files: [{ provider: "claude", auth_index: "fixture-account", disabled: false, cooldowns: [], quota: { signals: upstreamStatus === 403 ? { stale: { remaining_percent: passiveRemaining } } : {} } }] });
+    if (String(url).includes("wham/usage")) {
+      assert.equal(new Headers(init?.headers).get("chatgpt-account-id"), "account-fixture");
+      return Response.json({ rate_limit: { primary_window: { used_percent: 35 }, secondary_window: { used_percent: 10 } }, model_usage: { "gpt-6-astra": { available: astraAvailable } } });
     }
-    assert.equal(String(url), "http://quota.test/v8/management/requests/api-call");
-    const request = JSON.parse(String(init?.body));
-    assert.equal(request.auth_index, "fixture-account");
-    assert.equal(request.method, "GET");
-    assert.equal(request.url, "https://api.anthropic.com/api/oauth/usage");
-    assert.equal(request.header.Authorization, "Bearer $TOKEN$");
+    if (String(url).includes("googleapis.com")) return Response.json({ models: { "gemini-4-argon-high": { quotaInfo: { remainingFraction: 0.95 } } } });
+    assert.equal(String(url), "https://api.anthropic.com/api/oauth/usage");
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer fixture-token");
     probes++;
-    return Response.json({ status_code: upstreamStatus, body: JSON.stringify({
-      five_hour: { utilization, resets_at: "2026-10-31T21:39:59Z" },
-      seven_day: { utilization: 74, resets_at: "2026-11-01T19:59:59Z" },
-      seven_day_sonnet: { utilization: 100 },
-    }) });
+    return Response.json({ five_hour: { utilization }, seven_day: { utilization: 74 }, seven_day_sonnet: { utilization: 100 } }, { status: upstreamStatus });
   };
+  const cachedMuseTime = Date.now() - 60_000;
+  const sync = () => syncQuotaSnapshot({ path, home: dir, agentDir: dir, fetchImpl,
+    museUsage: async () => ({ allowance: { window: { usedPercent: 10 }, weekly: { usedPercent: 3 }, asOfMs: cachedMuseTime } }),
+  });
   try {
     const now = Date.now();
     const entry = { provider: "anthropic", remainingPercent: 2, disabled: false, inCooldown: false, successCount: 0, failureCount: 0 };
@@ -903,43 +902,87 @@ test("Hydra actively reads Claude subscription usage and retains known quota whe
     assert.equal(multiplier(snapshot(now, { disabled: true })), 0, "fresh disabled still excludes");
     assert.equal(multiplier(snapshot(now, { inCooldown: true })), 0, "fresh cooldown still excludes");
 
-    const exhausted = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    writeFileSync(path, JSON.stringify({ schema: 1, source: "live", updatedAt: Date.now(), providers: {} }));
+    const exhausted = await sync();
+    assert.equal(quotaRemainingForModel("antigravity", "gemini-4-argon", exhausted.snapshot), 95);
+    assert.equal(exhausted.snapshot.providers.meta?.remainingPercent, 90);
+    assert.equal(quotaRemainingForModel("openai", "gpt-6.1-sol", exhausted.snapshot), 65);
+    assert.equal(quotaRemainingForModel("openai", "gpt-6-astra", exhausted.snapshot), 0);
+    assert.equal(quotaRemainingForModel("openai-codex", "gpt-6-astra", exhausted.snapshot), 0);
+    assert.equal(exhausted.snapshot.providers.meta?.remainingObservedAt, cachedMuseTime, "first cached observation is not rejected by unrelated snapshot age");
+    const constrained = { ...exhausted.snapshot,
+      providers: { openai: { ...exhausted.snapshot.providers.openai!, remainingPercent: 0 } },
+      models: { "openai/gpt-6-astra": { ...exhausted.snapshot.models!["openai/gpt-6-astra"]!, remainingPercent: 90, remainingObservedAt: Date.now() - QUOTA_STALE_MS - 1 } },
+    };
+    assert.equal(quotaRemainingForModel("openai", "gpt-6-astra", constrained), 0, "stale model percentage cannot mask fresh family exhaustion");
+    assert.equal(quotaMultiplierForModel("openai", "gpt-6-astra", "high", new Set(), constrained).multiplier, 0);
+    astraAvailable = true;
     assert.equal(probes, 1, "empty passive signals require an active usage probe");
     assert.equal(exhausted.snapshot.providers.anthropic?.remainingPercent, 0);
     for (const provider of ["claude-bridge", "local-proxy"]) {
       assert.equal(quotaMultiplierForModel(provider, "claude-opus-5-5", "max", new Set(), readQuotaSnapshot(path)).multiplier, 0);
     }
-    assert.equal(exhausted.snapshot.providers.anthropic?.remainingObservedAt, exhausted.snapshot.updatedAt);
+    assert.ok(exhausted.snapshot.providers.anthropic!.remainingObservedAt! <= exhausted.snapshot.updatedAt);
     // Legacy previous snapshot must retain its original percentage age across refreshes.
     const oldTime = Date.now() - QUOTA_STALE_MS - 5_000;
     writeFileSync(path, JSON.stringify({ ...exhausted.snapshot, updatedAt: oldTime, providers: { anthropic: { ...exhausted.snapshot.providers.anthropic, remainingObservedAt: undefined } } }));
     upstreamStatus = 403;
-    const unavailable = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    const unavailable = await sync();
     assert.equal(unavailable.snapshot.providers.anthropic?.remainingPercent, 0);
     assert.equal(unavailable.snapshot.providers.anthropic?.remainingObservedAt, oldTime);
     assert.ok(unavailable.snapshot.updatedAt > oldTime);
     assert.equal(quotaRemainingForModel("claude-bridge", "claude-opus-5-5", unavailable.snapshot), null);
     assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "max", new Set(), unavailable.snapshot).multiplier, 1);
-    const again = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    const again = await sync();
     assert.equal(again.snapshot.providers.anthropic?.remainingObservedAt, oldTime, "repeated refresh cannot rejuvenate retained percentage");
-    assert.match(unavailable.note, /Claude.*unavailable/i);
-    passiveRemaining = 0;
-    const equalBinding = await syncQuotaSnapshot({ path, configPath, fetchImpl });
-    assert.equal(equalBinding.snapshot.providers.anthropic?.remainingObservedAt, oldTime, "equal conservative minimum keeps prior age");
-    // New lower passive percentage binds the conservative minimum and has a fresh timestamp.
-    passiveRemaining = 1;
-    writeFileSync(path, JSON.stringify({ ...again.snapshot, providers: { anthropic: { ...again.snapshot.providers.anthropic, remainingPercent: 20, remainingObservedAt: oldTime } } }));
-    const freshBinding = await syncQuotaSnapshot({ path, configPath, fetchImpl });
-    assert.equal(freshBinding.snapshot.providers.anthropic?.remainingPercent, 1);
-    assert.equal(freshBinding.snapshot.providers.anthropic?.remainingObservedAt, freshBinding.snapshot.updatedAt);
-    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "max", new Set(), freshBinding.snapshot).multiplier, 0);
+    assert.match(unavailable.note, /unavailable:.*anthropic/i);
+    writeFileSync(path, JSON.stringify({ schema: 1, source: "live", updatedAt: oldTime,
+      providers: { openai: { ...entry, provider: "openai", remainingPercent: 0 } },
+    }));
+    recordQuotaHeaders({ "anthropic-ratelimit-unified-5h-utilization": "0.99" }, "claude-bridge", "claude-opus-5-5", path);
+    assert.equal(quotaRemainingForModel("claude-bridge", "claude-opus-5-5", readQuotaSnapshot(path)), 1);
+    assert.equal(quotaRemainingForModel("openai", "gpt-6-astra", readQuotaSnapshot(path)), null, "passive Claude headers cannot rejuvenate legacy OpenAI quota");
+    recordQuotaHeaders({ "x-ratelimit-remaining-requests": "0" }, "xai", "grok-4.7", path);
+    assert.equal(readQuotaSnapshot(path).providers.xai, undefined, "request limits are not subscription allowances");
     upstreamStatus = 200;
     utilization = 20;
-    const recovered = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    const recovered = await sync();
+    assert.equal(quotaRemainingForModel("openai", "gpt-6-astra", recovered.snapshot), 65, "clears recovered per-model gate");
     assert.equal(recovered.snapshot.providers.anthropic?.remainingPercent, 26, "shared weekly limit binds; Sonnet-only limits must not disable all Claude models");
     utilization = 99;
-    const nearlyEmpty = await syncQuotaSnapshot({ path, configPath, fetchImpl });
+    const nearlyEmpty = await sync();
     assert.equal(nearlyEmpty.snapshot.providers.anthropic?.remainingPercent, 1, "OAuth utilization is percent, not a fraction");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Hydra retains missing live speed measurements and qualifies Grok for research, not coding", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-aa-preserve-"));
+  const path = join(dir, "aa.json");
+  try {
+    const seed = SEED_AA_MODELS.find(m => m.slug === "grok-4-7")!;
+    writeFileSync(path, JSON.stringify({ schema: 1, source: "live", updatedAt: Date.now(), models: [{ ...seed, outputSpeedTps: 123, ttftSeconds: 0, blendedPricePer1m: 0 }] }));
+    const synced = await syncAaCatalog({ path, fetchImpl: async url => {
+      if (String(url).endsWith("/models")) return new Response(JSON.stringify({ initialModels: [{ slug: seed.slug, intelligenceIndex: 35, capabilities: { engineering: 41 }, frontierCode20: 0.29, terminalBench40: 0.26 }] }));
+      return new Response("", { status: 404 });
+    } });
+    const grok = synced.models.find(m => m.slug === seed.slug)!;
+    assert.equal(grok.outputSpeedTps, 123);
+    assert.equal(grok.ttftSeconds, 0);
+    assert.equal(grok.blendedPricePer1m, 0);
+    assert.equal(readAaCatalog(path).models.find(m => m.slug === seed.slug)?.outputSpeedTps, 123);
+    const models: any[] = [
+      { provider: "xai", id: "grok-4.7", reasoning: true },
+      { provider: "claude-bridge", id: "claude-opus-5-5", reasoning: true },
+      { provider: "antigravity", id: "gemini-4-argon", reasoning: true },
+    ];
+    const rank = (domain: "research" | "coding" | "design") => rankModelsForHydra({ models, catalog: SEED_AA_MODELS,
+      quota: { schema: 1, source: "none", updatedAt: 0, providers: {} }, openCircuits: new Set(), tier: "standard",
+      signal: { domain, reasoningDepth: 2.6, depthConfidence: 1, domainConfidence: 1 }, usage: { anthropic: 100, google: 100, xai: 0 },
+    });
+    assert.equal(rank("research").find(m => m.key === "xai/grok-4.7")?.meetsQuality, true);
+    assert.equal(rank("research")[0]?.key, "xai/grok-4.7");
+    assert.equal(rank("coding").find(m => m.key === "xai/grok-4.7")?.meetsQuality, false);
+    assert.equal(rank("design").find(m => m.key === "xai/grok-4.7")?.meetsQuality, false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -988,35 +1031,17 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(daMap.get("gpt-6-1-sol"), 1359);
     assert.equal(daMap.get("glm-5-3"), 1298, "resolves Design Arena codenames via registry displayName");
 
-    // 2. Quota & circuit filtering (including mixed disabled + cooldown credentials)
-    const creds = parseCredentialsResponse({
-      files: [
-        { quota_provider: "anthropic", remaining_percent: 3, cooldowns: [], disabled: false, success: 10, failed: 0 },
-        { quota_provider: "openai", remaining_percent: 85, cooldowns: [], disabled: false, success: 12, failed: 0 },
-        { quota_provider: "xai", remaining_percent: 85, cooldowns: [], disabled: true, success: 5, failed: 0 },
-        { quota_provider: "xai", remaining_percent: 0, cooldowns: [{ reason: "quota" }], disabled: false, success: 5, failed: 2 },
-      ],
-    });
+    // 2. Quota and circuit filtering.
+    const quotaEntry = (provider: string, remainingPercent: number) => ({ provider, remainingPercent, disabled: false, inCooldown: false, successCount: 0, failureCount: 0 });
+    const creds = { anthropic: quotaEntry("anthropic", 3), openai: quotaEntry("openai", 85), xai: { ...quotaEntry("xai", 0), inCooldown: true } };
     const quotaSnap = { schema: 1 as const, updatedAt: Date.now(), source: "live" as const, providers: creds };
     assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "high", new Set(), quotaSnap).multiplier, 0, "exhausted (<5%) quota is skipped");
     assert.equal(quotaMultiplierForModel("xai", "grok-4.7", "high", new Set(), quotaSnap).multiplier, 0, "mixed disabled + cooling-down credentials cannot manufacture a healthy provider");
     assert.equal(quotaMultiplierForModel("openai", "gpt-6-astra", "high", new Set(["openai/gpt-6-astra"]), quotaSnap).multiplier, 0, "open circuit is skipped");
     assert.equal(quotaMultiplierForModel("openai", "gpt-6.1-sol", "high", new Set(), quotaSnap).multiplier, 1);
 
-    // Real CPA shape: provider names like "claude", quota under quota.signals, unavailable flag.
-    const cpaCreds = parseCredentialsResponse({
-      files: [
-        { provider: "claude", quota: { signals: { weekly: { remaining_percent: 30 } } }, cooldowns: [], disabled: false, success: 3, failed: 1 },
-        { provider: "xai", quota: { signals: {} }, cooldowns: [], disabled: false, unavailable: true, success: 0, failed: 0 },
-      ],
-    });
-    assert.equal(cpaCreds.anthropic?.remainingPercent, 30, "reads remaining percent from CPA quota signals");
-    const cpaExhausted = parseCredentialsResponse({
-      files: [{ provider: "claude", quota: { signals: { weekly: { remaining_percent: 1 } } }, cooldowns: [], disabled: false, success: 3, failed: 1 }],
-    });
-    assert.equal(cpaExhausted.anthropic?.remainingPercent, 1, "nested remaining_percent keeps percent semantics below 5");
-    assert.equal(quotaMultiplierForModel("claude-bridge", "claude-opus-5-5", "standard", new Set(), { schema: 1, updatedAt: Date.now(), source: "live", providers: cpaExhausted }).multiplier, 0, "exhausted signal quota excludes the family");
-    assert.equal(cpaCreds.xai?.inCooldown, true, "unavailable credential counts as cooling down");
+    assert.equal(parseLimitResetAt("Your usage window resets at 2026-11-09T00:00:00Z", Date.parse("2026-11-08T00:00:00Z")), Date.parse("2026-11-09T00:00:00Z"));
+    assert.ok(parseLimitResetAt("resets 9:30:00 PM")! > Date.now());
 
     const catalogModels: any[] = [
       { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5 (API)", reasoning: true },
@@ -1650,7 +1675,7 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
       setActiveTools: (names: string[]) => { workerTools = names; },
     } as any, "", "", "", "");
     delete process.env.PI_SUBAGENT;
-    assert.deepEqual(Object.keys(workerHandlers), ["message_end", "before_agent_start", "tool_call"], "workers install accounting and /cua soft gate without lead routing");
+    assert.deepEqual(Object.keys(workerHandlers), ["after_provider_response", "message_end", "before_agent_start", "tool_call"], "workers install quota observations, accounting and /cua soft gate without lead routing");
     workerHandlers.before_agent_start();
     assert.deepEqual(workerTools, ["read"], "subagents strip active computer_use_* tools when PI_CUA_ENABLED is unset");
     assert.equal(workerHandlers.tool_call({ toolName: "computer_use_click" })?.block, true, "subagents block computer_use_* execution when PI_CUA_ENABLED is unset");
@@ -1690,12 +1715,12 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     let quotaProbes = 0;
     try {
       Date.now = () => now + 11 * 60_000;
-      writeFileSync(join(dir, "harness", "hydra.json"), JSON.stringify({ cpaManagementKey: "fixture-key", cpaBaseUrl: "http://quota.test" }));
+      writeFileSync(join(dir, "auth.json"), JSON.stringify({ anthropic: { access: "fixture-token" } }));
       globalThis.fetch = async (url) => {
-        if (String(url).endsWith("/credentials")) return Response.json({ files: [{ provider: "claude", auth_index: "fixture", quota: { signals: {} } }] });
+        if (!String(url).includes("api.anthropic.com")) return new Response("", { status: 401 });
         quotaProbes++;
         await new Promise(resolve => setTimeout(resolve, 10));
-        return Response.json({ status_code: 200, body: JSON.stringify({ five_hour: { utilization: 100 } }) });
+        return Response.json({ five_hour: { utilization: 100 } });
       };
       ctx.model = catalogModels.find(m => m.provider === "claude-bridge")!;
       for (const h of handlers.before_agent_start ?? []) await h({ systemPromptOptions: {} }, ctx);

@@ -163,6 +163,7 @@ const COST_TILT_WEIGHT = 0.12;
 export const DOMAIN_AFFINITY: Partial<Record<HydraDomain, Readonly<Record<string, number>>>> = {
   design: { google: 0.25, anthropic: 0.07 },
   writing: { google: 0.18 },
+  research: { xai: 0.18 },
 };
 
 /** Completed model calls required in the usage window before balancing applies. */
@@ -435,9 +436,9 @@ export function computeAaUtility(
   let utility = workhorse + (scoreProfile(aa, profile.frontier, ranges) - workhorse) * t;
 
   // Capability floor: lightweight models (codingScore < 40, e.g. Haiku, Flash, Luna) must not
-  // outrank capable models on coding, design, reasoning, or non-trivial research. Writing and
-  // conversation lean on personality and creative measurements instead.
-  if ((domain === "coding" || domain === "design" || domain === "reasoning" || domain === "research") && (aa.codingScore ?? 0) < 40) {
+  // outrank capable models on coding, design, or reasoning. Research uses its own
+  // factuality and intelligence profile rather than a coding capability floor.
+  if ((domain === "coding" || domain === "design" || domain === "reasoning") && (aa.codingScore ?? 0) < 40) {
     utility *= 0.55;
   }
   return utility;

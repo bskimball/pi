@@ -663,6 +663,16 @@ export function parseAaModelsHtml(html: string): AaModelMetrics[] {
   return models;
 }
 
+function preserveMeasurements(live: AaModelMetrics, previous?: AaModelMetrics, seed?: AaModelMetrics): AaModelMetrics {
+  return {
+    ...live,
+    outputSpeedTps: live.outputSpeedTps ?? previous?.outputSpeedTps ?? seed?.outputSpeedTps ?? null,
+    ttftSeconds: live.ttftSeconds ?? previous?.ttftSeconds ?? seed?.ttftSeconds ?? null,
+    blendedPricePer1m: live.blendedPricePer1m ?? previous?.blendedPricePer1m ?? seed?.blendedPricePer1m ?? null,
+    designArenaElo: live.designArenaElo ?? previous?.designArenaElo ?? seed?.designArenaElo,
+  };
+}
+
 export function readAaCatalog(path = defaultAaCatalogPath()): AaCatalogSnapshot {
   try {
     if (existsSync(path)) {
@@ -671,9 +681,7 @@ export function readAaCatalog(path = defaultAaCatalogPath()): AaCatalogSnapshot 
         const seedBySlug = new Map(SEED_AA_MODELS.map((s) => [s.slug, s]));
         const models = (raw.models as AaModelMetrics[]).map((m) => {
           const seed = seedBySlug.get(m.slug);
-          return seed && m.designArenaElo === undefined && seed.designArenaElo !== undefined
-            ? { ...m, designArenaElo: seed.designArenaElo }
-            : m;
+          return preserveMeasurements(m, undefined, seed);
         });
         // Seeds added after the last sync still need to be scoreable.
         const known = new Set(models.map((m) => m.slug));
@@ -775,6 +783,7 @@ export async function syncAaCatalog(options?: {
     if (parsed.length === 0) throw new Error("No AA model entries found in response");
 
     // Merge with seed entries so models not in the top 28 default chart still retain baseline scores.
+    const previousBySlug = new Map(readAaCatalog(path).models.map(model => [model.slug, model]));
     const seedBySlug = new Map<string, AaModelMetrics>();
     const bySlug = new Map<string, AaModelMetrics>();
     for (const seed of SEED_AA_MODELS) {
@@ -783,7 +792,7 @@ export async function syncAaCatalog(options?: {
     }
     for (const live of parsed) {
       const seed = seedBySlug.get(live.slug);
-      bySlug.set(live.slug, seed?.designArenaElo !== undefined ? { ...live, designArenaElo: seed.designArenaElo } : live);
+      bySlug.set(live.slug, preserveMeasurements(live, previousBySlug.get(live.slug), seed));
     }
 
     // Seeded models AA leaves off the listing (e.g. Gemini 4 Argon) still have full
@@ -802,7 +811,7 @@ export async function syncAaCatalog(options?: {
             if (metrics) {
               bySlug.set(
                 seed.slug,
-                seed.designArenaElo !== undefined ? { ...metrics, designArenaElo: seed.designArenaElo } : metrics,
+                preserveMeasurements(metrics, previousBySlug.get(seed.slug), seed),
               );
             }
           } catch {

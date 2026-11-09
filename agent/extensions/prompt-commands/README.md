@@ -22,6 +22,10 @@ Fusion's [mode card](../../prompts/inactive/fusion.md#handoff-contract) owns the
 
 The saved `fusion` pair is authoritative; `models.fusion` mirrors its lead choice. Successful activation reports both selections and thinking levels. Sidekick launch and reuse receipts distinguish configured selection from child-reported identity, including mismatches or unavailable observations; they do not silently switch models.
 
+## Hydra
+
+`quota-sync.ts` probes provider usage directly without CPA/management keys, credential refresh, or login flows: Claude OAuth usage via a fresh `~/.claude/.credentials.json` token (else Pi's `anthropic` token), OpenAI `wham/usage` via `~/.codex/auth.json`, Antigravity model quotas via `agent/auth.json`, and Muse `usage --json`, alongside passive recording of Claude unified 5h/7d and OpenAI `x-codex` usage headers and ISO reset parsing. Failed probes retain observation age, and stale percentages are ignored after 10m. xAI remaining quota is unknown and relies on existing circuits and reactive cooldown health without invented percentages. Live AA syncs with null speed, TTFT, or blended price preserve previous same-model values and then fall back to seed data. Routing preserves coding, design, and reasoning floors with no forced Grok share; research omits the `coding < 40` penalty and applies a `0.18` `xai` research affinity.
+
 ## Presentation
 
 `/ui pi` selects default Pi presentation. `/ui apex`, `/ui claude`, and `/ui hal` select the matching installed UI extension. Switching is live and idle-only, independent of behavior and models, and fails closed if that UI directory is missing. Each UI has a separately saved theme: `dark`, `apex-dark`, `claude-dark`, or `hal-dark`. Shared receipts live in `packages/ui-kit`. Presentation switching lives in `presentation-switch.ts` and sets `PI_UI_CHROME` / `PI_UI_SKIN` (`PI_APEX_UI` is a deprecated alias kept in sync).
