@@ -816,6 +816,48 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
+  it("fires onMidTurnContext only when an assistant toolUse turn reports finite usage", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const item = worker();
+    const observed: number[] = [];
+    const h = hooks({
+      onMidTurnContext: (w) => {
+        if (w.latestContextTokens !== undefined) observed.push(w.latestContextTokens);
+      },
+    });
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "toolUse",
+          usage: { input: 60_000, cacheRead: 45_000, cacheWrite: 2_000 },
+        },
+      },
+      h,
+    );
+    assert.equal(item.latestContextTokens, 107_000);
+    assert.deepEqual(observed, [107_000]);
+
+    // Final stop message updates latestContextTokens without firing mid-turn hook.
+    runtime.handleEvent(
+      item,
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          usage: { input: 61_000, cacheRead: 45_000, cacheWrite: 2_000 },
+        },
+      },
+      h,
+    );
+    assert.equal(item.latestContextTokens, 108_000);
+    assert.deepEqual(observed, [107_000]);
+    runtime.clearTimers(item);
+  });
+
   it("owns transport-exit settlement, cap release, and pruning", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>({ maxSettled: 1 });
     const old = worker({

@@ -170,6 +170,8 @@ export interface WorkerRuntimeEventHooks<TWorker extends RuntimeEventWorker> {
   beforeSettlementNotify?(worker: TWorker): void;
   afterSettlementNotify?(worker: TWorker): void;
   onRecoveryConcern?(worker: TWorker): void;
+  /** Fresh context size from an assistant message that still has tool calls to run. */
+  onMidTurnContext?(worker: TWorker): void;
 }
 
 export interface SettleGenerationOptions {
@@ -690,6 +692,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
               (value) => typeof value === "number" && Number.isFinite(value),
             )) {
               worker.latestContextTokens = usage.input! + usage.cacheRead! + usage.cacheWrite!;
+              if (assistant.stopReason === "toolUse") hooks.onMidTurnContext?.(worker);
             }
             const text = hooks.extractAssistantText(message);
             if (text) {

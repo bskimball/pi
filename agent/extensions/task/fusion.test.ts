@@ -3,6 +3,7 @@ import { test } from "node:test";
 import asyncTask from "./async-task.ts";
 import ampTask from "./amp-task.ts";
 import { discoverAgents } from "./runtime/agent-discovery.ts";
+import { ActivityLedger } from "./runtime/activity-ledger.ts";
 import {
   FUSION_CHAIN_PROMPT_CAP,
   FUSION_REUSE_CONTEXT_TOKENS,
@@ -11,6 +12,8 @@ import {
   fusionChainNudge,
   fusionIdentityFromState,
   fusionIdentityReceipt,
+  fusionContextGuardReceipt,
+  fusionContextGuardSteer,
   fusionContextOverLimit,
   fusionModelId,
 } from "./runtime/fusion-lifecycle.ts";
@@ -405,23 +408,65 @@ test("restored context limit decision treats unknown and boundary size as reusab
   assert.equal(fusionContextOverLimit(FUSION_REUSE_CONTEXT_TOKENS + 1), true);
 });
 
-test("FusionLifecycle fresh context parks cached transcripts instead of continuing them", async () => {
+test("FusionLifecycle fresh context keeps idle sidekicks warm until capacity is needed", async () => {
   const h = fusionHarness();
   // No sidekick yet: a declared-fresh unit still must not resume a transcript.
   assert.deepEqual(await h.lifecycle.reuse("clean unit", { context: "fresh" }, 1000), { kind: "fresh" });
-  const idle = h.fusionWorker();
-  h.workers.push(idle);
+  const idle = h.fusionWorker({ latestContextTokens: 20_000 });
+  const heavier = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl", latestContextTokens: 70_000 });
+  h.workers.push(idle, heavier);
   const fresh: any = await h.lifecycle.reuse("unrelated unit", { context: "fresh" }, 1000);
   assert.equal(fresh.kind, "fresh", "fresh is never silently downgraded to reuse");
-  assert.deepEqual(h.started, [], "the parked sidekick takes no new generation");
-  assert.ok(h.parked.some((entry: string) => entry.startsWith("task_1:")), "cached transcript parked");
-  assert.equal(h.lifecycle.find(), undefined, "no sidekick carries the declined context forward");
-  // Omitting context still continues the cached findings.
-  const reusable = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
-  h.workers.push(reusable);
+  assert.deepEqual(h.started, [], "idle sidekicks take no new generation on a fresh spawn");
+  assert.deepEqual(h.parked, [], "fresh keeps existing idle sidekicks warm in the pool");
+  assert.equal(h.lifecycle.find(), idle, "warm sidekick remains available for the next unit");
+  // Omitting context continues the earliest warm sidekick.
   const reused: any = await h.lifecycle.reuse("follow-on unit", {}, 1000);
   assert.equal(reused.kind, "reused");
-  assert.equal(reused.worker.id, "task_2");
+  assert.equal(reused.worker.id, "task_1");
+  // When the caller needs a slot at the 5-worker cap, parkIdleForCapacity evicts the largest idle transcript.
+  idle.lifecycle = "settled";
+  const evicted = h.lifecycle.parkIdleForCapacity();
+  assert.equal(evicted?.id, "task_2", "largest idle transcript parked first");
+  assert.ok(h.parked.some((entry: string) => entry.startsWith("task_2:")));
+  assert.equal(idle.closed, false, "smaller warm transcript kept");
+});
+
+test("FusionLifecycle reuse workerId targets a specific warm sidekick and rejects invalid targets", async () => {
+  const h = fusionHarness();
+  const w1 = h.fusionWorker({ id: "task_1", sessionFile: "/s1.jsonl" });
+  const w2 = h.fusionWorker({ id: "task_2", sessionFile: "/s2.jsonl" });
+  h.workers.push(w1, w2);
+
+  // Target the second idle worker explicitly instead of the earliest.
+  const targeted: any = await h.lifecycle.reuse("continue w2", { workerId: "task_2" }, 1000);
+  assert.equal(targeted.kind, "reused");
+  assert.equal(targeted.worker.id, "task_2");
+
+  // Targeting a busy worker fails closed with a clear remedy instead of picking w1.
+  const busyTarget: any = await h.lifecycle.reuse("collide w2", { workerId: "task_2" }, 1000);
+  assert.equal(busyTarget.kind, "conflict");
+  assert.match(busyTarget.reason, /task_2 is still running its unit/);
+
+  // Combining reuse target with context: "fresh" is a contradiction.
+  const freshConflict: any = await h.lifecycle.reuse("contradiction", { workerId: "task_1", context: "fresh" }, 1000);
+  assert.equal(freshConflict.kind, "conflict");
+  assert.match(freshConflict.reason, /cannot be combined with context: "fresh"/);
+
+  // Unknown or closed worker id is rejected.
+  const unknownTarget: any = await h.lifecycle.reuse("missing", { workerId: "task_99" }, 1000);
+  assert.equal(unknownTarget.kind, "conflict");
+  assert.match(unknownTarget.reason, /task_99 is not an open sidekick/);
+});
+
+test("fusionContextGuardSteer and fusionContextGuardReceipt format ~100k handoff guidance", () => {
+  const steer = fusionContextGuardSteer(118_400);
+  assert.match(steer, /~118k tokens, past the 100k unit budget/);
+  assert.match(steer, /settle now with your report/);
+  assert.match(steer, /path:line/);
+  const receipt = fusionContextGuardReceipt("task_3");
+  assert.match(receipt, /\[fusion\] context guard: task_3 passed the 100k unit budget/);
+  assert.match(receipt, /context: "fresh"/);
 });
 
 test("FusionLifecycle reuse conflicts name truthful remedies and validates report contracts", async () => {
@@ -533,6 +578,16 @@ test("Fusion gate keeps parked sidekicks operable while non-sidekicks stay rejec
       h.lifecycle.gateLead(tool, "task_4"),
       "Fusion task operations are scoped to its sidekicks.",
       `${tool} on a known non-sidekick stays rejected`,
+    );
+    assert.equal(
+      h.lifecycle.gateLead(tool, ["task_3", "task_4"]),
+      "Fusion task operations are scoped to its sidekicks.",
+      `${tool} with ids array containing a non-sidekick stays rejected`,
+    );
+    assert.equal(
+      h.lifecycle.gateLead(tool, ["task_3", "task_9"]),
+      undefined,
+      `${tool} with ids array of sidekicks and unknown ids is allowed through`,
     );
     assert.equal(h.lifecycle.gateLead(tool, "task_9"), undefined, `${tool} on an unknown worker falls through to the tool's Unknown report`);
     assert.equal(h.lifecycle.gateLead(tool, undefined), undefined, `${tool} without an id falls through to the tool's id-required report`);
@@ -961,9 +1016,228 @@ test("Utopia ignores retained Fusion pair so sidekicks route dynamically under H
     assert.equal(hydraRouteQueried, true, "Utopia sidekick queries dynamic Hydra subagent router instead of forcing retained Fusion pair");
     assert.doesNotMatch(text, /excludes the configured Fusion sidekick/, "does not reject on retained Fusion pair in Utopia");
     assert.match(text, /Hydra scope "openai" has no available model for sidekick/);
+
+    // Non-sidekick agents reject `reuse` upfront.
+    const nonSidekickReuse = await tools.get("task_start").execute(
+      "call_2",
+      { agent: "scout", prompt: "scan", reuse: "task_1" },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), sessionManager: { getSessionId: () => "s1", getBranch: () => [] } },
+    );
+    assert.equal(nonSidekickReuse.isError, true);
+    assert.match(nonSidekickReuse.content[0].text, /reuse applies only to sidekick units/);
+
+    // task_wait validates id / ids and rejects generation with multiple ids.
+    const missingId = await tools.get("task_wait").execute(
+      "call_3",
+      {},
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
+    assert.equal(missingId.isError, true);
+    assert.match(missingId.content[0].text, /id or ids is required/);
+
+    const genMulti = await tools.get("task_wait").execute(
+      "call_4",
+      { ids: ["task_1", "task_2"], generation: 1 },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
+    assert.equal(genMulti.isError, true);
+    assert.match(genMulti.content[0].text, /generation applies to a single id/);
   } finally {
     if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = priorMode;
     if (priorTier === undefined) delete process.env.PI_HYDRA_TIER; else process.env.PI_HYDRA_TIER = priorTier;
     if (priorScope === undefined) delete process.env.PI_HYDRA_SCOPE; else process.env.PI_HYDRA_SCOPE = priorScope;
+  }
+});
+
+test("task_wait ids enforces settle-any collection, mixed-cooldown rejection, and Fusion worker-scope gating", async () => {
+  const priorMode = process.env.PI_BEHAVIOR_MODE;
+  process.env.PI_BEHAVIOR_MODE = "apex";
+  const handlers = new Map<string, Function[]>();
+  const bus = new Map<string, Function[]>();
+  const tools = new Map<string, any>();
+  const emitBus = (name: string, payload: any) => { for (const fn of bus.get(name) ?? []) fn(payload); };
+  let capturedWorkers: any[] = [];
+  const pi: any = {
+    registerTool: (tool: any) => { tools.set(tool.name, tool); },
+    registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+    on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
+    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); } },
+    getThinkingLevel: () => "medium",
+  };
+  try {
+    asyncTask(pi);
+    // Intercept Map.prototype.values once during pi:fusion:configure to seed the internal worker map.
+    let workerMap: Map<string, any> | undefined;
+    const origValues = Map.prototype.values;
+    Map.prototype.values = new Proxy(origValues, {
+      apply(target, thisArg: Map<string, any>, argArray) {
+        if (!workerMap) workerMap = thisArg;
+        return Reflect.apply(target, thisArg, argArray);
+      },
+    });
+    try {
+      const cfg: any = {
+        fusion: {
+          lead: { provider: "p", modelId: "l", thinking: "high" },
+          sidekick: { provider: "p", modelId: "s", thinking: "low" },
+        },
+      };
+      emitBus("pi:fusion:configure", cfg);
+    } finally {
+      Map.prototype.values = origValues;
+    }
+    assert.ok(workerMap, "captured internal worker map");
+
+    const makeSyntheticWorker = (id: string, overrides: Record<string, unknown> = {}): any => ({
+      instanceId: `inst-${id}`,
+      id,
+      agent: "sidekick",
+      mission: `mission ${id}`,
+      cwd: process.cwd(),
+      model: "p/s",
+      thinking: "low",
+      initialPrompt: "go",
+      modelAttempts: ["p/s"],
+      modelAttemptIndex: 0,
+      fallbackReplaySafe: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      timeoutMs: 60_000,
+      sessionDir: "/tmp",
+      notifiedGeneration: 0,
+      waiters: [] as Array<{ generation: number; resolve: (snapshot: any) => void }>,
+      pendingUi: new Map(),
+      parsedReport: null,
+      reportStatus: "none" as const,
+      countsTowardCap: true,
+      closed: false,
+      lifecycle: "running" as const,
+      phase: "model" as const,
+      renderVersion: 0,
+      fallbackEpoch: 0,
+      fallbackInProgress: false,
+      fallbackAwaitingAgentStart: false,
+      ledger: new ActivityLedger(),
+      errors: [] as string[],
+      generation: 1,
+      generationStartedAt: Date.now(),
+      turns: 1,
+      maxTurns: 20,
+      pendingSteer: 0,
+      pendingFollowUp: 0,
+      latestAssistantText: "",
+      latestResult: "",
+      modelAttemptUsedTools: false,
+      exitCode: null,
+      fusion: true,
+      ...overrides,
+    });
+
+    const w1 = makeSyntheticWorker("task_1");
+    const w2 = makeSyntheticWorker("task_2");
+    const nonSidekick = makeSyntheticWorker("task_3", {
+      agent: "scout",
+      fusion: false,
+      lifecycle: "settled",
+      latestResult: "scout report",
+    });
+    workerMap!.set(w1.instanceId, w1);
+    workerMap!.set(w2.instanceId, w2);
+    workerMap!.set(nonSidekick.instanceId, nonSidekick);
+    capturedWorkers = [w1, w2, nonSidekick];
+
+    const ctx: any = { cwd: process.cwd(), getContextUsage: () => undefined };
+    const taskWait = tools.get("task_wait");
+
+    // 1. Mixed-cooldown rejection: if task_1 is in post-timeout cooldown and task_2 is not,
+    // task_wait({ ids: ["task_1", "task_2"] }) must reject upfront instead of silently ignoring task_1.
+    w1.lastWaitTimeoutAt = Date.now();
+    w1.lastWaitTimeoutSec = 600;
+    w1.lastWaitGeneration = 1;
+    const mixedCooldown = await taskWait.execute("wait_cooldown", { ids: ["task_1", "task_2"] }, undefined, undefined, ctx);
+    assert.equal(mixedCooldown.isError, true, "mixed cooldown must fail closed rather than silently dropping task_1");
+    assert.match(mixedCooldown.content[0].text, /task_1 same-generation re-wait is blocked/i);
+    assert.equal(w1.waiters.length, 0);
+    assert.equal(w2.waiters.length, 0);
+
+    // Clear cooldown and verify settle-any returns whichever worker settles first, then skips it on the next call.
+    w1.lastWaitTimeoutAt = undefined;
+    w1.lastWaitTimeoutSec = undefined;
+    w1.lastWaitGeneration = undefined;
+
+    const firstWaitPromise = taskWait.execute("wait_wave_1", { ids: ["task_1", "task_2"] }, undefined, undefined, ctx);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(w1.waiters.length, 1, "waiter registered on task_1");
+    assert.equal(w2.waiters.length, 1, "waiter registered on task_2");
+
+    // Settle w2 first.
+    w2.lifecycle = "settled";
+    w2.latestResult = "w2 finished first";
+    for (const waiter of w2.waiters.splice(0)) {
+      waiter.resolve({
+        generation: 1,
+        lifecycle: "settled",
+        startedAt: w2.generationStartedAt,
+        settledAt: Date.now(),
+        turns: 2,
+        resultText: "w2 finished first",
+        exitCode: 0,
+      });
+    }
+    const firstSettled = await firstWaitPromise;
+    assert.equal(firstSettled.isError, false);
+    assert.match(firstSettled.content[0].text, /task_2 settled \(generation 1\)/);
+    assert.match(firstSettled.content[0].text, /others: task_1 running\. Call task_wait with ids \[task_1\]/);
+    assert.equal(w1.waiters.length, 0, "losing waiter on task_1 detached cleanly without aborting task_1");
+    assert.equal(w1.lifecycle, "running", "task_1 keeps running");
+
+    // Settle w1, then call task_wait with the full wave ["task_1", "task_2"]: task_2 is skipped as already collected.
+    w1.lifecycle = "settled";
+    w1.latestResult = "w1 finished second";
+    const secondSettled = await taskWait.execute("wait_wave_2", { ids: ["task_1", "task_2"] }, undefined, undefined, ctx);
+    assert.equal(secondSettled.isError, false);
+    assert.match(secondSettled.content[0].text, /task_1 already settled/);
+    assert.match(secondSettled.content[0].text, /others: task_2 collected\. Every listed worker is now collected\./);
+
+    // Calling again when all are collected returns the all-collected message.
+    const allCollected = await taskWait.execute("wait_wave_3", { ids: ["task_1", "task_2"] }, undefined, undefined, ctx);
+    assert.equal(allCollected.isError, false);
+    assert.match(allCollected.content[0].text, /Every listed worker is already collected/);
+
+    // 2. Fusion mode worker-scope gate: non-sidekick task_3 is rejected via both id and ids.
+    emitBus("pi:modes:changed", {
+      mode: "fusion",
+      fusion: {
+        lead: { provider: "p", modelId: "l", thinking: "high" },
+        sidekick: { provider: "p", modelId: "s", thinking: "low" },
+      },
+    });
+    const fireToolCall = (toolName: string, input: any) => {
+      for (const fn of handlers.get("tool_call") ?? []) {
+        const res = fn({ toolName, input });
+        if (res) return res;
+      }
+      return undefined;
+    };
+    const singleGate = fireToolCall("task_wait", { id: "task_3" });
+    assert.equal(singleGate?.block, true);
+    assert.match(singleGate?.reason ?? "", /scoped to its sidekicks/);
+
+    const multiGate = fireToolCall("task_wait", { ids: ["task_1", "task_3"] });
+    assert.equal(multiGate?.block, true, "tool_call gate blocks non-sidekick inside ids array");
+    assert.match(multiGate?.reason ?? "", /scoped to its sidekicks/);
+
+    const directExecGate = await taskWait.execute("wait_fusion_scope", { ids: ["task_1", "task_3"] }, undefined, undefined, ctx);
+    assert.equal(directExecGate.isError, true, "task_wait execute also enforces Fusion scope on ids array");
+    assert.match(directExecGate.content[0].text, /scoped to its sidekicks/);
+  } finally {
+    for (const w of capturedWorkers) w.closed = true;
+    if (priorMode === undefined) delete process.env.PI_BEHAVIOR_MODE; else process.env.PI_BEHAVIOR_MODE = priorMode;
   }
 });

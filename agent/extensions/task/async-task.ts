@@ -194,6 +194,8 @@ import {
   fusionIdentityFromState,
   fusionIdentityReceipt,
   fusionModelId,
+  fusionContextGuardReceipt,
+  fusionContextGuardSteer,
   fusionContextOverLimit,
   type FusionConfigureEvent,
   type FusionObservedIdentity,
@@ -387,6 +389,10 @@ interface Worker extends RuntimeEventWorker {
   lastWaitTimeoutAt?: number;
   lastWaitTimeoutSec?: number;
   lastWaitGeneration?: number;
+  /** Generation whose settled result task_wait already returned; multi-id waits skip it. */
+  waitDeliveredGeneration?: number;
+  /** Generation in which the sidekick context guard already steered. */
+  contextGuardGeneration?: number;
   /** Last steer/follow_up for this generation; queued until the child queue drains. */
   directive?: { queued: boolean; text: string };
   /** Fusion's sole persistent counterpart; never participates in fallback. */
@@ -785,7 +791,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist.",
     )
     .replace(apexAgentCatalog, orchestrateAgentCatalog);
-  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. An idle sidekick is reused with its cached context; when every sidekick is busy, a disjoint unit may start another worker. Pass context: "fresh" when the unit needs no prior findings: cached transcripts are parked and the unit starts clean. Idle sidekicks over 100k context tokens also start fresh. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
+  const taskStartPersistentDescription = `Start a clean Fusion sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. Start every disjoint unit of a wave in one message; each busy sidekick leaves the next unit to a parallel worker. An idle sidekick is reused with its cached context: pass reuse: "task_N" to continue a specific one, or omit it to continue the earliest idle one. Pass context: "fresh" when the unit needs no prior findings: it starts on a clean sidekick and leaves idle ones warm (one is parked only when the worker cap is reached). Idle sidekicks over 100k context tokens also start fresh, and a running unit that passes 100k is asked to settle with a handoff. Collect a wave with one task_wait over ids. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
@@ -812,11 +818,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) {
-      return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, while disjoint units may use parallel sidekicks.`;
+      return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, and disjoint units run on parallel sidekicks.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
     if (behaviorMode === "utopia" && sidekickDef) {
-      return `${agentParamDescription(apexAgents)} Also available: sidekick (warm reusable execution partner across sequential units up to ~100k tokens).`;
+      return `${agentParamDescription(apexAgents)} Also available: sidekick (warm reusable execution partner up to ~100k tokens; start disjoint units together for parallel sidekicks).`;
     }
     return behaviorMode === "pi" ? piAgentParamDescription(apexAgents) : behaviorMode === "apex-orchestrate" ? orchestrateAgentParamDescription(apexAgents) : agentParamDescription(apexAgents);
   };
@@ -1395,6 +1401,30 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     drainSettledNotifications();
   };
 
+  // The reuse limit only gates the next unit; this keeps a running unit from
+  // spending most of its tokens above it. One steer per generation.
+  const guardSidekickContext = (worker: Worker) => {
+    const tokens = worker.latestContextTokens;
+    if (
+      !worker.fusion ||
+      worker.closed ||
+      worker.lifecycle !== "running" ||
+      worker.contextGuardGeneration === worker.generation ||
+      tokens === undefined ||
+      !fusionContextOverLimit(tokens) ||
+      !worker.client ||
+      worker.client.isClosed
+    ) {
+      return;
+    }
+    worker.contextGuardGeneration = worker.generation;
+    worker.directive = { queued: true, text: "context guard: settle with handoff" };
+    notifySubscribers(worker);
+    worker.client
+      .request({ type: "steer", message: fusionContextGuardSteer(tokens) }, 30_000)
+      .catch(() => undefined);
+  };
+
   const notifyRecoveryConcern = (worker: Worker) => {
     if (
       shuttingDown ||
@@ -1453,6 +1483,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     },
     afterSettlementNotify: maybeNotifySettled,
     onRecoveryConcern: notifyRecoveryConcern,
+    onMidTurnContext: (worker) => guardSidekickContext(worker),
   };
 
   const applySettledReport = (worker: Worker) => {
@@ -2161,6 +2192,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           "fresh (default) starts empty. fork copies this parent session unfiltered, including prior task_* calls. Falls back to fresh if the parent session is not yet persisted.",
       }),
     ),
+    reuse: Type.Optional(
+      Type.String({
+        description:
+          "Sidekick only: id (task_N) of the idle sidekick whose cached context this unit continues. Omit to continue the earliest idle sidekick, or to start a parallel one when all are busy.",
+      }),
+    ),
   });
   const taskStartToolDef: ToolDefinition<typeof taskStartParams> = {
     name: "task_start",
@@ -2198,6 +2235,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (sidekickMode && params.agent !== "sidekick") {
         return textResult(`Fusion permits task_start only for sidekick.`, true);
       }
+      if (params.reuse?.trim() && !isSidekickSpawn) {
+        return textResult(`reuse applies only to sidekick units; ${params.agent} always starts a new worker.`, true);
+      }
       if (isSidekickSpawn) {
         if (process.env.PI_FUSION_SIDEKICK === "1") return textResult(`Fusion sidekick cannot spawn workers.`, true);
         if (hydraScopeProviders(process.env.PI_HYDRA_SCOPE)) {
@@ -2218,6 +2258,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             context: params.context,
             reportSchema: params.reportSchema,
             cwd: params.cwd ? resolveCwd(params.cwd, ctx.cwd) : undefined,
+            workerId: params.reuse,
           },
           PROMPT_ACCEPT_TIMEOUT_MS,
         );
@@ -2239,6 +2280,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (sidekickMode && !fusionLifecycle.configured) return textResult(`Fusion sidekick configuration is unavailable.`, true);
         fusionResume = outcome.kind !== "fresh"
           && (outcome.kind === "parked" || fusionLifecycle.findAll().length === 0);
+        // Idle sidekicks stay warm across a fresh unit until their slot is needed.
+        if (outcome.kind === "fresh" && !runtime.canStart()) fusionLifecycle.parkIdleForCapacity();
         if (!runtime.canStart()) {
           const busy = fusionLifecycle.live().map((worker) => worker.id).join(", ");
           return textResult(
@@ -3213,15 +3256,274 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     }),
   });
 
+  const isSettledWorker = (worker: Worker) =>
+    worker.lifecycle === "settled" || worker.lifecycle === "failed" || worker.closed || worker.lifecycle === "closed";
+  const waitCollected = (worker: Worker) =>
+    isSettledWorker(worker) && worker.waitDeliveredGeneration === worker.generation;
+  const waitGuardLine = (worker: Worker) =>
+    worker.fusion && worker.contextGuardGeneration === worker.generation
+      ? fusionContextGuardReceipt(worker.id)
+      : undefined;
+  /** One line naming the other workers of a multi-id wait and what is left to collect. */
+  const waitPeersLine = (peers: Worker[]) => {
+    if (!peers.length) return undefined;
+    const rows = peers.map((peer) => `${peer.id} ${waitCollected(peer) ? "collected" : peer.lifecycle}`);
+    const open = peers.filter((peer) => !waitCollected(peer)).map((peer) => peer.id);
+    return open.length
+      ? `others: ${rows.join(", ")}. Call task_wait with ids [${open.join(", ")}] for the next result.`
+      : `others: ${rows.join(", ")}. Every listed worker is now collected.`;
+  };
+  const deliverAlreadySettled = (worker: Worker, id: string, generation: number, peers: Worker[] = []) => {
+    worker.waitDeliveredGeneration = generation;
+    const bound = formatDeliveredResult(
+      worker.latestResult || worker.latestAssistantText,
+      worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined,
+    );
+    return textResult(
+      [
+        `${id} already settled (generation ${generation}, lifecycle=${worker.lifecycle}).`,
+        `turns: ${worker.turns}`,
+        reportStatusLine(worker.reportStatus, worker.parsedReport),
+        worker.killReason ? `kill_reason: ${worker.killReason}` : undefined,
+        waitGuardLine(worker),
+        waitPeersLine(peers),
+        "",
+        `--- result ---`,
+        bound.text || "(empty)",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      worker.lifecycle === "failed",
+      {
+        worker: workerView(worker),
+        waiting: false,
+        parsedReport: worker.parsedReport,
+        reportStatus: worker.reportStatus,
+      },
+    );
+  };
+  const deliverSettled = (worker: Worker, id: string, snapshot: GenerationSnapshot, peers: Worker[] = []) => {
+    worker.waitDeliveredGeneration = snapshot.generation;
+    const bound = formatDeliveredResult(snapshot.resultText,
+      worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
+    return textResult(
+      [
+        `${id} settled (generation ${snapshot.generation}).`,
+        `lifecycle: ${worker.lifecycle}`,
+        `turns: ${snapshot.turns}`,
+        reportStatusLine(worker.reportStatus, worker.parsedReport),
+        snapshot.killReason
+          ? `kill_reason: ${snapshot.killReason}`
+          : undefined,
+        snapshot.errorText ? `error: ${snapshot.errorText}` : undefined,
+        worker.reportError ? `report_error: ${worker.reportError}` : undefined,
+        worker.fusion && worker.lifecycle === "failed"
+          ? `[fusion] generation failed: reassess the contract (outcome, owned paths, acceptance) before any new dispatch — do not re-run the same brief. Two unconverged corrections means close-and-respawn or pull-back, not another prompt.`
+          : undefined,
+        waitGuardLine(worker),
+        waitPeersLine(peers),
+        "",
+        `--- result ---`,
+        bound.text || "(empty)",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      worker.lifecycle === "failed",
+      {
+        worker: workerView(worker),
+        waiting: false,
+        parsedReport: worker.parsedReport,
+        reportStatus: worker.reportStatus,
+      },
+    );
+  };
+  const waitCheckpoint = (ctx: ExtensionContext) => {
+    let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
+    try {
+      contextUsage = ctx.getContextUsage();
+    } catch {
+      contextUsage = undefined;
+    }
+    const reserveTokens = compactionReserveTokens(ctx.cwd);
+    return {
+      checkpoint: shouldCheckpointTimedOutWait(contextUsage, reserveTokens),
+      note: contextCheckpointNote(contextUsage, reserveTokens),
+    };
+  };
+
+  /** Settle-any wait over several workers: returns the first uncollected result. */
+  const waitAnyWorker = async (
+    ids: string[],
+    params: { timeoutSec?: number; generation?: number },
+    signal: AbortSignal | undefined,
+    onUpdate: ((update: any) => void) | undefined,
+    ctx: ExtensionContext,
+  ) => {
+    if (params.generation !== undefined) {
+      return textResult("generation applies to a single id; omit it when waiting on several workers.", true);
+    }
+    const workers: Worker[] = [];
+    for (const id of ids) {
+      const worker = workerByHandle(id);
+      if (!worker) return textResult(`Unknown worker "${id}".`, true);
+      if (!workers.includes(worker)) workers.push(worker);
+    }
+    const peersOf = (worker: Worker) => workers.filter((other) => other !== worker);
+    const open = workers.filter((worker) => !waitCollected(worker));
+    if (!open.length) {
+      return textResult(
+        `Every listed worker is already collected: ${workers.map((worker) => `${worker.id} ${worker.lifecycle}`).join(", ")}. Nothing left to wait for.`,
+        false,
+        { worker: workerView(workers[0]), waiting: false },
+      );
+    }
+    const ready = open.find(isSettledWorker);
+    if (ready) return deliverAlreadySettled(ready, ready.id, ready.generation, peersOf(ready));
+
+    const rewaits = open.map((worker) => ({
+      worker,
+      rewait: evaluateRewait({
+        generation: worker.generation,
+        lastWaitTimeoutAt: worker.lastWaitTimeoutAt,
+        lastWaitTimeoutSec: worker.lastWaitTimeoutSec,
+        lastWaitGeneration: worker.lastWaitGeneration,
+        explicitTimeoutSec: params.timeoutSec,
+      }),
+    }));
+    const waitable: Worker[] = [];
+    const blocked: Array<{ worker: Worker; rewait: Extract<ReturnType<typeof evaluateRewait>, { allow: false }> }> = [];
+    for (const { worker, rewait } of rewaits) {
+      if (rewait.allow) waitable.push(worker);
+      else blocked.push({ worker, rewait });
+    }
+    if (blocked.length) {
+      const { worker, rewait } = blocked[0];
+      return textResult(
+        [
+          formatRewaitRejected({
+            id: blocked.map((entry) => entry.worker.id).join(", "),
+            remainingSec: rewait.remainingSec,
+            lastTimeoutSec: rewait.lastTimeoutSec,
+          }),
+          "",
+          ...open.map((entry) => formatWorkerWaitStatus(entry)),
+        ].join("\n"),
+        true,
+        { worker: workerView(worker), waiting: false },
+      );
+    }
+    const timeoutSec = Math.max(
+      ...waitable.map((worker) => resolveWaitTimeoutSec({ explicitTimeoutSec: params.timeoutSec, agent: worker.agent })),
+    );
+    const timeoutMs = Math.max(0, timeoutSec) * 1000;
+
+    const subscriptions: Array<() => void> = [];
+    for (const worker of waitable) {
+      if (worker.hasPinnedSurface) continue;
+      const notifyLive = () => {
+        onUpdate?.({
+          content: [{ type: "text", text: formatWorkerWaitStatus(worker) }],
+          details: { worker: workerView(worker), waiting: true },
+        });
+      };
+      worker.subscribers = worker.subscribers || new Set();
+      worker.subscribers.add(notifyLive);
+      subscriptions.push(() => worker.subscribers?.delete(notifyLive));
+    }
+
+    // Losing waits are cancelled through their own signal: cancelling a wait
+    // only stops waiting, so the other workers keep running untouched.
+    const race = new AbortController();
+    const forwardAbort = () => race.abort();
+    if (signal?.aborted) race.abort();
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
+    let first: { worker: Worker; snapshot: DispatchWaitOutcome<GenerationSnapshot> };
+    try {
+      first = await Promise.race(
+        waitable.map((worker) =>
+          waitWorkerGeneration(worker, worker.generation, timeoutMs, race.signal, { yieldOnDispatch: true })
+            .then((snapshot) => ({ worker, snapshot })),
+        ),
+      );
+    } finally {
+      race.abort();
+      signal?.removeEventListener("abort", forwardAbort);
+      for (const unsubscribe of subscriptions) unsubscribe();
+    }
+    const { worker, snapshot } = first;
+    const statusBlock = waitable.map((entry) => formatWorkerWaitStatus(entry)).join("\n\n");
+
+    if (snapshot && typeof snapshot === "object" && "dispatchId" in snapshot) {
+      for (const entry of waitable) {
+        entry.lastWaitTimeoutAt = undefined;
+        entry.lastWaitTimeoutSec = undefined;
+        entry.lastWaitGeneration = undefined;
+        notifyRecoveryConcern(entry);
+      }
+      return textResult(
+        [formatDispatchWaitYield(snapshot.dispatchId, snapshot.dispatchRequest), "", statusBlock].join("\n"),
+        false,
+        { worker: workerView(worker), waiting: false, dispatchYield: true },
+      );
+    }
+    if (snapshot === "interrupted") {
+      for (const entry of waitable) notifyRecoveryConcern(entry);
+      return textResult(
+        [
+          `wait on ${waitable.map((entry) => entry.id).join(", ")} interrupted; no worker was aborted.`,
+          "The workers continue in the background; use task_wait to reconnect, or task_abort to stop one explicitly.",
+          "",
+          statusBlock,
+        ].join("\n"),
+        false,
+        { worker: workerView(worker), waiting: false },
+      );
+    }
+    if (snapshot === "timeout") {
+      const now = Date.now();
+      for (const entry of waitable) {
+        entry.lastWaitTimeoutAt = now;
+        entry.lastWaitTimeoutSec = timeoutSec;
+        entry.lastWaitGeneration = entry.generation;
+        notifyRecoveryConcern(entry);
+      }
+      const { checkpoint, note } = waitCheckpoint(ctx);
+      return {
+        ...textResult(
+          [
+            `${waitable.map((entry) => entry.id).join(", ")} wait timed out after ${timeoutSec}s; none settled.`,
+            "No worker was killed. Timeout is not a poll cue and does not abort a worker.",
+            "Do independent lead work before re-waiting. Same-generation re-wait is blocked for 60s unless timeoutSec is longer than this wait.",
+            note,
+            "",
+            statusBlock,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          false,
+          { worker: workerView(worker), waiting: false, contextCheckpoint: checkpoint },
+        ),
+        ...(checkpoint ? { terminate: true } : {}),
+      };
+    }
+    return deliverSettled(worker, worker.id, snapshot, peersOf(worker));
+  };
+
   pi.registerTool({
     name: "task_wait",
     label: "Task Wait",
     description:
-      `Wait until the worker's current generation settles (agent_settled). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; an intact worker-authored compact handoff is returned on settlement, with a path to the complete report. Read that file with read (offset/limit) for supporting detail. Missing or oversized handoffs fall back to full-file retrieval without substituting an excerpt. Reports remain retrievable after task_close. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
+      `Wait until the worker's current generation settles (agent_settled). Pass ids to wait on several workers at once: the call returns as soon as one settles, with that worker's result and one status line for the others; call again with the remaining ids to collect the next (results already returned are skipped). Default timeout is ${WAIT_DEFAULT_TIMEOUT_SEC}s, 900s for machinist/artisan, and 1200s for oracle/stevedore/inspector. On timeout, returns a compact heartbeat without killing the worker; an intact worker-authored compact handoff is returned on settlement, with a path to the complete report. Read that file with read (offset/limit) for supporting detail. Missing or oversized handoffs fall back to full-file retrieval without substituting an excerpt. Reports remain retrievable after task_close. Same-generation re-wait is blocked for 60s after a timeout unless timeoutSec is longer than the last wait. Cancelling this tool call only stops waiting. When a wait times out at Pi's configured compaction reserve boundary, task_wait requests that the current tool-only turn end so Pi can auto-compact. Use task_abort to stop the worker explicitly.`,
     promptSnippet:
       "Wait for an async RPC worker generation to settle; agent-aware default; timeout is a heartbeat, not a poll cue.",
     parameters: Type.Object({
-      id: Type.String({ description: "Worker id from task_start." }),
+      id: Type.Optional(Type.String({ description: "Worker id from task_start. Required unless ids is given." })),
+      ids: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Several worker ids from task_start. Returns the first to settle; call again with the remaining ids.",
+        }),
+      ),
       timeoutSec: Type.Optional(
         Type.Number({
           description:
@@ -3238,8 +3540,20 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       syncFleetWidget(ctx);
-      const id = params.id?.trim();
-      if (!id) return textResult("id is required.", true);
+      const requested = [
+        ...new Set(
+          [params.id, ...(params.ids ?? [])]
+            .map((value) => value?.trim())
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ];
+      if (!requested.length) return textResult("id or ids is required.", true);
+      if (behaviorMode === "fusion") {
+        const reason = fusionLifecycle.gateLead("task_wait", requested);
+        if (reason) return textResult(reason, true);
+      }
+      if (requested.length > 1) return waitAnyWorker(requested, params, signal, onUpdate, ctx);
+      const id = requested[0];
       const worker = workerByHandle(id);
       if (!worker) {
         return textResult(`Unknown worker "${id}".`, true);
@@ -3255,32 +3569,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
       const alreadySettled =
         (worker.lifecycle === "settled" || worker.lifecycle === "failed" || worker.closed || worker.lifecycle === "closed") &&
         worker.generation === targetGen;
-      if (alreadySettled) {
-        const bound = formatDeliveredResult(
-          worker.latestResult || worker.latestAssistantText,
-          worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined,
-        );
-        return textResult(
-          [
-            `${id} already settled (generation ${targetGen}, lifecycle=${worker.lifecycle}).`,
-            `turns: ${worker.turns}`,
-            reportStatusLine(worker.reportStatus, worker.parsedReport),
-            worker.killReason ? `kill_reason: ${worker.killReason}` : undefined,
-            "",
-            `--- result ---`,
-            bound.text || "(empty)",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          worker.lifecycle === "failed",
-          {
-            worker: workerView(worker),
-            waiting: false,
-            parsedReport: worker.parsedReport,
-            reportStatus: worker.reportStatus,
-          },
-        );
-      }
+      if (alreadySettled) return deliverAlreadySettled(worker, id, targetGen);
       const rewait = evaluateRewait({
         generation: targetGen,
         lastWaitTimeoutAt: worker.lastWaitTimeoutAt,
@@ -3378,17 +3667,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         worker.lastWaitTimeoutSec = timeoutSec;
         worker.lastWaitGeneration = targetGen;
         notifyRecoveryConcern(worker);
-        let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
-        try {
-          contextUsage = ctx.getContextUsage();
-        } catch {
-          contextUsage = undefined;
-        }
-        const reserveTokens = compactionReserveTokens(ctx.cwd);
-        const checkpoint = shouldCheckpointTimedOutWait(
-          contextUsage,
-          reserveTokens,
-        );
+        const { checkpoint, note: checkpointNote } = waitCheckpoint(ctx);
         return {
           ...textResult(
             [
@@ -3396,7 +3675,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
               "Worker was NOT killed. Timeout is not a poll cue and does not abort the worker.",
               "Do independent lead work, start another independent slice, or wait a different live worker before re-waiting this generation.",
               "Same-generation re-wait is blocked for 60s unless timeoutSec is longer than this wait.",
-              contextCheckpointNote(contextUsage, reserveTokens),
+              checkpointNote,
               "",
               formatWorkerWaitStatus(worker),
             ]
@@ -3413,36 +3692,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         };
       }
 
-      const bound = formatDeliveredResult(snapshot.resultText,
-        worker.lifecycle === "failed" ? workerStatusSnapshot(worker) : undefined);
-      return textResult(
-        [
-          `${id} settled (generation ${snapshot.generation}).`,
-          `lifecycle: ${worker.lifecycle}`,
-          `turns: ${snapshot.turns}`,
-          reportStatusLine(worker.reportStatus, worker.parsedReport),
-          snapshot.killReason
-            ? `kill_reason: ${snapshot.killReason}`
-            : undefined,
-          snapshot.errorText ? `error: ${snapshot.errorText}` : undefined,
-          worker.reportError ? `report_error: ${worker.reportError}` : undefined,
-          worker.fusion && worker.lifecycle === "failed"
-            ? `[fusion] generation failed: reassess the contract (outcome, owned paths, acceptance) before any new dispatch — do not re-run the same brief. Two unconverged corrections means close-and-respawn or pull-back, not another prompt.`
-            : undefined,
-          "",
-          `--- result ---`,
-          bound.text || "(empty)",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        worker.lifecycle === "failed",
-        {
-          worker: workerView(worker),
-          waiting: false,
-          parsedReport: worker.parsedReport,
-          reportStatus: worker.reportStatus,
-        },
-      );
+      return deliverSettled(worker, id, snapshot);
     },
     ...withTaskPresentation({
       renderShell: "self" as const,
@@ -3459,7 +3709,7 @@ Truthfully reports queueing semantics. Steer is never mid-inference interrupt.`,
         const view = worker
           ? workerView(worker)
           : {
-              id: String(args.id ?? "worker"),
+              id: String(args.id ?? (Array.isArray(args.ids) ? args.ids.join(", ") : "worker")),
               agent: "agent",
               mission: "Waiting for async worker",
               lifecycle: "starting" as const,
@@ -4165,9 +4415,13 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     if (sidekickReason) return { block: true, reason: sidekickReason };
     if (event.toolName === "task_start" || event.toolName === "task_send") resetOrchestrateCounts();
     if (behaviorMode !== "fusion") return;
+    const rawInput = event.input as { id?: string; ids?: string[] } | undefined;
+    const requestedIds = [rawInput?.id, ...(Array.isArray(rawInput?.ids) ? rawInput.ids : [])]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter(Boolean);
     const leadReason = fusionLifecycle.gateLead(
       event.toolName,
-      (event.input as { id?: string } | undefined)?.id,
+      requestedIds.length ? requestedIds : undefined,
     );
     if (leadReason) return { block: true, reason: leadReason };
   });

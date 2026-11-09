@@ -203,6 +203,19 @@ write. `providers.anthropic.models` adds that one ID without replacing the
 built-in list. Delete it once `pi --list-models fable` shows
 `anthropic claude-fable-5-2` from the catalog with no `models.json` entry.
 The `local-proxy` entry stays until the proxy stops advertising the ID.
+pi-claude-bridge does not read that shim. It builds the picker from pi-ai's
+anthropic catalog, then replaces the provider model list, so a `models.json`
+row on `claude-bridge` never appears. pi-ai 1.5.0 stops at Fable 5.1, and Pi's
+bundled loader ignores a hand-edit of `anthropic.json`. Until the catalog ships
+the ID, `pi-claude-bridge` `ensureFable52` copies the Fable 5.1 row. That patch
+lives in the installed package and disappears on a bridge update. The bridge
+still requests a bare id at 200K until Fable 5.2 is added to its measured `[1m]`
+set. Reopen `/model` after updating the package. CLIProxyAPI 8.0.62 still cloaks
+as Claude Code 2.1.280, which Anthropic rejects for this model
+(`claude_code_version_too_old`, needs 2.1.290+). `~/.local/bin/config.yaml`
+`upstream.claude.header-defaults` is set to the installed CLI version
+(`claude-cli/2.1.321`). The service rewrites that file on reload; it needs
+Modify for `NT AUTHORITY\LOCAL SERVICE`.
 OpenCode is not shimmed: its stored key is expired, so a picker row there
 would be dead.
 

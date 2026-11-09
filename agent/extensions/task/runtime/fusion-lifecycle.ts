@@ -120,6 +120,26 @@ export function fusionContextOverLimit(tokens: number | undefined): boolean {
   return tokens !== undefined && Number.isFinite(tokens) && tokens > FUSION_REUSE_CONTEXT_TOKENS;
 }
 
+/** Mid-unit steer sent once per generation when a running sidekick crosses the reuse limit. */
+export function fusionContextGuardSteer(tokens: number): string {
+  return (
+    `[runtime] This unit's context is ~${Math.round(tokens / 1000)}k tokens, past the ` +
+    `${Math.round(FUSION_REUSE_CONTEXT_TOKENS / 1000)}k unit budget. Finish only the step in hand, ` +
+    `start no new exploration, and settle now with your report: what is done and verified, ` +
+    `and the remaining work as a self-contained next-unit brief (owned paths, known facts with ` +
+    `path:line pointers, acceptance check). The lead continues it on a clean sidekick.`
+  );
+}
+
+/** Settlement receipt line for a unit the context guard cut short. */
+export function fusionContextGuardReceipt(id: string): string {
+  return (
+    `[fusion] context guard: ${id} passed the ${Math.round(FUSION_REUSE_CONTEXT_TOKENS / 1000)}k unit budget ` +
+    `and was asked to settle with a handoff. Continue any remaining work via task_start with ` +
+    `context: "fresh" (or on a clean worker); size units smaller rather than sending a corrective prompt.`
+  );
+}
+
 /** Single-line receipt emitted when a unit consumes its final correction. */
 export function fusionChainNudge(id: string, count: number): string {
   const corrections = count - 1;
@@ -152,11 +172,13 @@ export interface ReuseInputs {
   reportSchema?: string;
   /** Already resolved against the caller cwd; compared verbatim. */
   cwd?: string;
+  /** Idle sidekick whose cached context this unit must continue. */
+  workerId?: string;
 }
 
 export type ReuseOutcome =
   | { kind: "none" }
-  /** Idle transcripts parked on request; the caller spawns a clean sidekick. */
+  /** Cached context declined or oversized; the caller spawns a clean sidekick. */
   | { kind: "fresh"; priorContextTokens?: number }
   | { kind: "parked"; worker: FusionWorkerState }
   | { kind: "conflict"; reason: string }
@@ -495,6 +517,21 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     // A declared-fresh unit wants no inherited findings, so it must not
     // resume a persisted transcript either.
     const wantsFresh = inputs.context === "fresh";
+    const targetId = inputs.workerId?.trim();
+    if (targetId && wantsFresh) {
+      return {
+        kind: "conflict",
+        reason: `reuse: "${targetId}" continues that sidekick's cached context; it cannot be combined with context: "fresh".`,
+      };
+    }
+    if (targetId && !all.some((candidate) => candidate.id === targetId)) {
+      return {
+        kind: "conflict",
+        reason:
+          `${targetId} is not an open sidekick (unknown, closed, or parked). Omit reuse to continue ` +
+          `an idle sidekick or start a clean one.`,
+      };
+    }
     if (!all.length) return wantsFresh ? { kind: "fresh" } : { kind: "none" };
     if (inputs.model?.trim()) {
       return {
@@ -535,23 +572,29 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           candidate.cwd === undefined ||
           inputs.cwd === candidate.cwd),
     );
-    if (wantsFresh) {
-      // Park the cached transcripts the lead just declined; the caller then
-      // spawns a clean sidekick under the configured pair.
-      for (const candidate of idle) {
-        this.deps.parkWorker(
-          candidate,
-          "Fusion fresh context requested; parking cached transcript",
-        );
+    // A declined context only skips reuse: idle sidekicks stay warm for the
+    // units that do want them. The caller parks one when it needs the slot.
+    if (wantsFresh) return { kind: "fresh" };
+    if (targetId) {
+      const target = idle.find((candidate) => candidate.id === targetId);
+      if (!target) {
+        const named = all.find((candidate) => candidate.id === targetId);
+        return {
+          kind: "conflict",
+          reason: named && isLiveLifecycle(named.lifecycle)
+            ? `${targetId} is still running its unit; task_wait it first, or omit reuse to start a parallel sidekick for a disjoint unit.`
+            : `${targetId} cannot take this unit (transport lost or a different cwd). Omit reuse to continue another idle sidekick or start a clean one.`,
+        };
       }
-      return { kind: "fresh" };
     }
     if (!idle.length) {
       // Busy workers keep their clean units. A new task_start may spawn a
       // parallel sidekick only when the lead has declared a disjoint unit.
       return parked ? { kind: "parked", worker: parked } : { kind: "none" };
     }
-    const worker = idle.find((candidate) => !fusionContextOverLimit(candidate.latestContextTokens)) ?? idle[0];
+    const worker = (targetId ? idle.find((candidate) => candidate.id === targetId) : undefined)
+      ?? idle.find((candidate) => !fusionContextOverLimit(candidate.latestContextTokens))
+      ?? idle[0];
     if (fusionContextOverLimit(worker.latestContextTokens)) {
       this.deps.parkWorker(worker, "Fusion context limit exceeded; parking cached transcript");
       return { kind: "fresh", priorContextTokens: worker.latestContextTokens };
@@ -587,6 +630,20 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       return { kind: "reused", worker, observed: fusionIdentityFromState(state) };
     }
     return accepted;
+  }
+
+  /**
+   * Free one slot for a clean unit by parking the idle sidekick with the
+   * largest cached context (the least valuable to keep warm).
+   */
+  parkIdleForCapacity(): TWorker | undefined {
+    let victim: TWorker | undefined;
+    for (const candidate of this.findAll()) {
+      if (candidate.closed || isLiveLifecycle(candidate.lifecycle)) continue;
+      if (!victim || (candidate.latestContextTokens ?? 0) > (victim.latestContextTokens ?? 0)) victim = candidate;
+    }
+    if (victim) this.deps.parkWorker(victim, "Fusion capacity needed for a clean unit; parking cached transcript");
+    return victim;
   }
 
   /** Block another corrective prompt after a unit has consumed its budget. */
@@ -715,7 +772,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
    * parallel with the sidekick; parallelism is governed by brief-scoped path
    * ownership rather than runtime tool blocks.
    */
-  gateLead(toolName: string, inputId: string | undefined): string | undefined {
+  gateLead(toolName: string, inputId: string | string[] | undefined): string | undefined {
     if (
       toolName === "task_chain" ||
       toolName === "task_rebind"
@@ -727,13 +784,16 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       toolName !== "task_start" &&
       toolName !== "task_list"
     ) {
-      const worker = this.byId(inputId);
-      // Unknown ids fall through: the worker is gone (registry cleared on
-      // session resume, or settled metadata pruned), so the tool itself
-      // reports "Unknown worker" truthfully. Only a known non-sidekick
-      // stays rejected here.
-      if (worker && !worker.fusion) {
-        return "Fusion task operations are scoped to its sidekicks.";
+      const ids = Array.isArray(inputId) ? inputId : inputId !== undefined ? [inputId] : [];
+      for (const candidateId of ids) {
+        const worker = this.byId(candidateId);
+        // Unknown ids fall through: the worker is gone (registry cleared on
+        // session resume, or settled metadata pruned), so the tool itself
+        // reports "Unknown worker" truthfully. Only a known non-sidekick
+        // stays rejected here.
+        if (worker && !worker.fusion) {
+          return "Fusion task operations are scoped to its sidekicks.";
+        }
       }
     }
     return undefined;
