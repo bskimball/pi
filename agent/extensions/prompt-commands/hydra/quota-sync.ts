@@ -56,9 +56,9 @@ function observation(provider: string, remainingPercent: number, at = Date.now()
   return { provider, remainingPercent: Math.max(0, Math.min(100, remainingPercent)), remainingObservedAt: at, inCooldown: false, disabled: false, successCount: 0, failureCount: 0 };
 }
 function remainingFromUsed(values: unknown[]): number {
-  const used = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100);
+  const used = values.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0);
   if (!used.length) throw new Error("No usage windows");
-  return 100 - Math.max(...used);
+  return Math.max(0, 100 - Math.max(...used));
 }
 
 async function museUsage(timeout: number): Promise<unknown> {

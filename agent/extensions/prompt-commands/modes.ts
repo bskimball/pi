@@ -33,6 +33,7 @@ export function formatModeStatus(state: Pick<ModeState, "mode" | "fusion">): str
 const CACHE_TTL_MS = 30 * 60_000;
 /** Subscription-wide exhaustion (not transient per-request 429s, which Pi retries). */
 const SUBSCRIPTION_LIMIT_PATTERN = /quota (?:exceeded|exhausted)|session limit|usage limit|weekly limit|five_hour|seven_day/i;
+const RATE_LIMIT_PATTERN = /\b429\b|rate.?limit(?:ed)?|too many requests/i;
 const DEFAULT_FAMILY_COOLDOWN_MS = 30 * 60_000;
 
 /** Parse a provider's "resets 5:40:00 PM" notice as the next local occurrence of that time. */
@@ -243,6 +244,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   // own record until the provider's reset time.
   const familyCooldowns = new Map<string, number>();
   let quotaRefreshForced = false;
+  let failedLead: string | undefined;
   // A manual /model pick holds for the user's next run instead of being re-routed.
   let manualPin = false;
   const familyCooling = (provider: string, modelId: string): boolean => {
@@ -1062,16 +1064,35 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("message_end", (event) => {
     const message = event.message;
     if (message.role !== "assistant") return;
-    if (message.stopReason === "error" && SUBSCRIPTION_LIMIT_PATTERN.test(message.errorMessage ?? "")) {
+    failedLead = undefined;
+    if (message.stopReason === "error" && (SUBSCRIPTION_LIMIT_PATTERN.test(message.errorMessage ?? "") || RATE_LIMIT_PATTERN.test(message.errorMessage ?? ""))) {
       const now = Date.now();
       const until = parseLimitResetAt(message.errorMessage ?? "", now) ?? now + DEFAULT_FAMILY_COOLDOWN_MS;
       familyCooldowns.set(inferModelFamily(message.provider, message.model), until);
       quotaRefreshForced = true;
+      if (activeHydra()) failedLead = `${message.provider}/${message.model}`;
     } else if (message.stopReason !== "error" && message.stopReason !== "aborted") {
       familyCooldowns.delete(inferModelFamily(message.provider, message.model));
     }
   });
-  pi.on("agent_end", () => { manualPin = false; });
+  pi.on("agent_end", async (_event, ctx) => {
+    manualPin = false;
+    const failed = failedLead;
+    failedLead = undefined;
+    const tier = activeHydra();
+    if (!failed || !tier || !ctx.model || `${ctx.model.provider}/${ctx.model.id}` !== failed) return;
+    const result = await routeWithHydra(ctx, tier, lastJevTurnSignal, true);
+    if (!result?.switchedModel) {
+      ctx.ui.notify("Hydra could not recover from the lead rate limit: no eligible replacement model was selected.", "warning");
+      return;
+    }
+    ctx.ui.notify(`Hydra recovered from ${failed}: ${result.model} (${result.thinking}). Continuing the interrupted turn.`, "info");
+    pi.sendMessage({
+      customType: "hydra-recovery",
+      content: "The previous model hit its rate or subscription limit. Continue the interrupted task from the existing conversation; do not repeat completed actions.",
+      display: false,
+    }, { triggerTurn: true });
+  });
   pi.on("model_select", (event, ctx) => {
     if (changing || event.source === "restore") return;
     if (activeHydra()) manualPin = true;
