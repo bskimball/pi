@@ -21,6 +21,14 @@ function object(value: unknown): Record<string, unknown> | undefined {
 
 const extensions: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 
+// The backend serves a `<base>-contributor` variant only for some models.
+// Leaving contributor mode to the CLI default rewrites a plain model ID to
+// its contributor twin; when that twin does not exist (e.g. muse-ember-1.0)
+// the request 404s. Pin the mode to the ID Pi selected instead.
+export function contributorModeForModel(model: string): "on" | "off" {
+  return model.endsWith("-contributor") ? "on" : "off";
+}
+
 export async function runMuse(request: MuseRequest, model: string, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<MuseResult> {
   signal.throwIfAborted();
   const dir = await mkdtemp(join(tmpdir(), "pi-muse-"));
@@ -30,7 +38,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     await writeFile(promptPath, request.prompt, { mode: 0o600 });
     await writeFile(schemaPath, JSON.stringify(responseSchema), { mode: 0o600 });
     const args = [
-      "exec", "--json", "--provider", "meta", "--model", model, "--preset", "empty", "--yolo",
+      "exec", "--json", "--provider", "meta", "--model", model, "--contributor-mode", contributorModeForModel(model), "--preset", "empty", "--yolo",
       "--prompt-file", promptPath, "--output-schema", schemaPath,
       "--workspace", process.cwd(), "--worktree", "off", "--no-session-log",
       "--disable-web-tools", "--disable-request-user-input",

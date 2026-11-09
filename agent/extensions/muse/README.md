@@ -17,6 +17,8 @@ Login is the CLI's subscription login. There is no API fallback and no remote AP
 
 Every catalog model is exposed as `muse-code/<model_id>`, so existing `muse-code/*` IDs keep working. `muse-code/muse-spark` is an alias for the catalog default. Image-generation models (`muse-image-*`) are skipped. Models advertise text and image input, reasoning, and zero cost (subscription billing).
 
+Contributor mode is pinned per run to the selected ID: `--contributor-mode on` for IDs ending in `-contributor`, `off` otherwise. The backend serves a contributor twin only for some models; leaving the mode to the ambient CLI setting rewrites a plain ID such as `muse-ember-1.0` to a nonexistent `muse-ember-1.0-contributor` and the request fails with `does not exist or you lack access`.
+
 ## How a turn works
 
 The adapter is stateless. Each Pi model turn starts a fresh `muse exec --preset empty` process with `--output-schema` set to an envelope `{ text, tool_calls: [{ name, arguments_json }] }`. The prompt carries the full Pi transcript, the current system prompt, and the current tool definitions.
