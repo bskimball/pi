@@ -195,7 +195,18 @@ local-only (gitignored) `agent/models.json` therefore carries a single
 `thinkingLevelMap`, image limits). `cost` is left unset because Meta has not
 published contributor pricing. Delete the `meta` block from `agent/models.json`
 once `pi update` lists the contributor ID on its own — verify with a fresh
-`GET https://api.meta.ai/v1/models` comparison. `muse-wonder-full-1.0` (1M context
+`GET https://api.meta.ai/v1/models` comparison. Claude Fable 5.2 (`claude-fable-5-2`) is the same kind of shim: Anthropic
+publishes it, and the local proxy lists it, but the cached Pi catalog still
+stops at Fable 5.1. A `pi update --models` attempt did not refresh that
+cache: Anthropic token refresh returned `invalid_grant` before any catalog
+write. `providers.anthropic.models` adds that one ID without replacing the
+built-in list. Delete it once `pi --list-models fable` shows
+`anthropic claude-fable-5-2` from the catalog with no `models.json` entry.
+The `local-proxy` entry stays until the proxy stops advertising the ID.
+OpenCode is not shimmed: its stored key is expired, so a picker row there
+would be dead.
+
+`muse-wonder-full-1.0` (1M context
 per Meta dev docs) is intentionally not shimmed: it is Muse Code subscription-only
 (Power/Maximum plans) and absent from the live `GET /v1/models` list for this account,
 so a models.json entry for it would be dead/non-callable. Revisit only if it appears
@@ -306,6 +317,14 @@ supplementing beyond what's below.
 **Location:** `~/.pi/agent/settings.json` (global, tracked in this repo) with
 optional `.pi/settings.json` project overrides (nested objects merge, project
 wins). Not gitignored — contains no secrets, just preferences.
+
+`npmCommand` is a local wrapper, `node agent/npm/pi-npm.mjs -- npm`.
+Pi installs and updates extension packages with `npm install <spec>`, which
+does not run a postinstall in `agent/npm`. The wrapper forwards npm unchanged,
+then, after a successful install/update/ci, moves host-provided `typebox` out
+of `pi-antigravity`'s `dependencies` and into `peerDependencies` as `*`.
+Published `pi-antigravity@0.12.0` still declares the dependency; drop the
+wrapper once that package stops doing so.
 
 This repo's tracked `agent/settings.json` sets: `defaultModel`
 (`grok-4.7`), `defaultProvider` (`xai`),

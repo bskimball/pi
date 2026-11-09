@@ -17,6 +17,7 @@
     "confirmDangerousActions": true,
     "toolProfile": "core"
   },
+  "npmCommand": ["node", "C:/Users/bskim/.pi/agent/npm/pi-npm.mjs", "--", "npm"],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",

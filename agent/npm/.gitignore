@@ -1,2 +1,4 @@
 *
 !.gitignore
+!pi-npm.mjs
+!patch-host-peers.mjs
