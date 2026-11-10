@@ -11,7 +11,7 @@ import { defaultUsagePath, readUsageCounts, USAGE_WINDOW_MS } from "../prompt-co
 import { clearParentCuaState, restoreMode, readPreferences, initialPreferences, toolsForFusion, toolsForMode, toolsForWork, writeParentCuaState } from "../prompt-commands/mode-state.ts";
 import { matchAaMetrics, parseAaModelPage, parseAaModelsHtml, parseDesignArenaLeaderboard, SEED_AA_MODELS, syncAaCatalog, readAaCatalog } from "../prompt-commands/hydra/aa-sync.ts";
 import { recordQuotaHeaders, quotaMultiplierForModel, quotaRemainingForModel, QUOTA_STALE_MS, syncQuotaSnapshot, readQuotaSnapshot } from "../prompt-commands/hydra/quota-sync.ts";
-import { computeAaUtility, rankModelsForHydra, selectThinkingForModel } from "../prompt-commands/hydra/scorer.ts";
+import { computeAaUtility, rankModelsForHydra, selectThinkingForModel, subagentHydraProfile } from "../prompt-commands/hydra/scorer.ts";
 import { resolveSubagentModelsAndThinking } from "../task/runtime/agent-discovery.ts";
 
 const builderUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "core/system-prompt.js")).href;
@@ -1068,9 +1068,10 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     );
     assert.equal(rankedWithAnthropicExhausted[0]?.key, "openai/gpt-6-astra", "falls over to healthy OpenAI frontier when Anthropic quota is exhausted");
 
-    // Subscription balancing: frontier coding prefers Opus with no history, then cycles to the
-    // larger OpenAI subscription once Anthropic carries more than its capacity share of recent turns.
-    const frontierSignal = { reasoningDepth: 3, depthConfidence: 0.9, domain: "coding" as const, domainConfidence: 0.9 };
+    // Subscription balancing: frontier coding (depth >= 3.45) prefers Opus with no history, while
+    // depth <= 3.0 implementation prefers efficient Sol within the quality band, and Muse carries
+    // a lower subscription capacity target than the primary subscriptions.
+    const frontierSignal = { reasoningDepth: 3.6, depthConfidence: 0.9, domain: "coding" as const, domainConfidence: 0.9 };
     const healthyQuota = { schema: 1 as const, updatedAt: 0, source: "none" as const, providers: {} };
     const balanceBase = { models: catalogModels, catalog: SEED_AA_MODELS, quota: healthyQuota, openCircuits: new Set<string>(), tier: "standard" as const, signal: frontierSignal };
     const planModels: any[] = [
@@ -1093,14 +1094,17 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     const scoreFor = (provider: string) => planRanked.find(candidate => candidate.model.provider === provider)!.finalScore;
     assert.equal(scoreFor("antigravity"), scoreFor("openai"), "Google and OpenAI have equal usage targets");
     assert.equal(scoreFor("openai"), scoreFor("claude-bridge"), "Claude is not penalized for its lower subscription price");
-    assert.equal(scoreFor("claude-bridge"), scoreFor("muse-code"), "Muse has an equal target without a conversation bonus");
+    assert.ok(scoreFor("claude-bridge") > scoreFor("muse-code"), "Muse has a lower subscription capacity target than primary subscriptions");
     assert.equal(rankModelsForHydra(balanceBase)[0]?.key, "claude-bridge/claude-opus-5-5", "frontier coding picks the strongest model without usage history");
     const ordinaryOptions = { ...balanceBase, signal: { ...frontierSignal, reasoningDepth: 2.2 } };
     assert.equal(rankModelsForHydra(ordinaryOptions)[0]?.key, "openai/gpt-6.1-sol", "ordinary implementation prefers efficient Sol within the quality band");
     assert.equal(rankModelsForHydra({ ...ordinaryOptions, currentModelKey: "openai/gpt-6-astra", cacheWarm: true })[0]?.key, "openai/gpt-6.1-sol", "Astra cache stickiness does not erase Sol's efficiency advantage");
+    const openaiOnly = catalogModels.filter(model => model.provider === "openai");
+    const depth3CodingOptions = { ...balanceBase, tier: "high" as const, signal: { ...frontierSignal, reasoningDepth: 3.0 } };
+    assert.equal(rankModelsForHydra({ ...depth3CodingOptions, models: openaiOnly })[0]?.key, "openai/gpt-6.1-sol", "Level 3 coding selects cheaper Sol over Astra in the OpenAI pool");
+    assert.equal(rankModelsForHydra({ ...depth3CodingOptions, currentModelKey: "openai/gpt-6.1-sol", cacheWarm: true })[0]?.key, "openai/gpt-6.1-sol", "Level 3 coding holds warm Sol rather than switching to Astra");
     assert.equal(rankModelsForHydra({ ...ordinaryOptions, usage: { openai: 40, anthropic: 4 } })[0]?.key, "claude-bridge/claude-opus-5-5", "underused Claude gets suitable implementation work");
     assert.equal(rankModelsForHydra({ ...ordinaryOptions, tier: "max" })[0]?.key, "claude-bridge/claude-opus-5-5", "max mode preserves frontier quality rather than optimizing cost");
-    const openaiOnly = catalogModels.filter(model => model.provider === "openai");
     assert.equal(rankModelsForHydra({ ...balanceBase, models: openaiOnly })[0]?.key, "openai/gpt-6-astra", "deep work selects Astra over Sol in the OpenAI pool");
 
     // UI/design domain (and Artisan) uses Design Arena rankings + design affinity so work routes to
@@ -1173,6 +1177,31 @@ test("Hydra stats scorer ranks AA models, respects quota/circuit health, and swi
     assert.equal(sparkRanked.length, 1, "Spark 1.3 twins resolve to the contributor variant without a catalog sync");
     assert.equal(sparkRanked[0]?.key, "muse-code/muse-spark-1.3-contributor");
     assert.equal(sparkRanked[0]?.aa.codingScore, 35, "uses Spark 1.3's published measurements, not Spark Open's");
+    assert.equal(matchAaMetrics("muse-ember-1.0", SEED_AA_MODELS)?.slug, "muse-ember");
+    const museSidekickModels: any[] = [
+      { provider: "muse-code", id: "muse-wonder-1.0", name: "Muse Wonder", reasoning: true },
+      { provider: "muse-code", id: "muse-wonder-1.0-contributor", name: "Muse Wonder Contributor", reasoning: true },
+      { provider: "muse-code", id: "muse-ember-1.0", name: "Muse Ember", reasoning: true },
+      { provider: "muse-code", id: "muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor", reasoning: true },
+    ];
+    const sidekickProfile = subagentHydraProfile("sidekick", "high");
+    const sidekickRanked = rankModelsForHydra({
+      ...balanceBase,
+      models: [...catalogModels, ...museSidekickModels],
+      tier: sidekickProfile.tier,
+      signal: sidekickProfile.signal,
+      usage: { anthropic: 40, openai: 40, meta: 0 },
+    });
+    assert.equal(
+      sidekickRanked.find(r => r.key === "muse-code/muse-ember-1.0")?.meetsQuality,
+      true,
+      "Muse Ember qualifies for sidekick workhorse coding",
+    );
+    assert.equal(
+      sidekickRanked[0]?.key,
+      "muse-code/muse-ember-1.0",
+      "Sidekick prefers faster, cheaper Muse Ember over Muse Wonder when routing to Muse",
+    );
     const contributorModels: any[] = [
       { provider: "muse-code", id: "muse-wonder-1.0", name: "Muse Wonder", reasoning: true },
       { provider: "muse-code", id: "muse-wonder-1.0-contributor", name: "Muse Wonder Contributor", reasoning: true },

@@ -84,7 +84,7 @@ export function subagentHydraProfile(
     return {
       tier: "standard",
       signal: {
-        reasoningDepth: 2,
+        reasoningDepth: 1.8,
         depthConfidence: 1,
         domain: "coding",
         domainConfidence: 1,
@@ -138,18 +138,18 @@ function clamp01(value: number): number {
 export const SUBSCRIPTION_CAPACITY: Readonly<Record<string, number>> = {
   google: 1,
   openai: 1,
-  meta: 1,
+  meta: 0.35,
   anthropic: 1,
   xai: 1,
 };
 const DEFAULT_SUBSCRIPTION_CAPACITY = 0.25;
 const CAPACITY_BONUS = 0.04;
 /** Under-used families are only promoted when within this fraction of the task's best score. */
-const BALANCE_QUALITY_GATE = 0.85;
+const BALANCE_QUALITY_GATE = 0.81;
 /** Minimum design task utility (Design Arena + coding + intelligence + affinity) required for UI/design work; excludes Sol. */
 const DESIGN_MIN_UTILITY = 0.80;
 const DESIGN_QUALITY_GATE = 0.80;
-/** Hard tasks retain capability ordering inside a tighter quality band. */
+/** Hard tasks (depth >= 3.45 or max tier) retain capability ordering inside a tighter quality band. */
 const FRONTIER_QUALITY_GATE = 0.95;
 const QUOTA_HEADROOM_WEIGHT = 0.08;
 const SPEED_TILT_WEIGHT = 0.08;
@@ -240,6 +240,7 @@ function effectiveSignalDepth(
   }
   const raw = signal.reasoningDepth;
   if (signal.domain === "coding") {
+    if (raw < 2.0) return Math.max(signal.depthConfidence < 0.65 ? 2.2 : 1.8, raw);
     return Math.max(signal.depthConfidence < 0.65 ? 2.2 : 2.0, raw);
   }
   if (signal.domain === "design") {
@@ -435,10 +436,12 @@ export function computeAaUtility(
   const workhorse = scoreProfile(aa, profile.workhorse, ranges);
   let utility = workhorse + (scoreProfile(aa, profile.frontier, ranges) - workhorse) * t;
 
-  // Capability floor: lightweight models (codingScore < 40, e.g. Haiku, Flash, Luna) must not
-  // outrank capable models on coding, design, or reasoning. Research uses its own
-  // factuality and intelligence profile rather than a coding capability floor.
-  if ((domain === "coding" || domain === "design" || domain === "reasoning") && (aa.codingScore ?? 0) < 40) {
+  // Capability floor: lightweight models (codingScore < 37, e.g. Grok 4.7, Spark, Flash, Luna)
+  // must not outrank capable models on coding, design, or reasoning, while fast workhorse
+  // models above 37 (e.g. Muse Ember, Claude Haiku 5.5) remain eligible on standard workhorse
+  // turns and step back on deeper (>= 2.2) coding/reasoning turns.
+  const minCodingScore = depth >= 2.2 ? 40 : 37;
+  if ((domain === "coding" || domain === "design" || domain === "reasoning") && (aa.codingScore ?? 0) < minCodingScore) {
     utility *= 0.55;
   }
   return utility;
@@ -500,7 +503,9 @@ export function rankModelsForHydra(options: RankModelsOptions): RankedModelCandi
     return [{ model, aa, family, quotaHealth, taskUtility }];
   });
   const bestTaskUtility = Math.max(0, ...scored.map((s) => s.taskUtility));
-  const frontier = tier === "max" || effectiveSignalDepth(tier, signal) >= 2.85;
+  const depth = effectiveSignalDepth(tier, signal);
+  const frontier = tier === "max" || depth >= 3.45 || (!signal && tier === "high") ||
+    (domain === "reasoning" && depth >= 2.85);
   const preserveQualityOrder = frontier || domain === "design";
   const qualityGate = domain === "design" ? DESIGN_QUALITY_GATE : frontier ? FRONTIER_QUALITY_GATE : BALANCE_QUALITY_GATE;
   const isQualified = (taskUtility: number) =>

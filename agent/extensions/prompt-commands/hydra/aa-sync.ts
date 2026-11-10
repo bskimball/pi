@@ -301,6 +301,27 @@ export const SEED_AA_MODELS: AaModelMetrics[] = [
     designArenaElo: 1386,
   },
   {
+    slug: "muse-ember",
+    name: "Muse Ember (Max)",
+    creatorSlug: "meta",
+    intelligenceIndex: 36.0212987864912,
+    engineeringIndex: 41.7630534090909,
+    frontierCode20: 0.271696212121212,
+    terminalBench40: 0.409090909090909,
+    codingScore: 37.17,
+    outputSpeedTps: 445.8,
+    ttftSeconds: 4.37,
+    blendedPricePer1m: 0.0728,
+    inputPricePer1m: 0.1,
+    outputPricePer1m: 0.5,
+    cacheHitPricePer1m: 0.004,
+    contextWindowTokens: 1_048_576,
+    isReasoning: true,
+    hallucinationRate: 0.1735641891891892,
+    presentationElo: 1424.8,
+    designArenaElo: 1345,
+  },
+  {
     slug: "claude-haiku-5-5",
     name: "Claude Haiku 5.5",
     creatorSlug: "anthropic",
@@ -522,6 +543,7 @@ function recordToMetrics(rec: Record<string, unknown>): AaModelMetrics | undefin
   const creator = obj(rec.creator);
   const capabilities = obj(rec.capabilities);
   const timescale = obj(rec.timescaleData);
+  const headline = obj(rec.headline);
   const briefcase = obj(rec.briefcaseBreakdown);
   const indexScores = obj(obj(rec.personalityBench)?.indexScores);
 
@@ -547,8 +569,8 @@ function recordToMetrics(rec: Record<string, unknown>): AaModelMetrics | undefin
     frontierCode20,
     terminalBench40,
     codingScore,
-    outputSpeedTps: finiteOrNull(timescale?.medianOutputSpeed),
-    ttftSeconds: finiteOrNull(timescale?.medianTimeToFirstChunk),
+    outputSpeedTps: finiteOrNull(timescale?.medianOutputSpeed ?? headline?.outputSpeed),
+    ttftSeconds: finiteOrNull(timescale?.medianTimeToFirstChunk ?? headline?.timeToFirstAnswerToken ?? headline?.timeToFirstToken),
     blendedPricePer1m: finiteOrNull(rec.price1mBlended7To2To1 ?? rec.price1mBlended0To3To1),
     inputPricePer1m: finiteOrNull(rec.price1mInputTokens),
     outputPricePer1m: finiteOrNull(rec.price1mOutputTokens),
@@ -896,6 +918,8 @@ const EXPLICIT_ALIASES: Record<string, string> = {
   "gemini-3-8-flash": "gemini-3-8-flash",
   "muse-wonder-1-0": "muse-wonder",
   "muse-wonder": "muse-wonder",
+  "muse-ember-1-0": "muse-ember",
+  "muse-ember": "muse-ember",
   "muse-spark-open": "muse-spark-open",
   "glm-5-3": "glm-5-3",
   "deepseek-v4-1-flash-1017": "deepseek-v4-1-flash-1017",

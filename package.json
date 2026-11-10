@@ -5,9 +5,9 @@
     "lint": "oxlint"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.5.1",
-    "@earendil-works/pi-coding-agent": "1.5.1",
-    "@earendil-works/pi-tui": "1.5.1",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "@types/node": "^26.6.6",
     "esbuild": "0.28.2",
     "oxlint": "^1.93.0",
@@ -21,8 +21,8 @@
     "typebox": "*"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.1",
-    "@earendil-works/pi-durable": "1.5.1",
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
     "@pi/ui-kit": "file:packages/ui-kit",
     "diff": "9.0.0"
   }

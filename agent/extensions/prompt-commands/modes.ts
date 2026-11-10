@@ -384,10 +384,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
           choice.thinking = stagedChoice.thinking;
 
           if (usesPersistentSidekick(state.mode)) {
+            const sidekickProfile = subagentHydraProfile("sidekick", tier);
             const sidekickRanked = rankForCurrentScope(
               ctx,
-              "standard",
-              { reasoningDepth: 2, depthConfidence: 1, domain: "coding", domainConfidence: 1 },
+              sidekickProfile.tier,
+              sidekickProfile.signal,
               false,
             );
             const sidekickWinner = sidekickRanked[0] ?? winner;
@@ -455,10 +456,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         if (usesPersistentSidekick(state.mode) && state.fusion) {
           const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
           if (scopeProviders && !scopeProviders.has(state.fusion.sidekick.provider)) {
+            const sidekickProfile = subagentHydraProfile("sidekick", tier);
             const sidekickRanked = rankForCurrentScope(
               ctx,
-              "standard",
-              { reasoningDepth: 2, depthConfidence: 1, domain: "coding", domainConfidence: 1 },
+              sidekickProfile.tier,
+              sidekickProfile.signal,
               false,
             );
             const sidekickWinner = sidekickRanked[0] ?? winner;
