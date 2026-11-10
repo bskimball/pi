@@ -3,7 +3,7 @@ name: advisor
 description: Strategic planner used on explicit user request, and in orchestrate mode for course changes or conflicting specialist findings. Advisory only; does not implement.
 model: claude-bridge/claude-fable-5-2
 fallbackModels:
-  - antigravity/gemini-4-argon
+  - antigravity/gemini-4-carbon
   - openai/gpt-6-astra
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: high

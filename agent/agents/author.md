@@ -1,7 +1,7 @@
 ---
 name: author
 description: Work prose specialist (Flo, kindly intergalactic flamingo). Human-readable emails, client communications, reports, proposals, documentation, guides, announcements, policies, and polished long-form writing.
-model: antigravity/gemini-4-argon
+model: antigravity/gemini-4-carbon
 fallbackModels:
   - claude-bridge/claude-sonnet-5-5
   - openai/gpt-6.1-sol
