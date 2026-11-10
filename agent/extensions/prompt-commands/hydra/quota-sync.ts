@@ -125,7 +125,7 @@ export async function syncQuotaSnapshot(options: {
     (async () => {
       try {
         const data = await json("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", auth.antigravity?.access,
-          { project: auth.antigravity?.projectId }, { "User-Agent": "antigravity/cli/1.4.0 (aidev_client; os_type=linux; arch=amd64; cl=982146307; auth_method=consumer)" });
+          { project: auth.antigravity?.projectId }, { "User-Agent": "antigravity/cli/1.5.4 (aidev_client; os_type=linux; arch=amd64; cl=1000494485; auth_method=consumer)" });
         let found = false;
         for (const [id, value] of Object.entries(data.models ?? {}) as Array<[string, any]>) {
           const fraction = value.quotaInfo?.remainingFraction;
