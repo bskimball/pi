@@ -4,6 +4,7 @@ description: Work fast local recon and monotonous execution (Gomez, lightning go
 model: openai/gpt-6-luna
 fallbackModels:
   - antigravity/gemini-3.8-flash
+  - claude-bridge/claude-haiku-5-5
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low

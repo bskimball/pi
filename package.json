@@ -5,13 +5,13 @@
     "lint": "oxlint"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.5.0",
-    "@earendil-works/pi-coding-agent": "1.5.0",
-    "@earendil-works/pi-tui": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.1",
+    "@earendil-works/pi-coding-agent": "1.5.1",
+    "@earendil-works/pi-tui": "1.5.1",
     "@types/node": "^26.6.6",
     "esbuild": "0.28.2",
-    "oxlint": "^1.90.0",
-    "typebox": "1.4.3",
+    "oxlint": "^1.93.0",
+    "typebox": "1.4.6",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
@@ -21,8 +21,8 @@
     "typebox": "*"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.0",
-    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/chord": "1.5.1",
+    "@earendil-works/pi-durable": "1.5.1",
     "@pi/ui-kit": "file:packages/ui-kit",
     "diff": "9.0.0"
   }

@@ -4,7 +4,7 @@ description: Fast, cheap read-only browser verification for live interaction, sc
 model: antigravity/gemini-3.8-flash
 fallbackModels:
   - openai/gpt-6.1-terra
-  - openai/gpt-6-luna
+  - claude-bridge/claude-sonnet-5-5
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: medium

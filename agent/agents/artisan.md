@@ -5,7 +5,7 @@ model: antigravity/gemini-4-argon
 fallbackModels:
   - claude-bridge/claude-opus-5-5
   - muse-code/muse-wonder-1.0
-  - openai/gpt-6-astra
+  - openai/gpt-6.1-terra
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
 inheritSkills: true

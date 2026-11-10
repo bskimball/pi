@@ -2,7 +2,7 @@
   "defaultModel": "grok-4.7",
   "defaultProvider": "xai",
   "defaultThinkingLevel": "medium",
-  "lastChangelogVersion": "1.5.0",
+  "lastChangelogVersion": "1.5.1",
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
@@ -17,7 +17,12 @@
     "confirmDangerousActions": true,
     "toolProfile": "core"
   },
-  "npmCommand": ["node", "C:/Users/bskim/.pi/agent/npm/pi-npm.mjs", "--", "npm"],
+  "npmCommand": [
+    "node",
+    "C:/Users/bskim/.pi/agent/npm/pi-npm.mjs",
+    "--",
+    "npm"
+  ],
   "quietStartup": true,
   "steeringMode": "one-at-a-time",
   "transport": "websocket",

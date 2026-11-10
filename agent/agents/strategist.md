@@ -1,7 +1,7 @@
 ---
 name: strategist
 description: Work business-productivity strategist (Eddie, elephant from another dimension). Recommendation-first planning, prioritization, second opinions, course corrections. Advisory only; does not implement.
-model: claude-bridge/claude-opus-5-5
+model: claude-bridge/claude-fable-5-2
 fallbackModels:
   - openai/gpt-6-astra
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
