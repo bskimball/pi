@@ -222,8 +222,8 @@ Telemetry `source` is `memory-triage`; `thresholds.memory` records the Noul gate
 
 The oracle-trigger questions (`internal/oracle-trigger.ts`) piggyback on the existing
 task_wait audit call when that audit already has a usable mission and a long enough
-report. Two extra Nouls, zero extra round trips: `touches_security_boundary` and
-`warrants_deep_review` (both bad; fire at `threshold`). The shared audit call stays
+report. One extra Noul, zero extra round trips: `touches_security_boundary` (bad;
+fires at `threshold`). The shared audit call stays
 capped at 2.5s; `oracleTrigger.deadlineMs` is honored up to that cap (`min(deadlineMs,
 2500)`). Findings append to the same advisories array; telemetry `source` stays
 `task-wait-audit` with `thresholds.oracle` and extended `findings`. Display-only

@@ -24,15 +24,6 @@ export const ORACLE_TRIGGER_QUESTIONS: Record<string, {
       false: "No security boundary is involved.",
     },
   },
-  warrants_deep_review: {
-    label: "warrants deep review",
-    instructions:
-      "This settled report describes a change that should get a second, slower review (oracle or human) before it is treated as done.",
-    criteria: {
-      true: "The work is high-stakes, irreversible, or too large to accept from a single pass.",
-      false: "A single-pass review is enough.",
-    },
-  },
 };
 
 export function buildOracleTriggerQuestions(): Record<string, JevQuestion> {
