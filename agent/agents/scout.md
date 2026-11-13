@@ -1,10 +1,11 @@
 ---
 name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
-model: antigravity/gemini-3.8-flash
+model: muse-code/muse-ember-1.0-contributor
 fallbackModels:
-  - openai/gpt-6-luna
   - claude-bridge/claude-haiku-5-5
+  - openai/gpt-6-luna
+  - antigravity/gemini-4-hydrogen
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: low

@@ -3,7 +3,7 @@ name: scribe
 description: Editorial writing specialist for blog posts, articles, documentation narratives, READMEs, changelogs, guides, launch copy, essays, and polished long-form prose, including Markdown docs inside code repositories.
 model: antigravity/gemini-4-carbon
 fallbackModels:
-  - antigravity/gemini-3.8-flash
+  - antigravity/gemini-4-hydrogen
   - 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
   - openai/gpt-6.1-terra
 thinking: medium

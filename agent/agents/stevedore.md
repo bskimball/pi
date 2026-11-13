@@ -5,7 +5,7 @@ tools: read, ffgrep, fffind, ls, bash, edit, write, jev, codemode, shipping, wor
 model: openai/gpt-6.1-terra
 fallbackModels:
   - xai/grok-composer-2.5-fast
-  - antigravity/gemini-3.8-flash
+  - antigravity/gemini-4-hydrogen
 thinking: medium
 inheritSkills: true
 maxTurns: 50

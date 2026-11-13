@@ -356,7 +356,7 @@ All GPT agent and mode routes use the `openai` provider (for example
 credential has been removed (logged out). The context-window
 overrides formerly under its `models.json` block now live under
 `providers.openai.modelOverrides`. Non-GPT agent routes still use configured providers
-such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `antigravity/gemini-3.8-flash`, xAI,
+such as `claude-bridge/claude-opus-5-5`, `claude-bridge/claude-sonnet-5`, `antigravity/gemini-4-hydrogen`, xAI,
 OpenCode, and Cloudflare Workers AI fallbacks.
 
 ---
