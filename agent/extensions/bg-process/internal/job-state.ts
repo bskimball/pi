@@ -25,6 +25,8 @@ export interface JobState {
   persistent: boolean;
   runnerPid?: number;
   runnerUnavailable?: boolean;
+  /** Persistent runner: how many times output.log was truncated after reaching its cap. */
+  outputLogResets?: number;
 }
 
 export function emptyStream(): StreamBuf {

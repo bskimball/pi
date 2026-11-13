@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { appendStream, type JobStatus } from "./job-state.ts";
-import { readJob, writeJob } from "./persistent-store.ts";
+import { OUTPUT_LOG, OUTPUT_LOG_CAP, readJob, writeJob } from "./persistent-store.ts";
 import { killProcessTreeSync } from "./process-tree-kill.ts";
 import { shellInvocation } from "./shell-invocation.ts";
 
@@ -33,11 +33,33 @@ const saveOutput = () => {
   }, 50);
 };
 
+// Raw output log for the extension's live mirror. Sync writes keep stdout and
+// stderr in arrival order. Best-effort: state.json still carries the bounded tail.
+const outputLog = join(directory, OUTPUT_LOG);
+let outputLogBytes = 0;
+const appendOutputLog = (chunk: Buffer | string) => {
+  const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+  try {
+    appendFileSync(outputLog, bytes, { mode: 0o600 });
+    outputLogBytes += bytes.length;
+    if (outputLogBytes > OUTPUT_LOG_CAP) {
+      truncateSync(outputLog, 0);
+      outputLogBytes = 0;
+      // Readers compare this counter, so a log that regrows past their offset
+      // between reads is still detected as a reset.
+      job.outputLogResets = (job.outputLogResets ?? 0) + 1;
+      writeJob(directory, job);
+    }
+  } catch {
+    // Log writes must never take down the runner.
+  }
+};
+
 child.stdin.on("error", () => {});
 child.stdout.on("error", () => {});
 child.stderr.on("error", () => {});
-child.stdout.on("data", (chunk: Buffer) => { appendStream(job.stdout, chunk); saveOutput(); });
-child.stderr.on("data", (chunk: Buffer) => { appendStream(job.stderr, chunk); saveOutput(); });
+child.stdout.on("data", (chunk: Buffer) => { appendStream(job.stdout, chunk); appendOutputLog(chunk); saveOutput(); });
+child.stderr.on("data", (chunk: Buffer) => { appendStream(job.stderr, chunk); appendOutputLog(chunk); saveOutput(); });
 
 const settle = (status: Exclude<JobStatus, "running">, code: number | null, signal: NodeJS.Signals | null) => {
   if (job.status !== "running") return;
@@ -51,7 +73,9 @@ const settle = (status: Exclude<JobStatus, "running">, code: number | null, sign
 };
 
 child.once("error", error => {
-  appendStream(job.stderr, `\nspawn error: ${error.message}\n`);
+  const text = `\nspawn error: ${error.message}\n`;
+  appendStream(job.stderr, text);
+  appendOutputLog(text);
   settle("failed", -1, null);
 });
 child.once("close", (code, signal) => {

@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { killProcessTree, killProcessTreeSync } from "./bg-process/internal/process-tree-kill.ts";
@@ -21,6 +22,8 @@ import { shellInvocation } from "./bg-process/internal/shell-invocation.ts";
 import { textResult, resolveCwd, validateCwd } from "./bg-process/internal/tool-result.ts";
 import { appendStream, emptyStream, type JobState, type JobStatus, type StreamBuf } from "./bg-process/internal/job-state.ts";
 import { readSessionJobs, removeJob, sessionJobDirectory, startPersistentJob, stopPersistentJob } from "./bg-process/internal/persistent-store.ts";
+import { createApexMirror, type ApexMirror } from "./bg-process/internal/apex-mirror.ts";
+import { PersistentMirror } from "./bg-process/internal/persistent-mirror.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -127,6 +130,11 @@ export default function (pi: ExtensionAPI) {
   let shuttingDown = false;
   let persistentRoot: string | undefined;
   const persistentWatchers = new Map<string, FSWatcher>();
+  // Apex mirror: undefined unless APEX_BACKGROUND_JOBS_URL/TOKEN are set.
+  const mirror: ApexMirror | undefined = createApexMirror((ids) => stopFromApex(ids));
+  const persistentMirror = mirror && new PersistentMirror(mirror);
+  const apexStopping = new Set<string>();
+  const apexStopped = new Set<string>();
 
   const runningCount = () =>
     [...jobs.values()].filter((job) => job.status === "running").length;
@@ -179,6 +187,7 @@ export default function (pi: ExtensionAPI) {
       `title=${job.title}`,
       `cmd=${cleanOneLine(job.command, LIST_CMD_CAP)}`,
       `exit=${job.exitCode ?? "null"}${job.signal ? ` signal=${job.signal}` : ""}`,
+      ...(apexStopped.has(job.id) ? ["stopped_by=user (Apex terminal Stop)"] : []),
     ].join("  ");
   };
 
@@ -242,8 +251,15 @@ export default function (pi: ExtensionAPI) {
     job.exitCode = exitCode;
     job.signal = signal;
     job.child = undefined;
+    mirror?.settled(job.id, status, exitCode, signal);
     pruneSettled();
     maybeNotifySettled(job);
+  };
+
+  /** Diagnostic text: goes to the stderr buffer and to the Apex mirror. */
+  const appendNote = (job: BgJob, text: string) => {
+    appendStream(job.stderr, text);
+    mirror?.output(job.id, text);
   };
 
   const attachChild = (
@@ -256,18 +272,28 @@ export default function (pi: ExtensionAPI) {
     // Leave stdin open. Closing it (stdio "ignore") is an immediate EOF, and
     // servers that shut down when the parent terminal closes exit at launch.
     child.stdin.on("error", () => {});
-    child.stdout.on("data", (chunk: Buffer) => appendStream(job.stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => appendStream(job.stderr, chunk));
+    // Per-stream decoders keep multi-byte characters intact across chunks.
+    const stdoutText = new StringDecoder("utf8");
+    const stderrText = new StringDecoder("utf8");
+    child.stdout.on("data", (chunk: Buffer) => {
+      appendStream(job.stdout, chunk);
+      mirror?.output(job.id, stdoutText.write(chunk));
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      appendStream(job.stderr, chunk);
+      mirror?.output(job.id, stderrText.write(chunk));
+    });
     child.stdout.on("error", () => {});
     child.stderr.on("error", () => {});
 
     child.on("error", (error) => {
-      appendStream(job.stderr, `\nspawn error: ${error.message}\n`);
+      appendNote(job, `\nspawn error: ${error.message}\n`);
       settleJob(job, job.killRequested ? "killed" : "failed", -1, null);
     });
 
     child.on("close", (code, signal) => {
       if (job.status !== "running") return;
+      mirror?.output(job.id, stdoutText.end() + stderrText.end());
       if (job.killRequested) {
         settleJob(job, "killed", code, signal);
         return;
@@ -296,7 +322,7 @@ export default function (pi: ExtensionAPI) {
       else killProcessTree(pid, { processGroup: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      appendStream(job.stderr, `\nkill error: ${message}\n`);
+      appendNote(job, `\nkill error: ${message}\n`);
     }
 
     if (mode === "sync") {
@@ -318,10 +344,7 @@ export default function (pi: ExtensionAPI) {
       }
       setTimeout(() => {
         if (job.status !== "running") return;
-        appendStream(
-          job.stderr,
-          "\nkill timeout: forced settled; process may still be orphaned\n",
-        );
+        appendNote(job, "\nkill timeout: forced settled; process may still be orphaned\n");
         settleJob(job, "killed", job.exitCode, job.signal);
       }, 3000).unref?.();
     }, 2000).unref?.();
@@ -329,11 +352,17 @@ export default function (pi: ExtensionAPI) {
   };
 
   const refreshPersistentJobs = (ctx?: ExtensionContext) => {
-    if (ctx) persistentRoot = sessionJobDirectory(getAgentDir(), ctx.sessionManager.getSessionId());
+    if (ctx) {
+      const root = sessionJobDirectory(getAgentDir(), ctx.sessionManager.getSessionId());
+      // Another session's jobs are no longer followed here; Apex marks them detached.
+      if (persistentRoot && root !== persistentRoot) persistentMirror?.detachAll();
+      persistentRoot = root;
+    }
     if (!persistentRoot) return;
     for (const { directory, job } of readSessionJobs(persistentRoot)) {
       const previous = jobs.get(job.id);
       jobs.set(job.id, { ...job, directory, notified: previous?.notified ?? job.status !== "running" });
+      persistentMirror?.sync(job, directory);
       if (job.status === "running" && !persistentWatchers.has(job.id) && !shuttingDown) {
         const watcher = watch(directory, (_event, filename) => {
           if (shuttingDown || String(filename) !== "state.json") return;
@@ -357,6 +386,35 @@ export default function (pi: ExtensionAPI) {
       }
     }
     pruneSettled();
+  };
+
+  /** Apex stop requests take the same paths as bg_kill; settle emits `settled`. */
+  const stopFromApex = (ids: string[]) => {
+    for (const id of ids) {
+      const job = jobs.get(id);
+      if (!job || job.status !== "running") continue;
+      apexStopped.add(id);
+      if (job.persistent) {
+        const directory = job.directory;
+        if (!directory || apexStopping.has(id)) continue;
+        apexStopping.add(id);
+        void stopPersistentJob(directory)
+          .then((state) => {
+            jobs.set(id, { ...state, directory, notified: jobs.get(id)?.notified ?? false });
+            refreshPersistentJobs();
+          })
+          .catch(() => {
+            // Stop errors surface through the next refresh; never throw here.
+          })
+          .finally(() => apexStopping.delete(id));
+      } else if (!job.killRequested) {
+        try {
+          killJob(job, "apex_stop");
+        } catch {
+          // Settle path reports the outcome; never throw into the mirror.
+        }
+      }
+    }
   };
 
   // ------------------------------------------------------------ tools
@@ -481,6 +539,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       attachChild(job, child);
+      mirror?.started(job);
 
       // Detached POSIX children should not keep the parent event loop only via
       // the process group; unref is intentionally skipped so close still fires.
@@ -659,6 +718,9 @@ export default function (pi: ExtensionAPI) {
       }
     } finally {
       jobs.clear();
+      persistentMirror?.clear();
+      apexStopped.clear();
+      mirror?.dispose();
     }
   });
 }

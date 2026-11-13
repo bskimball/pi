@@ -1,11 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { StringDecoder } from "node:string_decoder";
 import { appendStream, STREAM_CAP, type JobState, type StreamBuf } from "./job-state.ts";
 
 const JOB_ID = /^bg_[0-9a-f-]{36}$/;
+
+/** Append-only raw output written by the runner; the extension tails it. */
+export const OUTPUT_LOG = "output.log";
+/** The runner truncates the log to empty once it grows past this size. */
+export const OUTPUT_LOG_CAP = 2 * 1024 * 1024;
 
 export function sessionJobDirectory(agentDir: string, sessionId: string): string {
   const key = createHash("sha256").update(sessionId).digest("hex");
@@ -120,4 +126,90 @@ export async function stopPersistentJob(directory: string): Promise<JobState> {
   if (job.status !== "running") return job;
   writeFileSync(join(directory, "stop"), "stop\n", { mode: 0o600 });
   return waitForJob(directory, state => state.status !== "running", 7_000);
+}
+
+function outputLogPath(directory: string): string {
+  return join(directory, OUTPUT_LOG);
+}
+
+/** Current size of a job's output log; 0 until the runner writes output. */
+export function outputLogSize(directory: string): number {
+  try {
+    return statSync(outputLogPath(directory)).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Raw bytes in [start, end). A shorter read (concurrent rotation) is returned as-is. */
+function readOutputLogBytes(directory: string, start: number, end: number): Buffer {
+  if (end <= start) return Buffer.alloc(0);
+  const fd = openSync(outputLogPath(directory), "r");
+  try {
+    const buffer = Buffer.alloc(end - start);
+    const read = readSync(fd, buffer, 0, buffer.length, start);
+    return buffer.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Byte-offset reader for one job's output.log. Decodes with StringDecoder so a
+ * UTF-8 sequence split across reads is held back, not corrupted.
+ */
+export class OutputLogTail {
+  private readonly directory: string;
+  private offset = 0;
+  private resets = 0;
+  private decoder = new StringDecoder("utf8");
+
+  constructor(directory: string) {
+    this.directory = directory;
+  }
+
+  /** Returns the last `maxBytes` of the log and positions the reader at EOF. */
+  start(maxBytes: number, resets = 0): string {
+    const size = outputLogSize(this.directory);
+    this.offset = size;
+    this.resets = resets;
+    this.decoder = new StringDecoder("utf8");
+    let bytes: Buffer;
+    try {
+      bytes = readOutputLogBytes(this.directory, Math.max(0, size - maxBytes), size);
+    } catch {
+      return "";
+    }
+    let skip = 0;
+    // Begin on a character boundary: drop leading UTF-8 continuation bytes.
+    while (skip < bytes.length && skip < 3 && (bytes[skip] & 0xc0) === 0x80) skip += 1;
+    return this.decoder.write(bytes.subarray(skip)) + this.decoder.end();
+  }
+
+  /**
+   * Text appended since the previous call. A changed reset counter or a shrunken
+   * file (runner truncation) restarts at 0.
+   */
+  read(resets = this.resets): string {
+    try {
+      const size = outputLogSize(this.directory);
+      if (resets !== this.resets || size < this.offset) {
+        this.offset = 0;
+        this.resets = resets;
+        this.decoder = new StringDecoder("utf8");
+      }
+      const bytes = readOutputLogBytes(this.directory, this.offset, size);
+      this.offset += bytes.length;
+      return this.decoder.write(bytes);
+    } catch {
+      return "";
+    }
+  }
+
+  /** Final read at settle; any incomplete trailing sequence becomes U+FFFD. */
+  finish(resets = this.resets): string {
+    const text = this.read(resets) + this.decoder.end();
+    this.decoder = new StringDecoder("utf8");
+    return text;
+  }
 }
