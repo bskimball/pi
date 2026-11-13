@@ -18,8 +18,8 @@ import { reportRenderFailure } from "./tool-receipt.ts";
 // that pathological segmenter path. U+200B is consumed as a break point by the
 // TUI and does not change model-facing/session content.
 export const SAFE_UNBROKEN_RUN_CHARS = 256;
-/** Hard cap for Text/Markdown payloads. Ctrl+O expand-all must not dump
- * unbounded tool output into the compositor. */
+/** Hard cap for ToolExecutionComponent payloads. Ctrl+O expand-all must not
+ * dump unbounded tool output into the compositor. */
 export const SAFE_TEXT_MAX_CHARS = 16_384;
 export const SAFE_RENDER_MAX_LINES = 240;
 const BREAK_OPPORTUNITY = "\u200b";
@@ -28,6 +28,8 @@ const INSTALL_KEY = Symbol.for("pi.apex.renderSafety.installed");
 const HOST_WRAP_KEY = Symbol.for("pi.apex.renderSafety.hostWrapped");
 const HOST_DO_RENDER_KEY = Symbol.for("pi.apex.renderSafety.hostDoRenderWrapped");
 const TOOL_RENDER_KEY = Symbol.for("pi.apex.renderSafety.toolRenderWrapped");
+const TOOL_UPDATE_KEY = Symbol.for("pi.apex.renderSafety.toolUpdateWrapped");
+const TOOL_SCOPED = Symbol.for("pi.apex.renderSafety.toolScopedText");
 const HOST_PAINTERS_KEY = Symbol.for("pi.apex.renderSafety.hostPainters");
 const PHASE_STATE_KEY = Symbol.for("pi.apex.renderSafety.phaseState");
 const GUARDED_TEXT = Symbol.for("pi.apex.renderSafety.guardedText");
@@ -35,6 +37,7 @@ const RAW_TEXT = Symbol.for("pi.apex.renderSafety.rawText");
 const state = globalThis as typeof globalThis & { [INSTALL_KEY]?: boolean };
 const PHASE_LEN_THRESHOLD = 4096;
 const PHASE_WRITE_INTERVAL_MS = 1000;
+let toolExecutionScopeDepth = 0;
 
 interface HostPainter {
   requestRender(force?: boolean): void;
@@ -112,7 +115,7 @@ function safeString(value: unknown, fallback = "[unrenderable]"): string {
  * rows exactly; only malformed values are coerced. Embedded newlines are split
  * so they cannot desynchronize fullscreen row accounting.
  */
-export function normalizeRenderedLines(value: unknown): string[] {
+export function coerceRenderedLines(value: unknown): string[] {
   if (Array.isArray(value)) {
     let clean = true;
     for (const item of value) {
@@ -121,7 +124,7 @@ export function normalizeRenderedLines(value: unknown): string[] {
         break;
       }
     }
-    if (clean) return boundRenderedRows(value as string[]);
+    if (clean) return value as string[];
   }
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
   const lines: string[] = [];
@@ -133,7 +136,11 @@ export function normalizeRenderedLines(value: unknown): string[] {
     }
     lines.push(...text.replace(/\r\n?/g, "\n").split("\n"));
   }
-  return boundRenderedRows(lines);
+  return lines;
+}
+
+export function normalizeRenderedLines(value: unknown): string[] {
+  return boundRenderedRows(coerceRenderedLines(value));
 }
 
 function boundRenderedRows(rows: string[]): string[] {
@@ -191,6 +198,7 @@ interface TextLikeInstance {
   text?: unknown;
   [GUARDED_TEXT]?: string;
   [RAW_TEXT]?: string;
+  [TOOL_SCOPED]?: boolean;
 }
 
 function isRunBoundary(codePoint: number): boolean {
@@ -251,9 +259,21 @@ export function guardUnbrokenRuns(value: unknown): string {
   return mutated ? result : text;
 }
 
-function applyGuardedText(instance: TextLikeInstance, value: unknown): boolean {
-  if (typeof value === "string" && instance[GUARDED_TEXT] === value) return false;
-  const raw = boundDisplayText(value);
+function applyGuardedText(
+  instance: TextLikeInstance,
+  value: unknown,
+  toolScoped: boolean,
+): boolean {
+  const promotedToTool = toolScoped && instance[TOOL_SCOPED] !== true;
+  if (toolScoped) instance[TOOL_SCOPED] = true;
+  if (
+    !promotedToTool &&
+    typeof value === "string" &&
+    instance[GUARDED_TEXT] === value
+  ) {
+    return false;
+  }
+  const raw = toolScoped ? boundDisplayText(value) : safeString(value);
   const guarded = guardUnbrokenRuns(raw);
   instance[RAW_TEXT] = raw;
   instance[GUARDED_TEXT] = guarded;
@@ -352,23 +372,57 @@ function wrapHostDoRender(Host: { prototype: object }): void {
 
 function wrapToolExecutionRender(): void {
   const proto = ToolExecutionComponent.prototype as unknown as {
+    updateDisplay?: (...args: unknown[]) => unknown;
     render?: (width: number) => unknown;
     [key: symbol]: boolean | undefined;
   };
-  if (proto[TOOL_RENDER_KEY]) return;
-  const found = findOwnMethod(proto, "render");
-  if (!found) return;
-  const original = found.method as (this: unknown, width: number) => unknown;
-  (found.target as { render: (width: number) => string[] }).render =
-    function renderSafeTool(this: unknown, width: number): string[] {
-      try {
-        return normalizeRenderedLines(original.call(this, width));
-      } catch (error) {
-        reportRenderFailure("tool-execution", error);
-        return ["[tool output unavailable]"];
-      }
-    };
-  proto[TOOL_RENDER_KEY] = true;
+  if (!proto[TOOL_UPDATE_KEY]) {
+    const foundUpdate = findOwnMethod(proto, "updateDisplay");
+    if (foundUpdate) {
+      const originalUpdate = foundUpdate.method as (
+        this: unknown,
+        ...args: unknown[]
+      ) => unknown;
+      (
+        foundUpdate.target as {
+          updateDisplay: (...args: unknown[]) => unknown;
+        }
+      ).updateDisplay = function updateSafeToolDisplay(
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        toolExecutionScopeDepth += 1;
+        try {
+          return originalUpdate.apply(this, args);
+        } finally {
+          toolExecutionScopeDepth -= 1;
+        }
+      };
+      proto[TOOL_UPDATE_KEY] = true;
+    }
+  }
+  if (!proto[TOOL_RENDER_KEY]) {
+    const found = findOwnMethod(proto, "render");
+    if (found) {
+      const original = found.method as (
+        this: unknown,
+        width: number,
+      ) => unknown;
+      (found.target as { render: (width: number) => string[] }).render =
+        function renderSafeTool(this: unknown, width: number): string[] {
+          toolExecutionScopeDepth += 1;
+          try {
+            return normalizeRenderedLines(original.call(this, width));
+          } catch (error) {
+            reportRenderFailure("tool-execution", error);
+            return ["[tool output unavailable]"];
+          } finally {
+            toolExecutionScopeDepth -= 1;
+          }
+        };
+      proto[TOOL_RENDER_KEY] = true;
+    }
+  }
 }
 
 function installTextBoundary(): void {
@@ -378,8 +432,13 @@ function installTextBoundary(): void {
 
   prototype.setText = function setSafeText(value: string): void {
     const instance = this as unknown as TextLikeInstance;
-    const raw = boundDisplayText(value);
+    const toolScoped =
+      toolExecutionScopeDepth > 0 || instance[TOOL_SCOPED] === true;
+    const promotedToTool = toolScoped && instance[TOOL_SCOPED] !== true;
+    if (toolScoped) instance[TOOL_SCOPED] = true;
+    const raw = toolScoped ? boundDisplayText(value) : safeString(value);
     if (
+      !promotedToTool &&
       instance.text === instance[GUARDED_TEXT] &&
       (raw === instance[RAW_TEXT] || raw === instance[GUARDED_TEXT])
     ) {
@@ -393,9 +452,14 @@ function installTextBoundary(): void {
   prototype.render = function renderSafeText(width: number): string[] {
     try {
       const instance = this as unknown as TextLikeInstance;
-      const scanned = applyGuardedText(instance, instance.text);
+      const toolScoped =
+        toolExecutionScopeDepth > 0 || instance[TOOL_SCOPED] === true;
+      const scanned = applyGuardedText(instance, instance.text, toolScoped);
       if (scanned) noteRenderPhase("text", safeString(instance.text).length);
-      return normalizeRenderedLines(originalRender.call(this, width));
+      const rendered = originalRender.call(this, width);
+      return toolScoped
+        ? normalizeRenderedLines(rendered)
+        : coerceRenderedLines(rendered);
     } catch (error) {
       reportRenderFailure("text", error);
       return ["[text unavailable]"];
@@ -410,7 +474,7 @@ function installMarkdownBoundary(): void {
 
   prototype.setText = function setSafeMarkdown(value: string): void {
     const instance = this as unknown as TextLikeInstance;
-    const raw = boundDisplayText(value);
+    const raw = safeString(value);
     if (
       instance.text === instance[GUARDED_TEXT] &&
       (raw === instance[RAW_TEXT] || raw === instance[GUARDED_TEXT])
@@ -425,9 +489,9 @@ function installMarkdownBoundary(): void {
   prototype.render = function renderSafeMarkdown(width: number): string[] {
     try {
       const instance = this as unknown as TextLikeInstance;
-      const scanned = applyGuardedText(instance, instance.text);
+      const scanned = applyGuardedText(instance, instance.text, false);
       if (scanned) noteRenderPhase("markdown", safeString(instance.text).length);
-      return normalizeRenderedLines(originalRender.call(this, width));
+      return coerceRenderedLines(originalRender.call(this, width));
     } catch (error) {
       reportRenderFailure("markdown", error);
       return ["[markdown unavailable]"];

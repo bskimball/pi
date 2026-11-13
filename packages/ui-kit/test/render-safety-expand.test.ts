@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  AssistantMessageComponent,
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
@@ -28,15 +29,24 @@ describe("apex expand-all render safety", () => {
     assert.match(normalized.at(-1) ?? "", /truncated for display/);
   });
 
-  it("caps Text and Markdown payloads before the compositor measures them", () => {
+  it("renders long main-thread Markdown, AssistantMessageComponent, and standalone Text without truncation", () => {
     installRenderSafety();
-    const huge = Array.from({ length: 400 }, (_, i) => `row ${i} ${"m".repeat(80)}`).join("\n");
-    assert.ok(huge.length > SAFE_TEXT_MAX_CHARS);
+    initTheme("dark");
+    const sentinel = "FINAL_RECOMMENDATION_SENTINEL";
+    const lines = Array.from(
+      { length: 420 },
+      (_, i) => `row ${i} ${"m".repeat(72)}`,
+    );
+    lines.push(sentinel);
+    const huge = lines.join("\n\n");
+    assert.ok(huge.length > 30_000);
 
     const text = new Text(huge);
     const textLines = text.render(80);
-    assert.ok(textLines.length <= SAFE_RENDER_MAX_LINES + 1);
-    assert.match(textLines.join("\n"), /truncated for display/);
+    const textJoined = textLines.join("\n");
+    assert.ok(textLines.length > SAFE_RENDER_MAX_LINES);
+    assert.ok(textLines.slice(-10).join("\n").includes(sentinel));
+    assert.doesNotMatch(textJoined, /truncated for display/);
 
     const identity = (t: string) => t;
     const markdown = new Markdown(huge, 0, 0, {
@@ -56,8 +66,33 @@ describe("apex expand-all render safety", () => {
       underline: identity,
     });
     const mdLines = markdown.render(80);
-    assert.ok(mdLines.length <= SAFE_RENDER_MAX_LINES + 1);
-    assert.match(mdLines.join("\n"), /truncated for display/);
+    const mdJoined = mdLines.join("\n");
+    assert.ok(mdLines.length > SAFE_RENDER_MAX_LINES);
+    assert.ok(mdLines.slice(-10).join("\n").includes(sentinel));
+    assert.doesNotMatch(mdJoined, /truncated for display/);
+
+    const assistant = new AssistantMessageComponent({
+      role: "assistant",
+      content: [{ type: "text", text: huge }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const assistantLines = assistant.render(80);
+    const assistantJoined = assistantLines.join("\n");
+    assert.ok(assistantLines.length > SAFE_RENDER_MAX_LINES);
+    assert.ok(assistantLines.slice(-10).join("\n").includes(sentinel));
+    assert.doesNotMatch(assistantJoined, /truncated for display/);
   });
 
   it("caps stock tool fallback rows after expand-all", () => {

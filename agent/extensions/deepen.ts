@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_TOOLS } from "./deepen/internal/prompt.ts";
 import {
-  resolveModelTarget,
+  resolveDeepenTarget,
   startDeepenRun,
   type ActiveDeepenHandle,
   type DeepenOutcome,
@@ -144,9 +144,17 @@ export default function (pi: ExtensionAPI): void {
           return;
         }
         const elapsed = formatSeconds(Date.now() - activeRun.startedAt);
+        const worker = activeRun.workerId?.();
+        const parts = [
+          worker,
+          activeRun.agentLabel,
+          activeRun.modelLabel(),
+          `turn ${Math.max(1, activeRun.turns())}`,
+          elapsed,
+        ].filter(Boolean);
         notify(
           ctx,
-          `/deepen running (${activeRun.modelLabel}, turn ${Math.max(1, activeRun.turns())}, ${elapsed}): ${activeRun.currentPhase()}`,
+          `/deepen running (${parts.join(", ")}): ${activeRun.currentPhase()}`,
           "info",
         );
         return;
@@ -171,15 +179,16 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
 
-      const target = resolveModelTarget(
+      const target = resolveDeepenTarget(
         pi.getSettings(),
+        ctx.cwd,
         ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
         ctx.thinkingLevel ?? pi.getThinkingLevel(),
       );
       if (!target) {
         notify(
           ctx,
-          "No active model selected for /deepen. Select a model or configure `\"deepen\": { \"model\": \"provider/id\" }` in settings.json.",
+          "No active model or agent found for /deepen. Select a model or configure `\"deepen\": { \"agent\": \"scribe\", \"model\": \"provider/id\" }` in settings.json.",
           "error",
         );
         return;
@@ -199,6 +208,19 @@ export default function (pi: ExtensionAPI): void {
         draftPrompt: trimmed,
         forkSessionFile,
         target,
+        ctx,
+        onStart: ({ workerId, agent, model }) => {
+          if (activeRunToken !== runToken || !ctx.hasUI) return;
+          const details = [workerId, model, "read-only"]
+            .filter(Boolean)
+            .join(", ");
+          const trackHint = workerId ? "Track in /agents or run" : "Run";
+          notify(
+            ctx,
+            `Deepening prompt with ${agent} (${details})... ${trackHint} \`/deepen cancel\` to stop.`,
+            "info",
+          );
+        },
         onStatus: (statusText) => {
           if (activeRunToken !== runToken || !ctx.hasUI) return;
           try {
@@ -209,14 +231,6 @@ export default function (pi: ExtensionAPI): void {
         },
       });
       activeRun = handle;
-
-      if (ctx.hasUI) {
-        notify(
-          ctx,
-          `Deepening prompt with ${target.label} (read-only)... Run \`/deepen cancel\` to stop.`,
-          "info",
-        );
-      }
 
       const deliver = (outcome: DeepenOutcome) => {
         if (activeRunToken === runToken) {
@@ -231,18 +245,24 @@ export default function (pi: ExtensionAPI): void {
         }
 
         if (outcome.status === "error") {
+          const meta = [outcome.workerId, outcome.agent, outcome.model]
+            .filter(Boolean)
+            .join(", ");
           notify(
             ctx,
-            `/deepen failed (${outcome.model}): ${outcome.message}`,
+            `/deepen failed (${meta}): ${outcome.message}`,
             "error",
           );
           return;
         }
 
         if (outcome.status === "parse_error") {
+          const meta = [outcome.workerId, outcome.agent, outcome.model]
+            .filter(Boolean)
+            .join(", ");
           notify(
             ctx,
-            `/deepen reply missed <improved-prompt> tags; raw reply saved to ${outcome.savedPath}`,
+            `/deepen reply missed <improved-prompt> tags (${meta}); raw reply saved to ${outcome.savedPath}`,
             "warning",
           );
           return;
@@ -251,6 +271,9 @@ export default function (pi: ExtensionAPI): void {
         const { notes, improvedPrompt } = outcome.parsed;
         try {
           pi.appendEntry("deepen", {
+            workerId: outcome.workerId,
+            agent: outcome.agent,
+            sessionFile: outcome.sessionFile,
             draftPrompt: trimmed,
             notes,
             improvedPrompt,
@@ -269,8 +292,16 @@ export default function (pi: ExtensionAPI): void {
             : improvedPrompt;
           ctx.ui.setEditorText(mergedDraft);
 
+          const meta = [
+            outcome.workerId,
+            outcome.agent,
+            outcome.model,
+            formatSeconds(outcome.elapsedMs),
+          ]
+            .filter(Boolean)
+            .join(", ");
           const summaryLines = [
-            `Deepened prompt staged in editor (${outcome.model}, ${formatSeconds(outcome.elapsedMs)}) - review and press Enter to send.`,
+            `Deepened prompt staged in editor (${meta}) - review and press Enter to send.`,
             ...(notes ? ["", notes] : []),
           ];
           notify(ctx, summaryLines.join("\n"), "info");

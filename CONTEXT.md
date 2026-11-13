@@ -103,7 +103,7 @@ Command for steering the active parent orchestrator with concurrent requests or 
 ## Long-session and subagent stability
 
 1. `crash-logger/internal/segmenter-safety.ts` installs process-wide lazy JS grapheme segmentation before the first fullscreen paint.
-2. `packages/ui-kit/internal/presentation/render-safety.ts` contains malformed Text/Markdown values, preserves cache identity, and caps Text/Markdown payloads plus compositor line arrays so Ctrl+O expand-all cannot dump unbounded tool output into the TUI.
+2. `packages/ui-kit/internal/presentation/render-safety.ts` contains malformed `Text`/`Markdown` values, inserts unbroken-run break opportunities, preserves cache identity, and bounds `ToolExecutionComponent` (`Ctrl+O` expand-all) tool output without truncating main-thread `Markdown`/`Text` messages.
 3. `crash-logger/internal/terminal-restore-watchdog.mjs` restores the terminal after an unclean parent death and records the observed Windows exit code, last phase, a metadata-only runtime event ring, heartbeat age/event-loop lag, memory/resource counters, parent liveness, and bounded metadata from nearby Windows crash/resource events.
 4. Task JSONL records, stderr, activities, errors, status text, result previews, and settled metadata are hard-bounded within `task/`.
 5. Stream deltas do not repaint pinned worker cards; Pi owns scheduling.

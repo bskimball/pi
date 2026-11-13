@@ -114,7 +114,13 @@ export function summarizeToolTarget(
   return sanitizeStatusText(`${tool} ${short}`, 56);
 }
 
-export const DEEPEN_SYSTEM_INSTRUCTIONS = `You are a read-only prompt-deepening pass. Your job is to ground the user's request in the actual workspace and rewrite the prompt to ask for a deeper version of the same task — never a bigger one.
+export const DEEPEN_SYSTEM_INSTRUCTIONS = `## /deepen Read-Only Override (Supersedes Standard Scribe File-Edit Handoff)
+For this /deepen invocation, ignore Scribe's standard file-editing workflow and "## Written or Revised" / "## Changed Files" handoff format:
+- Do NOT edit, write, or create any files.
+- Do NOT spend a turn loading \`writing-for-agents\` or other skills.
+- Return ONLY the four grounded bullets (1)-(4) followed by \`<improved-prompt>...</improved-prompt>\`.
+
+You are a read-only prompt-deepening pass. Your job is to ground the user's request in the actual workspace and rewrite the prompt to ask for a deeper version of the same task — never a bigger one.
 
 ## How to work
 1. Without asking questions, inspect the real code, config, schemas, tests, or logs this task touches using read-only search and file reads (fffind, ffgrep, read, grep, find, ls).
@@ -133,6 +139,17 @@ Then emit the rewritten prompt inside <improved-prompt>...</improved-prompt> tag
 - Keep the user's voice and exact goal.
 - Name the concrete files/symbols, constraints, and external verification check you found.
 - Put ONLY the ready-to-send prompt text inside <improved-prompt>...</improved-prompt>.`;
+
+export function buildDeepenMission(draftPrompt: string): string {
+  const firstLine = draftPrompt
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "deepen: active conversation";
+  const compact = sanitizeStatusText(firstLine, 64);
+  return compact ? `deepen: ${compact}` : "deepen: active conversation";
+}
 
 export function buildDeepenUserPrompt(draftPrompt: string): string {
   const trimmed = draftPrompt.trim();
@@ -163,8 +180,13 @@ export function parseDeepenReply(reply: string): ParsedDeepenReply | undefined {
   if (!improvedPrompt) return undefined;
 
   const before = clean.slice(0, lastMatch.index).trim();
+  const cleanNotes = before
+    .replace(/\u0000/g, "")
+    .replace(ANSI_ESCAPE_RE, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
   return {
-    notes: sanitizeNoticeLines(boundLines(before, 8, 900), 6, 140),
+    notes: cleanNotes,
     improvedPrompt,
   };
 }

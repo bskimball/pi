@@ -5,14 +5,19 @@ import {
   currentFleetSnapshot,
   fleetSnapshotKey,
   FLEET_CONTROL_KEY,
+  getTaskExtensionRunner,
   installFleetControl,
+  installTaskExtensionRunner,
   isAgentWorkspaceOpen,
   publishFleetSnapshot,
   removeFleetControl,
+  removeTaskExtensionRunner,
   resetFleetBus,
   subscribeFleetSnapshot,
+  TASK_EXTENSION_RUNNER_KEY,
   WORKSPACE_OPEN_KEY,
   type FleetControl,
+  type TaskExtensionRunner,
 } from "../fleet-bus.ts";
 import { sendModeAllowed } from "../../async-task.ts";
 
@@ -389,5 +394,78 @@ describe("fleet control channel", () => {
     assert.equal(isAgentWorkspaceOpen(), true);
     resetFleetBus();
     assert.equal(isAgentWorkspaceOpen(), false);
+  });
+});
+
+describe("task extension runner bridge", () => {
+  type RunnerRoot = typeof globalThis & {
+    [TASK_EXTENSION_RUNNER_KEY]?: TaskExtensionRunner;
+  };
+
+  beforeEach(() => {
+    delete (globalThis as RunnerRoot)[TASK_EXTENSION_RUNNER_KEY];
+  });
+
+  afterEach(() => {
+    delete (globalThis as RunnerRoot)[TASK_EXTENSION_RUNNER_KEY];
+  });
+
+  function stubRunner(): TaskExtensionRunner {
+    return {
+      spawn: async () => ({ ok: false, error: "stub" }),
+    };
+  }
+
+  it("installs, reads, and only removes its own runner", () => {
+    assert.equal(getTaskExtensionRunner(), undefined);
+    const ours = stubRunner();
+    installTaskExtensionRunner(ours);
+    assert.equal(getTaskExtensionRunner(), ours);
+    assert.equal((globalThis as RunnerRoot)[TASK_EXTENSION_RUNNER_KEY], ours);
+
+    removeTaskExtensionRunner(stubRunner());
+    assert.equal(
+      getTaskExtensionRunner(),
+      ours,
+      "a foreign runner must not uninstall the bridge",
+    );
+
+    resetFleetBus();
+    assert.equal(
+      getTaskExtensionRunner(),
+      ours,
+      "resetFleetBus must not clear the installed extension runner",
+    );
+
+    removeTaskExtensionRunner(ours);
+    assert.equal(getTaskExtensionRunner(), undefined);
+  });
+
+  it("skips installing the extension runner when PI_SUBAGENT=1", async () => {
+    const previousTaskUi = process.env.PI_TASK_UI;
+    const previousSubagent = process.env.PI_SUBAGENT;
+    process.env.PI_TASK_UI = "0";
+    process.env.PI_SUBAGENT = "1";
+    delete (globalThis as RunnerRoot)[TASK_EXTENSION_RUNNER_KEY];
+    try {
+      const mockPi = {
+        registerTool() {},
+        registerCommand() {},
+        registerMessageRenderer() {},
+        events: { on() {} },
+        on() {},
+        sendMessage() {},
+        appendEntry() {},
+        getThinkingLevel() {},
+      };
+      const mod = await import("../../async-task.ts");
+      (mod.default as (pi: unknown) => void)(mockPi);
+      assert.equal(getTaskExtensionRunner(), undefined);
+    } finally {
+      if (previousTaskUi === undefined) delete process.env.PI_TASK_UI;
+      else process.env.PI_TASK_UI = previousTaskUi;
+      if (previousSubagent === undefined) delete process.env.PI_SUBAGENT;
+      else process.env.PI_SUBAGENT = previousSubagent;
+    }
   });
 });

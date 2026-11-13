@@ -95,12 +95,19 @@ import {
   boundControlMessage,
   fleetSnapshotKey,
   installFleetControl,
+  installTaskExtensionRunner,
   isAgentWorkspaceOpen,
   publishFleetSnapshot,
   removeFleetControl,
+  removeTaskExtensionRunner,
   type FleetControl,
   type FleetControlResult,
   type FleetSnapshotItem,
+  type TaskExtensionOutcome,
+  type TaskExtensionRunHandle,
+  type TaskExtensionRunner,
+  type TaskExtensionSpawnRequest,
+  type TaskExtensionWorkerSnapshot,
 } from "./runtime/fleet-bus.ts";
 import { safeTruncateToWidth } from "./presentation/safe-text-layout.ts";
 import {
@@ -400,6 +407,8 @@ interface Worker extends RuntimeEventWorker {
   fusionParentSessionId?: string;
   /** Prompts in the current Fusion chain (initial assignment + corrections). Owned by fusion-lifecycle. */
   fusionChainPrompts?: number;
+  /** Suppress `[async-task-settled]` auto-turn notifications for extension-owned workers. */
+  suppressSettledNotice?: boolean;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1348,6 +1357,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       .filter(
         (w) =>
           !w.closed &&
+          !w.suppressSettledNotice &&
           (w.lifecycle === "settled" || w.lifecycle === "failed") &&
           w.notifiedGeneration < w.generation,
       );
@@ -1394,7 +1404,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
 
   const maybeNotifySettled = (worker: Worker) => {
-    if (shuttingDown || worker.closed) return;
+    if (shuttingDown || worker.closed || worker.suppressSettledNotice) return;
     if (worker.lifecycle !== "settled" && worker.lifecycle !== "failed") return;
     if (worker.notifiedGeneration >= worker.generation) return;
     if (agentBusy) return;
@@ -1464,14 +1474,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       activitiesStarted: worker.modelAttemptUsedTools ? 1 : 0,
     });
 
-  const capturedReports = new WeakMap<Worker, { generation: number; evaluation: ReturnType<typeof evaluateSettledReport> }>();
+  const capturedReports = new WeakMap<Worker, { generation: number; rawText: string; evaluation: ReturnType<typeof evaluateSettledReport> }>();
 
   const eventHooks: WorkerRuntimeEventHooks<Worker> = {
     normalizeToolName: (name) => cleanOneLine(name, 40),
     summarizeToolArgs: argsSummary,
     extractAssistantText: (message) => extractAssistantText(message, Number.POSITIVE_INFINITY),
     onCompletedAssistantText: (worker, text) => {
-      capturedReports.set(worker, { generation: worker.generation, evaluation: evaluateSettledReport(text, worker.reportSchema) });
+      capturedReports.set(worker, { generation: worker.generation, rawText: text, evaluation: evaluateSettledReport(text, worker.reportSchema) });
     },
     shouldRetryFallback: shouldRetryWorkerFallback,
     retryFallback: retryModelFallback,
@@ -1603,10 +1613,20 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       prompt: string;
       cwd: string;
       rebind?: WorkerSidecar;
+      missionOverride?: string;
       modelOverride?: string;
+      thinkingOverride?: string;
       allowFallback?: boolean;
       reportSchema?: string;
       forkSessionFile?: string;
+      extraExcludedTools?: string;
+      extraCliArgs?: string[];
+      systemPromptOverride?: string;
+      appendSystemPrompt?: string;
+      omitHandoffInstruction?: boolean;
+      envOverrides?: Record<string, string>;
+      suppressSettledNotice?: boolean;
+      countsTowardCapOverride?: boolean;
       lastPhaseTag?: string;
       fusion?: boolean;
       fusionParentSessionId?: string;
@@ -1647,7 +1667,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     }
     const thinking = isFusion && forcedFusionModel
       ? fusionLifecycle.configured?.sidekick.thinking
-      : params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
+      : params.thinkingOverride ?? params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
     let attempts = isFusion && forcedFusionModel
       ? [forcedFusionModel]
       : resolved?.attempts ?? modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
@@ -1670,7 +1690,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       instanceId,
       id,
       agent: def.name,
-      mission: params.rebind?.mission ?? missionFromPrompt(params.prompt),
+      mission: params.missionOverride?.trim()
+        ? cleanOneLine(params.missionOverride, 80)
+        : (params.rebind?.mission ?? missionFromPrompt(params.prompt)),
       cwd: params.cwd,
       model: modelLabel,
       thinking,
@@ -1704,7 +1726,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       latestResult: "",
       exitCode: null,
       notifiedGeneration: 0,
-      countsTowardCap: true,
+      countsTowardCap: params.countsTowardCapOverride ?? true,
+      suppressSettledNotice: params.suppressSettledNotice,
       closed: false,
       waiters: [],
       pendingUi: new Map(),
@@ -1736,6 +1759,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       );
     }
 
+    const baseExcludedTools = isFusion
+      ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom`
+      : EXCLUDED_CHILD_TOOLS;
+    const excludedTools = params.extraExcludedTools?.trim()
+      ? `${baseExcludedTools},${params.extraExcludedTools.trim()}`
+      : baseExcludedTools;
     const cliJs = process.argv[1];
     const args = [
       cliJs,
@@ -1743,7 +1772,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "rpc",
       "--session-dir",
       sessionDir,
-      ...childToolArgs(def, isFusion ? `${EXCLUDED_CHILD_TOOLS},todo_write,intercom` : EXCLUDED_CHILD_TOOLS),
+      ...childToolArgs(def, excludedTools),
       "--name",
       `async-${def.name}-${id}`,
     ];
@@ -1752,6 +1781,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     // under sessionDir; source file is the parent session.
     if (!params.rebind && params.forkSessionFile) {
       args.push("--fork", params.forkSessionFile);
+    }
+    if (params.extraCliArgs?.length) {
+      args.push(...params.extraCliArgs);
     }
     if (model) {
       const slash = model.indexOf("/");
@@ -1771,13 +1803,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     // Async workers support steering/follow-ups and UI requests; load mode-
     // correct shared norms rather than the fire-and-forget sync preamble.
     const shared = isFusion ? {} : composeSpecialistSharedPrompts("async");
-    const systemPrompt = [shared.systemPreamble, def.body]
-      .filter(Boolean)
-      .join("\n\n");
+    const systemPrompt = params.systemPromptOverride !== undefined
+      ? params.systemPromptOverride
+      : [shared.systemPreamble, def.body].filter(Boolean).join("\n\n");
     if (systemPrompt) args.push("--system-prompt", systemPrompt);
     const appendParts = [
       shared.appendSystemPrompt,
-      HANDOFF_INSTRUCTION,
+      params.omitHandoffInstruction ? undefined : HANDOFF_INSTRUCTION,
+      params.appendSystemPrompt,
       !params.rebind && params.reportSchema?.trim()
         ? reportInstruction(params.reportSchema)
         : undefined,
@@ -1801,6 +1834,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           PI_SUBAGENT_AGENT: def.name,
           PI_SUBAGENT_MODEL: modelLabel,
           ...(isFusion ? { PI_FUSION_SIDEKICK: "1" } : {}),
+          ...params.envOverrides,
         },
         onEvent: (event) => handleRpcEvent(worker, event),
         onUiRequest: (req) => handleUiRequest(worker, req),
@@ -4297,6 +4331,218 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   };
   installFleetControl(fleetControl);
 
+  const extensionRunner: TaskExtensionRunner = {
+    async spawn(req: TaskExtensionSpawnRequest) {
+      let baseDef = agents.get(req.agent);
+      if (!baseDef) {
+        const refreshed = discoverAgents(req.cwd);
+        for (const [k, v] of refreshed) agents.set(k, v);
+        baseDef = agents.get(req.agent);
+      }
+      if (!baseDef) {
+        return { ok: false, error: `Unknown subagent "${req.agent}".` };
+      }
+      const effectiveDef: AgentDef = {
+        ...baseDef,
+        ...(req.toolsOverride !== undefined ? { tools: req.toolsOverride } : {}),
+        ...(req.inheritSkillsOverride !== undefined
+          ? { inheritSkills: req.inheritSkillsOverride }
+          : {}),
+        ...(req.maxTurnsOverride !== undefined
+          ? { maxTurns: req.maxTurnsOverride }
+          : {}),
+        ...(req.timeoutSecOverride !== undefined
+          ? { timeoutSec: req.timeoutSecOverride }
+          : {}),
+      };
+      const startedAt = Date.now();
+      const spawned = await spawnWorker(effectiveDef, {
+        prompt: req.prompt,
+        cwd: req.cwd,
+        missionOverride: req.mission,
+        forkSessionFile: req.forkSessionFile,
+        modelOverride: req.modelOverride,
+        thinkingOverride: req.thinkingOverride,
+        extraExcludedTools: req.extraExcludedTools,
+        extraCliArgs: req.extraCliArgs,
+        systemPromptOverride: req.systemPromptOverride,
+        appendSystemPrompt: req.appendSystemPrompt,
+        omitHandoffInstruction: req.omitHandoffInstruction,
+        envOverrides: req.envOverrides,
+        suppressSettledNotice: true,
+        countsTowardCapOverride: false,
+        lastPhaseTag: `ext_spawn:${req.agent}`,
+        fusion: false,
+        ctx: req.ctx as ExtensionContext | undefined,
+      });
+      if (spawned.error || !spawned.worker) {
+        return { ok: false, error: spawned.error ?? "Failed to spawn worker" };
+      }
+      const worker = spawned.worker;
+
+      const toSnapshot = (w: Worker): TaskExtensionWorkerSnapshot => {
+        const running = w.ledger.running();
+        const latestTool = running.length
+          ? running.reduce((latest, activity) =>
+              activity.startedAt >= latest.startedAt ? activity : latest,
+            )
+          : undefined;
+        return {
+          id: w.id,
+          agent: w.agent,
+          model: w.model ?? "default model",
+          lifecycle: w.lifecycle,
+          phase: w.phase,
+          tool: latestTool?.tool,
+          toolSummary: latestTool?.summary,
+          turns: w.turns,
+          sessionFile: w.sessionFile,
+        };
+      };
+
+      let cancelledByCaller = false;
+      let finalized = false;
+      let resolveOutcome!: (outcome: TaskExtensionOutcome) => void;
+      const promise = new Promise<TaskExtensionOutcome>((resolve) => {
+        resolveOutcome = resolve;
+      });
+
+      const finalize = () => {
+        if (finalized) return;
+        finalized = true;
+        worker.subscribers?.delete(onWorkerNotify);
+        const elapsedMs = Date.now() - startedAt;
+        const isCancelled =
+          cancelledByCaller ||
+          worker.closed ||
+          (typeof worker.killReason === "string" &&
+            (worker.killReason.includes("abort") ||
+              worker.killReason === "task_close" ||
+              worker.killReason === "cancelled"));
+        if (isCancelled) {
+          if (!worker.closed) {
+            closeWorker(worker, "cancelled");
+          }
+          resolveOutcome({
+            status: "cancelled",
+            id: worker.id,
+            elapsedMs,
+          });
+          return;
+        }
+
+        // Reap ONLY the child process & sidecar without setting worker.closed = true,
+        // so the settled/failed run stays visible in the /agents dock history.
+        clearHard(worker);
+        clearIdle(worker);
+        clearAbortTimer(worker);
+        worker.countsTowardCap = false;
+        try {
+          worker.client?.closeStdin();
+        } catch {
+          // ignore
+        }
+        worker.client?.dispose();
+        const pid = worker.pid ?? worker.client?.pid;
+        if (pid != null) {
+          try {
+            killProcessTree(pid);
+          } catch {
+            // ignore
+          }
+        }
+        worker.client = undefined;
+        worker.pid = undefined;
+        try {
+          deleteWorkerSidecar(worker.sessionDir);
+        } catch {
+          // ignore
+        }
+        syncFleetWidget();
+
+        const captured = capturedReports.get(worker);
+        const rawText =
+          captured?.generation === worker.generation
+            ? captured.rawText
+            : worker.latestAssistantText;
+        if (worker.lifecycle === "settled") {
+          resolveOutcome({
+            status: "settled",
+            id: worker.id,
+            agent: worker.agent,
+            model: worker.model ?? "default model",
+            turns: worker.turns,
+            elapsedMs,
+            rawText,
+            sessionFile: worker.sessionFile,
+          });
+          return;
+        }
+        resolveOutcome({
+          status: "failed",
+          id: worker.id,
+          agent: worker.agent,
+          model: worker.model ?? "default model",
+          turns: worker.turns,
+          elapsedMs,
+          error:
+            worker.killReason ??
+            worker.modelError ??
+            worker.errors.at(-1) ??
+            "worker failed",
+          rawText: rawText || undefined,
+          sessionFile: worker.sessionFile,
+        });
+      };
+
+      const onWorkerNotify = () => {
+        if (finalized) return;
+        try {
+          req.onUpdate?.(toSnapshot(worker));
+        } catch {
+          // Listener errors must not break worker settlement.
+        }
+        if (
+          worker.closed ||
+          worker.lifecycle === "settled" ||
+          worker.lifecycle === "failed"
+        ) {
+          finalize();
+        }
+      };
+
+      worker.subscribers ??= new Set();
+      worker.subscribers.add(onWorkerNotify);
+      if (
+        worker.closed ||
+        worker.lifecycle === "settled" ||
+        worker.lifecycle === "failed"
+      ) {
+        finalize();
+      }
+
+      const handle: TaskExtensionRunHandle = {
+        id: worker.id,
+        agent: worker.agent,
+        model: worker.model ?? "default model",
+        startedAt,
+        snapshot: () => toSnapshot(worker),
+        cancel: async () => {
+          cancelledByCaller = true;
+          if (!worker.closed) {
+            closeWorker(worker, "cancelled");
+          }
+          finalize();
+        },
+        promise,
+      };
+      return { ok: true, handle };
+    },
+  };
+  if (process.env.PI_SUBAGENT !== "1") {
+    installTaskExtensionRunner(extensionRunner);
+  }
+
   // ---------------------------------------------------- settlement notice
 
   // Without this the settlement message renders as a raw `[async-task-settled]`
@@ -4489,6 +4735,9 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   });
   pi.on("session_start", (_event, ctx) => {
     installFleetControl(fleetControl);
+    if (process.env.PI_SUBAGENT !== "1") {
+      installTaskExtensionRunner(extensionRunner);
+    }
     removeFusionInputListener?.();
     try {
       lastBranchSnapshot = ctx?.sessionManager?.getBranch?.() ?? [];
@@ -4512,6 +4761,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
 
   pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
     removeFleetControl(fleetControl);
+    removeTaskExtensionRunner(extensionRunner);
     removeFusionInputListener?.();
     uiPromptDepth = 0;
     shuttingDown = true;

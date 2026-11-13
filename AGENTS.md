@@ -40,7 +40,7 @@ agent/extensions/
 ├── powershell.ts    + powershell/         direct PowerShell child process
 ├── crash-logger.ts  + crash-logger/       crash/lifecycle logs, terminal restore, segmenter shield
 ├── continual-memory.ts + continual-memory/  memory_list / memory_write
-├── deepen.ts        + deepen/             /deepen read-only prompt sharpener -> editor draft
+├── deepen.ts        + deepen/             /deepen read-only scribe prompt sharpener via subagent task plumbing -> editor draft
 ├── prompt-commands.ts + prompt-commands/  /mode (/mode hydra), /jippity, /orchestrate, /cua, /browser, /deploy
 ├── worktree.ts      + worktree/           isolated Git worktree add/list/remove + shipping helper
 ├── read-guard.ts                          duplicate-image + downscale + text re-read guard

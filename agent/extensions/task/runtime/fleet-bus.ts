@@ -224,6 +224,109 @@ export function removeFleetControl(control: FleetControl): void {
   }
 }
 
+/** Process-global key for the extension-worker runner bridge. */
+export const TASK_EXTENSION_RUNNER_KEY = "__piTaskExtensionRunner";
+
+export interface TaskExtensionWorkerSnapshot {
+  id: string;
+  agent: string;
+  model: string;
+  lifecycle: string;
+  phase: string;
+  tool?: string;
+  toolSummary?: string;
+  turns: number;
+  sessionFile?: string;
+}
+
+export interface TaskExtensionSpawnRequest {
+  agent: string;
+  prompt: string;
+  cwd: string;
+  mission?: string;
+  forkSessionFile?: string;
+  modelOverride?: string;
+  thinkingOverride?: string;
+  toolsOverride?: string;
+  extraExcludedTools?: string;
+  inheritSkillsOverride?: boolean;
+  extraCliArgs?: string[];
+  systemPromptOverride?: string;
+  appendSystemPrompt?: string;
+  omitHandoffInstruction?: boolean;
+  envOverrides?: Record<string, string>;
+  maxTurnsOverride?: number;
+  timeoutSecOverride?: number;
+  ctx?: unknown;
+  onUpdate?: (snapshot: TaskExtensionWorkerSnapshot) => void;
+}
+
+export type TaskExtensionOutcome =
+  | {
+      status: "settled";
+      id: string;
+      agent: string;
+      model: string;
+      turns: number;
+      elapsedMs: number;
+      rawText: string;
+      sessionFile?: string;
+    }
+  | {
+      status: "cancelled";
+      id?: string;
+      elapsedMs: number;
+    }
+  | {
+      status: "failed";
+      id?: string;
+      agent: string;
+      model: string;
+      turns: number;
+      elapsedMs: number;
+      error: string;
+      rawText?: string;
+      sessionFile?: string;
+    };
+
+export interface TaskExtensionRunHandle {
+  readonly id: string;
+  readonly agent: string;
+  readonly model: string;
+  readonly startedAt: number;
+  snapshot(): TaskExtensionWorkerSnapshot;
+  cancel(): Promise<void>;
+  promise: Promise<TaskExtensionOutcome>;
+}
+
+export interface TaskExtensionRunner {
+  spawn(
+    request: TaskExtensionSpawnRequest,
+  ): Promise<
+    { ok: true; handle: TaskExtensionRunHandle } | { ok: false; error: string }
+  >;
+}
+
+type ExtensionRunnerRoot = typeof globalThis & {
+  [TASK_EXTENSION_RUNNER_KEY]?: TaskExtensionRunner;
+};
+
+export function installTaskExtensionRunner(runner: TaskExtensionRunner): void {
+  (globalThis as ExtensionRunnerRoot)[TASK_EXTENSION_RUNNER_KEY] = runner;
+}
+
+/** Delete the installed runner, but only when it is still ours. */
+export function removeTaskExtensionRunner(runner: TaskExtensionRunner): void {
+  const root = globalThis as ExtensionRunnerRoot;
+  if (root[TASK_EXTENSION_RUNNER_KEY] === runner) {
+    delete root[TASK_EXTENSION_RUNNER_KEY];
+  }
+}
+
+export function getTaskExtensionRunner(): TaskExtensionRunner | undefined {
+  return (globalThis as ExtensionRunnerRoot)[TASK_EXTENSION_RUNNER_KEY];
+}
+
 /** Test helper: drop listeners and items so cases do not leak across files. */
 export function resetFleetBus(): void {
   const root = globalThis as typeof globalThis & {
