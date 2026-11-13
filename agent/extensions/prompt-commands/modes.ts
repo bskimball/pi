@@ -118,7 +118,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   let preferences = readPreferences(preferencePath);
   let state: ModeState = structuredClone(preferences);
   let changing = false;
-  let cuaEnabled = false;
+  let cuaEnabled = true;
   const availableTools = () => pi.getAllTools()
     .filter(tool => !isComputerUseTool(tool.name) || !tool.exposure || tool.exposure === "direct" || (tool.exposure as string) === "model-only")
     .map(tool => tool.name);
@@ -166,8 +166,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     else delete process.env.PI_HYDRA_TIER;
     if (tier && state.hydraScope) process.env.PI_HYDRA_SCOPE = state.hydraScope;
     else delete process.env.PI_HYDRA_SCOPE;
-    if (cuaEnabled) process.env.PI_CUA_ENABLED = "1";
-    else delete process.env.PI_CUA_ENABLED;
+    process.env.PI_CUA_ENABLED = cuaEnabled ? "1" : "0";
     process.env.PI_CUA_PARENT_PID = String(process.pid);
     writeParentCuaState(cuaEnabled);
     pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra, hydraScope: state.hydraScope, cuaEnabled });
@@ -901,8 +900,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         return;
       }
       cuaEnabled = nextCua;
-      if (cuaEnabled) process.env.PI_CUA_ENABLED = "1";
-      else delete process.env.PI_CUA_ENABLED;
+      process.env.PI_CUA_ENABLED = cuaEnabled ? "1" : "0";
       process.env.PI_CUA_PARENT_PID = String(process.pid);
       const active = pi.getActiveTools();
       pi.setActiveTools(toolsForMode(state.mode, cuaEnabled
@@ -924,8 +922,8 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     return undefined;
   });
   pi.on("session_start", async (event, ctx) => {
-    cuaEnabled = false;
-    if (ctx.hasUI) ctx.ui.setStatus("cua", undefined);
+    cuaEnabled = true;
+    if (ctx.hasUI) ctx.ui.setStatus("cua", "cua:on");
     preferences = readPreferences(preferencePath);
     recoveryBlocked = false;
     lastTurnAt = 0;
@@ -1123,7 +1121,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   });
   pi.on("before_agent_start", async (event, ctx) => {
     if (!cuaEnabled && pi.getActiveTools().some(isComputerUseTool)) {
-      pi.setActiveTools(toolsForMode(state.mode, pi.getActiveTools()));
+      pi.setActiveTools(toolsForMode(state.mode, pi.getActiveTools(), false));
     }
     await hydraRouteChain;
     const tier = activeHydra();

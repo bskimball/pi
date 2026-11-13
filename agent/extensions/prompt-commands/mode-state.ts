@@ -121,7 +121,7 @@ export function isSubagentCuaEnabled(env: NodeJS.ProcessEnv = process.env): bool
       return false;
     }
   }
-  return env.PI_CUA_ENABLED === "1";
+  return env.PI_CUA_ENABLED !== "0";
 }
 
 /** Fusion-owned: persistent-sidekick modes do not expose chain/rebind. */
@@ -134,7 +134,7 @@ export function toolsForWork(names: string[]): string[] {
   return names.filter(name => name !== "task_chain" && name !== "task_rebind");
 }
 
-export function toolsForMode(mode: Mode, names: string[], cuaEnabled = false): string[] {
+export function toolsForMode(mode: Mode, names: string[], cuaEnabled = true): string[] {
   const filtered = cuaEnabled ? names : names.filter(name => !isComputerUseTool(name));
   if (mode === "fusion") return toolsForFusion(filtered);
   if (mode === "work") return toolsForWork(filtered);

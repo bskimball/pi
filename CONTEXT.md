@@ -19,6 +19,7 @@ packages/ui-kit/            # shared presentation package (not a Pi extension)
 ├── crash-logger/           # crash/watchdog implementation
 ├── bg-process/             # background-process implementation
 ├── continual-memory/       # memory storage implementation
+├── deepen/                 # /deepen read-only prompt sharpener implementation
 ├── prompt-commands/        # browser/deploy command implementation
 ├── at-path-complete.ts     # scoped @ listing that ignores gitignore
 └── top-level adapters      # stock-rendered independent extensions
