@@ -43,6 +43,22 @@ describe("async worker model fallback policy", () => {
     assert.equal(isModelFallbackError("abort requested"), false);
   });
 
+  it("retries Muse model-not-found failures only before output or tools", () => {
+    const modelError =
+      "Muse failed: model `muse-ember-1.0` does not exist or you lack access [request_id=1fd80fab-0b9c-4f96-8438-7f7e46b915f2]";
+    assert.equal(isModelFallbackError(modelError), true);
+    assert.equal(shouldRetryModelFallback({ ...retryable, modelError }), true);
+    assert.equal(
+      shouldRetryModelFallback({ ...retryable, modelError, activitiesStarted: 1 }),
+      false,
+    );
+    assert.equal(
+      shouldRetryModelFallback({ ...retryable, modelError, resultText: "partial" }),
+      false,
+    );
+    assert.equal(isModelFallbackError("file `config.json` does not exist"), false);
+  });
+
   it("does not replay after output, tools, kills, non-model errors, or the last model", () => {
     assert.equal(
       shouldRetryModelFallback({ ...retryable, resultText: "partial result" }),

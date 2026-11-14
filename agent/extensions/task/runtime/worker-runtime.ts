@@ -196,7 +196,7 @@ export interface ModelFallbackState {
 }
 
 const MODEL_FALLBACK_ERROR_PATTERN =
-  /\b(?:auth[_ -]?unavailable|no auth available|no api key(?: found)?|unauthori[sz]ed|forbidden|authentication(?: failed| unavailable)?|invalid api key|model (?:not found|unavailable)|provider (?:unavailable|returned (?:an )?error)|overloaded|rate.?limit(?:ed)?|too many requests|service.?unavailable|server.?error|internal.?error|(?:http\s*)?(?:429|500|502|503|504|524))\b/i;
+  /\b(?:auth[_ -]?unavailable|no auth available|no api key(?: found)?|unauthori[sz]ed|forbidden|authentication(?: failed| unavailable)?|invalid api key|model (?:not found|unavailable|[`"'][^`"'\r\n]+[`"'] does not exist)|provider (?:unavailable|returned (?:an )?error)|overloaded|rate.?limit(?:ed)?|too many requests|service.?unavailable|server.?error|internal.?error|(?:http\s*)?(?:429|500|502|503|504|524))\b/i;
 
 /** True only for terminal provider/model failures where another configured
  * model can reasonably succeed. Tool, implementation, context, and control
