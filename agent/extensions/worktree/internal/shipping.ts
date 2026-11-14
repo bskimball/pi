@@ -141,7 +141,8 @@ export async function shipping(cwd: string, owner: string, p: ShippingInput, exe
       if (t.route === "pr" && t.delivery !== "local" && t.branch === target) throw new Error("PR delivery requires a task branch, not the default branch.");
       for (const check of t.checks) if (!check.command || check.command.startsWith("-") || !Array.isArray(check.args)) throw new Error("Checks require an executable and argv array, not a shell script.");
       assertScope(root, t.base, head(root), paths);
-      const collision = tasks(root).find(other => !other.cleaned && other.root === root && other.branch === t.branch);
+      const collision = tasks(root).find(other => !other.cleaned && other.root === root && other.branch === t.branch
+        && (!other.landed || !isAncestor(root, other.landed.commit, head(root))));
       if (collision) throw new Error(`Checkout already belongs to task ${collision.id}; resume it or use an isolated task worktree.`);
       saveTask(root, t); return taskSummary(t);
     }
@@ -163,9 +164,26 @@ export async function shipping(cwd: string, owner: string, p: ShippingInput, exe
     }
     if (p.operation === "authorize") {
       authorization(p);
-      if (!t.remote || !t.checks.length) throw new Error("Task lacks a remote/check contract; register a properly scoped delivery task.");
-      if (p.delivery === "pr" && t.route !== "pr") throw new Error("Direct tasks cannot be published as PRs without a new explicit contract.");
-      t.delivery = required(p.delivery, "delivery"); saveTask(root, t); return taskSummary(t);
+      const delivery = required(p.delivery, "delivery");
+      if (!t.checks.length) throw new Error("Task lacks a canonical check contract.");
+      if ((p.route && p.route !== t.route) || (p.target && p.target !== t.target)) throw new Error("Authorization cannot change the recorded route or target.");
+      if (p.remote && t.remote && p.remote !== t.remote) throw new Error("Authorization cannot change the recorded remote.");
+      if (p.repo && t.repo && p.repo.toLowerCase() !== t.repo.toLowerCase()) throw new Error("Authorization cannot change the recorded repository.");
+      const candidate = { ...t, delivery };
+      if (t.remote) {
+        if (p.repo && !t.repo) throw new Error("Authorization cannot enrich an already bound destination.");
+        checkRemote(t);
+      } else {
+        if (t.delivery !== "local") throw new Error("Only a local task can bind an initially absent remote.");
+        candidate.remote = required(p.remote, "explicit configured remote");
+        candidate.repo = t.repo ?? p.repo;
+        const url = remoteUrl(candidate);
+        if ((candidate.route === "pr" || candidate.repo) && (!candidate.repo || githubRepo(url)?.toLowerCase() !== candidate.repo.toLowerCase())) throw new Error("Explicit GitHub owner/repo must match the configured remote.");
+        candidate.remoteHash = digest(url);
+      }
+      if (delivery === "pr" && t.route !== "pr") throw new Error("Direct tasks cannot be published as PRs without a new explicit contract.");
+      if (t.route === "pr" && delivery !== "local" && t.branch === t.target) throw new Error("PR delivery requires a task branch, not the default branch.");
+      saveTask(root, candidate); return taskSummary(candidate);
     }
     if (p.operation === "release") {
       authorization(p);
@@ -200,10 +218,13 @@ export async function shipping(cwd: string, owner: string, p: ShippingInput, exe
       const paths = w?.paths ?? t.paths;
       if (git(path, ["diff", "--cached", "--name-only", "-z"]).split("\0").some(f => f && !owns(paths, f))) throw new Error("Unrelated staged changes exist; leave the index untouched and ask their owner.");
       const files = dirty(path).filter(f => owns(paths, f));
-      if (files.length) {
-        git(path, ["--literal-pathspecs", "add", "--", ...files]);
+      const merging = existsSync(resolve(path, git(path, ["rev-parse", "--git-path", "MERGE_HEAD"])));
+      if (files.length || merging) {
+        if (files.length) git(path, ["--literal-pathspecs", "add", "--", ...files]);
         git(path, ["diff", "--cached", "--check"]);
-        git(path, ["--literal-pathspecs", "commit", "--only", "-m", required(p.message, "commit message"), "--", ...files]);
+        const message = required(p.message, "commit message");
+        if (merging) git(path, ["commit", "-m", message]);
+        else git(path, ["--literal-pathspecs", "commit", "--only", "-m", message, "--", ...files]);
       }
       if (w) { delete w.settled; delete w.integrated; saveTree(root, w); }
       return { task: id, checkpoint: head(path), path, preserved: dirty(path) };

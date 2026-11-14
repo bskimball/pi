@@ -119,7 +119,7 @@ export function checkTree(root: string, tree: OwnedTree): void {
 }
 export function registerTree(root: string, tree: OwnedTree): void {
   const old = trees(root).find(w => w.path === tree.path && !w.removed);
-  if (old && (old.owner !== tree.owner || old.task !== tree.task)) throw new Error("Worktree is already owned by another session/task.");
+  if (old && (old.owner !== tree.owner || (old.task !== undefined && old.task !== tree.task))) throw new Error("Worktree is already owned by another session/task.");
   saveTree(root, tree);
 }
 // Shared across all Pi sessions in the repository. Git still protects against external writers;

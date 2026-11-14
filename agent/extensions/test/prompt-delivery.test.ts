@@ -139,7 +139,7 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
           /Ephemeral specialists when distinct judgment or isolation pays:/,
         ],
         "apex-orchestrate": [/read-only outcome gets one appropriate evidence-returning role/, /one writer, and independent Oracle review/, /exact integrated content and environment are unchanged/, /User-visible live-page changes still need Inspector proof/],
-        fusion: [/Coherent bounded edits, narrow known-path lookups, and small subtle integration work may stay inline/, /inspect the actual diff \(for writers\), boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/],
+        fusion: [/execution is theirs by default: iterative edit\/run\/inspect loops/, /Sidekick by default for execution/, /Put each item's owner, `lead` or `sidekick`, in its note/, /inspect the actual diff \(for writers\), boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/],
         work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/],
       };
       for (const [projection, text] of [["Pi", current], ["Muse", musePrompt], ["bridge", projected!]]) {
