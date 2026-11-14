@@ -206,6 +206,8 @@ import {
   fusionContextGuardReceipt,
   fusionContextGuardSteer,
   fusionContextOverLimit,
+  isMuseWorker,
+  refreshMuseContextTokens,
   type FusionConfigureEvent,
   type FusionObservedIdentity,
 } from "./runtime/fusion-lifecycle.ts";
@@ -1415,24 +1417,42 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
 
   // The reuse limit only gates the next unit; this keeps a running unit from
   // spending most of its tokens above it. One steer per generation.
-  const guardSidekickContext = (worker: Worker) => {
-    const tokens = worker.latestContextTokens;
+  const guardSidekickContext = async (worker: Worker) => {
     if (
       !worker.fusion ||
       worker.closed ||
       worker.lifecycle !== "running" ||
       worker.contextGuardGeneration === worker.generation ||
-      tokens === undefined ||
-      !fusionContextOverLimit(tokens) ||
       !worker.client ||
       worker.client.isClosed
     ) {
       return;
     }
+
+    const generation = worker.generation;
+    const client = worker.client;
+    const tokens = isMuseWorker(worker)
+      ? await refreshMuseContextTokens(worker)
+      : worker.latestContextTokens;
+
+    if (
+      !worker.fusion ||
+      worker.closed ||
+      worker.lifecycle !== "running" ||
+      worker.generation !== generation ||
+      worker.client !== client ||
+      client.isClosed ||
+      worker.contextGuardGeneration === worker.generation ||
+      tokens === undefined ||
+      !fusionContextOverLimit(tokens)
+    ) {
+      return;
+    }
+
     worker.contextGuardGeneration = worker.generation;
     worker.directive = { queued: true, text: "context guard: settle with handoff" };
     notifySubscribers(worker);
-    worker.client
+    client
       .request({ type: "steer", message: fusionContextGuardSteer(tokens) }, 30_000)
       .catch(() => undefined);
   };
@@ -1918,9 +1938,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             closeWorker(worker, "Fusion transcript restore rejected", "sync");
             return { error: `${id} could not restore Fusion transcript: ${switched.error ?? "unknown"}` };
           }
-          const stats = await client.request({ type: "get_session_stats" }, 30_000).catch(() => undefined);
-          const statsData = stats?.success ? stats.data as { contextUsage?: { tokens?: unknown } } | undefined : undefined;
-          const tokens = statsData?.contextUsage?.tokens;
+          let tokens: unknown;
+          if (isMuseWorker(worker)) {
+            tokens = await refreshMuseContextTokens(worker);
+          } else {
+            const stats = await client.request({ type: "get_session_stats" }, 30_000).catch(() => undefined);
+            const statsData = stats?.success ? stats.data as { contextUsage?: { tokens?: unknown } } | undefined : undefined;
+            tokens = statsData?.contextUsage?.tokens;
+          }
           if (typeof tokens === "number" && Number.isFinite(tokens)) {
             worker.latestContextTokens = tokens;
             if (fusionContextOverLimit(tokens)) {

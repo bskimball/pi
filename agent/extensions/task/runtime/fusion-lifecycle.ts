@@ -6,6 +6,7 @@
 // (process spawn, RPC framing) stays in async-task.ts, bound through the
 // dependency surface below. Sequencing failures report in thrown errors.
 
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import {
   isLiveLifecycle,
   splitQualifiedModel,
@@ -118,6 +119,29 @@ export const FUSION_REUSE_CONTEXT_TOKENS = 100_000;
 
 export function fusionContextOverLimit(tokens: number | undefined): boolean {
   return tokens !== undefined && Number.isFinite(tokens) && tokens > FUSION_REUSE_CONTEXT_TOKENS;
+}
+
+export function isMuseWorker(worker: Pick<FusionWorkerState, "model">): boolean {
+  return splitQualifiedModel(worker.model ?? "")?.provider === "muse-code";
+}
+
+// Muse usage totals span internal CLI steps, not a single context window.
+export async function refreshMuseContextTokens(worker: FusionWorkerState): Promise<number | undefined> {
+  const client = worker.client;
+  const generation = worker.generation;
+  if (!client || client.isClosed || worker.closed) return undefined;
+  try {
+    const response = await client.request({ type: "get_messages" }, 30_000);
+    const data = response.data as { messages?: unknown } | undefined;
+    if (!response.success || !Array.isArray(data?.messages)) return undefined;
+    const messages = data.messages as Parameters<typeof estimateTokens>[0][];
+    const tokens = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    if (worker.closed || worker.client !== client || worker.generation !== generation) return undefined;
+    worker.latestContextTokens = tokens;
+    return tokens;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Mid-unit steer sent once per generation when a running sidekick crosses the reuse limit. */

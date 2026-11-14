@@ -858,6 +858,76 @@ describe("WorkerRuntime control plane", () => {
     runtime.clearTimers(item);
   });
 
+  it("skips aggregate usage assignment and fires onMidTurnContext on every Muse assistant message including stop", () => {
+    const runtime = new WorkerRuntime<RuntimeEventWorker>();
+    const museItem = worker({ latestContextTokens: 12_345 });
+    let museHookCalls = 0;
+    const museHooks = hooks({
+      onMidTurnContext: () => {
+        museHookCalls++;
+      },
+    });
+
+    runtime.handleEvent(
+      museItem,
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          provider: "muse-code",
+          stopReason: "toolUse",
+          usage: { input: 269_580, cacheRead: 178_920, cacheWrite: 0 },
+        },
+      },
+      museHooks,
+    );
+    assert.equal(museItem.latestContextTokens, 12_345);
+    assert.equal(museHookCalls, 1);
+
+    runtime.handleEvent(
+      museItem,
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          api: "muse-code-cli",
+          stopReason: "stop",
+          usage: { input: 634_035, cacheRead: 541_752, cacheWrite: 0 },
+        },
+      },
+      museHooks,
+    );
+    assert.equal(museItem.latestContextTokens, 12_345);
+    assert.equal(museHookCalls, 2);
+
+    // Non-Muse provider behavior remains unchanged.
+    const anthropicItem = worker();
+    let nonMuseHookCalls = 0;
+    const nonMuseHooks = hooks({
+      onMidTurnContext: () => {
+        nonMuseHookCalls++;
+      },
+    });
+    runtime.handleEvent(
+      anthropicItem,
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          stopReason: "stop",
+          usage: { input: 10_000, cacheRead: 5_000, cacheWrite: 500 },
+        },
+      },
+      nonMuseHooks,
+    );
+    assert.equal(anthropicItem.latestContextTokens, 15_500);
+    assert.equal(nonMuseHookCalls, 0);
+
+    runtime.clearTimers(museItem);
+    runtime.clearTimers(anthropicItem);
+  });
+
   it("owns transport-exit settlement, cap release, and pruning", () => {
     const runtime = new WorkerRuntime<RuntimeEventWorker>({ maxSettled: 1 });
     const old = worker({

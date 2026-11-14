@@ -682,13 +682,18 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         if (message && typeof message === "object") {
           const assistant = message as {
             role?: string;
+            provider?: string;
+            api?: string;
             stopReason?: string;
             errorMessage?: string;
             usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
           };
           if (assistant.role === "assistant") {
             const usage = assistant.usage;
-            if (usage && [usage.input, usage.cacheRead, usage.cacheWrite].every(
+            const isMuse = assistant.provider === "muse-code" || assistant.api === "muse-code-cli";
+            if (isMuse) {
+              hooks.onMidTurnContext?.(worker);
+            } else if (usage && [usage.input, usage.cacheRead, usage.cacheWrite].every(
               (value) => typeof value === "number" && Number.isFinite(value),
             )) {
               worker.latestContextTokens = usage.input! + usage.cacheRead! + usage.cacheWrite!;

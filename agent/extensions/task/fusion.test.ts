@@ -16,6 +16,8 @@ import {
   fusionContextGuardSteer,
   fusionContextOverLimit,
   fusionModelId,
+  isMuseWorker,
+  refreshMuseContextTokens,
 } from "./runtime/fusion-lifecycle.ts";
 
 function fusionHarness(
@@ -72,6 +74,136 @@ test("Fusion discovers the renamed sidekick profile without the old alias", () =
   assert.equal(agents.has("sidekick"), true);
   assert.equal(agents.get("sidekick")?.file.replaceAll("\\", "/").endsWith("agent/agents/sidekick.md"), true);
   assert.equal(agents.has("fusion-sidekick"), false);
+});
+
+test("isMuseWorker matches exact muse-code provider only", () => {
+  assert.equal(isMuseWorker({ model: "muse-code/muse-ember-1.0" }), true);
+  assert.equal(isMuseWorker({ model: "muse-code/muse-wonder-1.0" }), true);
+  assert.equal(isMuseWorker({ model: "anthropic/claude-sonnet-4-5" }), false);
+  assert.equal(isMuseWorker({ model: "muse-ember" }), false);
+  assert.equal(isMuseWorker({ model: "muse-wonder/1.0" }), false);
+  assert.equal(isMuseWorker({ model: undefined }), false);
+});
+
+test("refreshMuseContextTokens estimates from data.messages, persists under-limit and over-limit estimates, and ignores aggregate usage", async () => {
+  const { fusionWorker } = fusionHarness();
+  const smallMessages = [
+    { role: "user", content: "Inspect the repository layout.", timestamp: 1 },
+    {
+      role: "assistant",
+      provider: "muse-code",
+      api: "muse-code-cli",
+      model: "muse-ember-1.0",
+      content: [{ type: "text", text: "Checked the layout." }],
+      usage: { input: 269_580, cacheRead: 178_920, cacheWrite: 0, output: 1_200, totalTokens: 449_700 },
+      stopReason: "stop",
+      timestamp: 2,
+    },
+  ];
+  const underLimitWorker = fusionWorker({
+    model: "muse-code/muse-ember-1.0",
+    latestContextTokens: 448_500,
+    client: {
+      isClosed: false,
+      request: async (req: { type: string }) => {
+        assert.equal(req.type, "get_messages");
+        return { success: true, data: { messages: smallMessages } };
+      },
+    },
+  });
+
+  const underTokens = await refreshMuseContextTokens(underLimitWorker);
+  assert.equal(typeof underTokens, "number");
+  assert.equal(underTokens! > 0 && underTokens! < FUSION_REUSE_CONTEXT_TOKENS, true);
+  assert.equal(fusionContextOverLimit(underTokens), false);
+  assert.equal(underLimitWorker.latestContextTokens, underTokens);
+
+  const largeMessages = [
+    { role: "user", content: "x".repeat(450_000), timestamp: 1 },
+    {
+      role: "assistant",
+      provider: "muse-code",
+      api: "muse-code-cli",
+      model: "muse-ember-1.0",
+      content: [{ type: "text", text: "Done." }],
+      usage: { input: 634_035, cacheRead: 541_752, cacheWrite: 0, output: 500, totalTokens: 1_176_287 },
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+  ];
+  const overLimitWorker = fusionWorker({
+    model: "muse-code/muse-ember-1.0",
+    latestContextTokens: 100,
+    client: {
+      isClosed: false,
+      request: async () => ({ success: true, data: { messages: largeMessages } }),
+    },
+  });
+
+  const overTokens = await refreshMuseContextTokens(overLimitWorker);
+  assert.equal(typeof overTokens, "number");
+  assert.equal(fusionContextOverLimit(overTokens), true);
+  assert.equal(overLimitWorker.latestContextTokens, overTokens);
+});
+
+test("refreshMuseContextTokens guards against invalid data.messages, RPC failure, and stale generation or client across await", async () => {
+  const { fusionWorker } = fusionHarness();
+  const sampleMessages = [{ role: "user", content: "hello", timestamp: 1 }];
+
+  for (const response of [
+    { success: false, data: { messages: sampleMessages } },
+    { success: true, data: undefined },
+    { success: true, data: { messages: "not-an-array" } },
+  ]) {
+    const w = fusionWorker({
+      model: "muse-code/muse-ember-1.0",
+      latestContextTokens: 4_200,
+      client: { isClosed: false, request: async () => response },
+    });
+    assert.equal(await refreshMuseContextTokens(w), undefined);
+    assert.equal(w.latestContextTokens, 4_200);
+  }
+
+  const failingWorker = fusionWorker({
+    model: "muse-code/muse-ember-1.0",
+    latestContextTokens: 5_100,
+    client: {
+      isClosed: false,
+      request: async () => { throw new Error("rpc timeout"); },
+    },
+  });
+  assert.equal(await refreshMuseContextTokens(failingWorker), undefined);
+  assert.equal(failingWorker.latestContextTokens, 5_100);
+
+  const staleGenWorker = fusionWorker({
+    model: "muse-code/muse-ember-1.0",
+    generation: 2,
+    latestContextTokens: 6_300,
+    client: {
+      isClosed: false,
+      request: async () => {
+        staleGenWorker.generation = 3;
+        return { success: true, data: { messages: sampleMessages } };
+      },
+    },
+  });
+  assert.equal(await refreshMuseContextTokens(staleGenWorker), undefined);
+  assert.equal(staleGenWorker.latestContextTokens, 6_300);
+
+  const otherClient = { isClosed: false, request: async () => ({ success: true }) };
+  const staleClientWorker = fusionWorker({
+    model: "muse-code/muse-ember-1.0",
+    latestContextTokens: 7_400,
+    client: {
+      isClosed: false,
+      request: async () => {
+        staleClientWorker.client = otherClient;
+        return { success: true, data: { messages: sampleMessages } };
+      },
+    },
+  });
+  assert.equal(await refreshMuseContextTokens(staleClientWorker), undefined);
+  assert.equal(staleClientWorker.latestContextTokens, 7_400);
 });
 
 test("Fusion identity receipts separate configuration from child-reported point-in-time state", () => {
