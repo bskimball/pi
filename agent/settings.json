@@ -7,8 +7,14 @@
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
     "npm:pi-claude-bridge",
-    "npm:pi-antigravity",
+    {
+      "source": "npm:pi-antigravity",
+      "extensions": []
+    },
     "npm:@amaster.ai/pi-computer-use"
+  ],
+  "extensions": [
+    "-extensions/antigravity-ua.ts"
   ],
   "skills": [],
   "pi-computer-use": {

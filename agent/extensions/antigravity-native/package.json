@@ -1,0 +1,7 @@
+{
+  "name": "pi-antigravity-native",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.ts"] },
+  "dependencies": { "pi-agy-acp": "0.1.3" }
+}

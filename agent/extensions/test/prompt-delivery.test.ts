@@ -87,11 +87,15 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
     writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({ ...initialPreferences(), fusion: { lead: { provider: "test", modelId: "lead", thinking: "off" }, sidekick: { provider: "test", modelId: "side", thinking: "off" } } }));
     const handlers: Record<string, Function[]> = {};
     const commands: Record<string, Function> = {};
+    let nativeGuidance: { mode: string; instructions: string } | undefined;
     const pi: any = {
       on(name: string, fn: Function) { (handlers[name] ??= []).push(fn); },
       registerCommand(name: string, spec: any) { commands[name] = spec.handler; },
       registerTool() {}, registerShortcut() {}, registerMessageRenderer() {}, registerEntryRenderer() {}, appendEntry() {},
-      events: { emit(name: string, data: any) { if (name === "pi:fusion:configure") data.acknowledged = true; } }, getAllTools: () => [], getActiveTools: () => [], setActiveTools() {},
+      events: { emit(name: string, data: any) {
+        if (name === "pi:fusion:configure") data.acknowledged = true;
+        if (name === "pi:modes:guidance") nativeGuidance = data;
+      } }, getAllTools: () => [], getActiveTools: () => [], setActiveTools() {},
       getThinkingLevel: () => "off", setThinkingLevel() {}, setModel: async () => true,
     };
     registerModes(pi, REGULAR_SYSTEM_BLOCK, ORCHESTRATE_SYSTEM_BLOCK, FUSION_SYSTEM_BLOCK, WORK_SYSTEM_PROMPT, FUSION_PREFACE, PI_SYSTEM_BLOCK, UTOPIA_SYSTEM_BLOCK);
@@ -110,6 +114,12 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
         current = options.forceSystemPrompt ?? buildSystemPrompt(options);
       }
       assert.match(current, new RegExp(marker));
+      const nativeCards: Record<string, string> = {
+        apex: REGULAR_SYSTEM_BLOCK, "apex-orchestrate": ORCHESTRATE_SYSTEM_BLOCK,
+        fusion: FUSION_PREFACE + FUSION_SYSTEM_BLOCK,
+      };
+      assert.deepEqual(nativeGuidance, { mode, instructions: nativeCards[mode] ?? "" });
+      assert.doesNotMatch(nativeGuidance!.instructions, /Caller base|Caller append|Profile delivery token|Continual memory/);
       const musePrompt = prepareRequest({ systemPrompt: current, messages: [{ role: "user", content: "Actual user request", timestamp: 0 }] }, dir).prompt;
       assert.match(musePrompt, new RegExp(marker), `${mode} Muse projection lost mode block`);
       if (mode !== "pi") {

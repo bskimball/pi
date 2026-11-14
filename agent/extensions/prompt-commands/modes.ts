@@ -1132,6 +1132,11 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     jevRoutedThisTurn = false;
     lastTurnAt = Date.now();
     const options = event.systemPromptOptions;
+    let nativeGuidance = "";
+    if (state.mode === "apex") nativeGuidance = regular;
+    else if (state.mode === "apex-orchestrate") nativeGuidance = orchestrate;
+    else if (state.mode === "fusion") nativeGuidance = fusionPreface + fusion;
+    pi.events.emit("pi:modes:guidance", { mode: state.mode, instructions: nativeGuidance });
     if (state.mode === "apex") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, regular);
     else if (state.mode === "utopia") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, utopia || regular);
     else if (state.mode === "apex-orchestrate") options.appendSystemPrompt = joinPromptAppends(options.appendSystemPrompt, orchestrate);
