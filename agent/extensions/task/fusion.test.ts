@@ -476,6 +476,9 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.equal(model.kind, "conflict");
   assert.match(model.reason, /\/mode configure/);
   assert.doesNotMatch(model.reason, /task_close/);
+  const thinking = await h.lifecycle.reuse("x", { thinking: "xhigh" }, 1000) as any;
+  assert.equal(thinking.kind, "conflict");
+  assert.match(thinking.reason, /thinking are owned by \/mode configure/);
   const fork = await h.lifecycle.reuse("x", { context: "fork" }, 1000) as any;
   assert.equal(fork.kind, "conflict");
   assert.match(fork.reason, /cannot fork a transcript/);

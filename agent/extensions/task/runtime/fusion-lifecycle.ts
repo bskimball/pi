@@ -168,6 +168,7 @@ export interface PersistedTranscript {
 
 export interface ReuseInputs {
   model?: string;
+  thinking?: string;
   context?: string;
   reportSchema?: string;
   /** Already resolved against the caller cwd; compared verbatim. */
@@ -533,12 +534,12 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
       };
     }
     if (!all.length) return wantsFresh ? { kind: "fresh" } : { kind: "none" };
-    if (inputs.model?.trim()) {
+    if (inputs.model?.trim() || inputs.thinking?.trim()) {
       return {
         kind: "conflict",
         reason:
-          `Fusion sidekick reuse accepts only a prompt; the sidekick model is owned by /mode configure, ` +
-          `not by a fresh worker. Run /mode configure to change it.`,
+          `Fusion sidekick reuse accepts only a prompt; the sidekick model and thinking are owned by /mode configure, ` +
+          `not by a fresh worker. Run /mode configure to change them.`,
       };
     }
     if (inputs.context !== undefined && !wantsFresh) {

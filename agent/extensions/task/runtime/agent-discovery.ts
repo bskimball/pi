@@ -1,6 +1,23 @@
 /** Task adapter over the kit Agent Catalog. Spawn policy stays in this extension. */
 import { modelAttempts as catalogModelAttempts, resolveAgentThinking as catalogResolveAgentThinking, type AgentDef } from "@pi/ui-kit";
 
+/** Pi CLI thinking levels. Case-insensitive on input; stored lowercase. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export const THINKING_OVERRIDE_DESCRIPTION =
+  "Optional thinking level for this delegation only: off, minimal, low, medium, high, xhigh, or max. Leave unset to use the agent's configured thinking. Set only when the user explicitly requested a thinking level for that delegation. A Fusion/Utopia sidekick with a configured pair rejects this; change that pair with /mode configure.";
+
+/** Empty or whitespace is unset. Unknown values are an error, not a silent fallback. */
+export function parseThinkingOverride(value: string | undefined): { thinking?: string; error?: string } {
+  const trimmed = value?.trim();
+  if (!trimmed) return {};
+  const level = trimmed.toLowerCase();
+  if (!(THINKING_LEVELS as readonly string[]).includes(level)) {
+    return { error: `Invalid thinking level "${trimmed}". Use one of: ${THINKING_LEVELS.join(", ")}.` };
+  }
+  return { thinking: level };
+}
+
 /** Opt-in single-model execution; ordinary spawns retain declared fallbacks. */
 export function modelAttempts(
   def: AgentDef,

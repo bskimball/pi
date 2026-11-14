@@ -32,8 +32,10 @@ import {
   modelInHydraScope,
   orchestrateAgentList,
   orchestrateAgentParamDescription,
+  parseThinkingOverride,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
+  THINKING_OVERRIDE_DESCRIPTION,
   scopeAttemptChain,
   hydraScopeProviders,
   stderrDiagnostic,
@@ -1661,13 +1663,25 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           emitEvent: (ev, payload) => pi.events.emit(ev, payload),
         })
       : undefined;
+    const thinkingRequest = parseThinkingOverride(params.thinkingOverride);
+    if (thinkingRequest.error) return { error: thinkingRequest.error };
     if (resolved?.error) return { error: resolved.error };
     if (isFusion && forcedFusionModel && !modelInHydraScope(forcedFusionModel)) {
       return { error: `Hydra scope "${process.env.PI_HYDRA_SCOPE}" excludes the configured Fusion sidekick (${forcedFusionModel ?? "none"}); refusing out-of-scope spawn. Run /jippity off or reconfigure the pair.` };
     }
+    if (
+      thinkingRequest.thinking &&
+      isFusion &&
+      forcedFusionModel &&
+      thinkingRequest.thinking !== fusionLifecycle.configured?.sidekick.thinking
+    ) {
+      return {
+        error: `Fusion sidekick thinking is owned by /mode configure (${fusionLifecycle.configured?.sidekick.thinking ?? "unset"}), not a per-call override.`,
+      };
+    }
     const thinking = isFusion && forcedFusionModel
       ? fusionLifecycle.configured?.sidekick.thinking
-      : params.thinkingOverride ?? params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
+      : thinkingRequest.thinking ?? params.rebind?.thinking ?? resolved?.thinking ?? resolveAgentThinking(def, pi.getThinkingLevel());
     let attempts = isFusion && forcedFusionModel
       ? [forcedFusionModel]
       : resolved?.attempts ?? modelAttempts(def, params.rebind?.model ?? params.modelOverride, params.rebind?.allowFallback ?? params.allowFallback);
@@ -2214,6 +2228,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
       }),
     ),
+    thinking: Type.Optional(
+      Type.String({
+        description: THINKING_OVERRIDE_DESCRIPTION,
+      }),
+    ),
     reportSchema: Type.Optional(
       Type.String({
         description:
@@ -2260,6 +2279,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
+      const thinkingRequest = parseThinkingOverride(params.thinking);
+      if (thinkingRequest.error) return textResult(thinkingRequest.error, true);
       const sidekickMode = persistentSidekickMode();
       const isSidekickSpawn = Boolean(sidekickMode || (allowsPersistentSidekick() && params.agent === "sidekick"));
       // Only the first sidekick resumes the persisted transcript; parallel
@@ -2285,10 +2306,17 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             }
           }
         }
+        if (thinkingRequest.thinking && fusionLifecycle.configured?.sidekick) {
+          return textResult(
+            `Sidekick thinking is owned by /mode configure (${fusionLifecycle.configured.sidekick.thinking ?? "unset"}), not a per-call override.`,
+            true,
+          );
+        }
         const outcome = await fusionLifecycle.reuse(
           params.prompt,
           {
             model: params.model,
+            thinking: params.thinking,
             context: params.context,
             reportSchema: params.reportSchema,
             cwd: params.cwd ? resolveCwd(params.cwd, ctx.cwd) : undefined,
@@ -2379,6 +2407,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         prompt: params.prompt,
         cwd,
         modelOverride: params.model?.trim() || undefined,
+        thinkingOverride: thinkingRequest.thinking,
         allowFallback: params.allowFallback,
         reportSchema,
         forkSessionFile,
@@ -2417,7 +2446,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       priorContextTokens ??= restoredContextTokens;
       const identityLines = worker.fusion && fusionLifecycle.configured
         ? fusionIdentityReceipt(fusionLifecycle.configured, fusionObserved)
-        : [`model: ${worker.model ?? "default"}`];
+        : [
+            `model: ${worker.model ?? "default"}`,
+            worker.thinking ? `thinking: ${worker.thinking}` : undefined,
+          ].filter((line): line is string => Boolean(line));
       const text = [
         `started ${worker.id}`,
         `agent: ${worker.agent}`,
@@ -2448,9 +2480,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           agent: args.agent ?? "agent",
           mission: missionFromPrompt(args.prompt ?? "Mission"),
           model: def?.model,
-          thinking: def
-            ? resolveAgentThinking(def, pi.getThinkingLevel())
-            : undefined,
+          thinking: parseThinkingOverride(args.thinking).thinking
+            ?? (def ? resolveAgentThinking(def, pi.getThinkingLevel()) : undefined),
           lifecycle: "starting",
           phase: "none",
           generation: 1,
@@ -2573,6 +2604,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
             description:
               "Work order for this step. Use {{prev}} to insert the previous step's bounded report.",
           }),
+          thinking: Type.Optional(
+            Type.String({
+              description: THINKING_OVERRIDE_DESCRIPTION,
+            }),
+          ),
         }),
         {
           minItems: 1,
@@ -2614,6 +2650,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (!step.prompt?.trim()) {
           return textResult(`prompt is required at step ${i + 1}.`, true);
         }
+        const stepThinking = parseThinkingOverride(step.thinking);
+        if (stepThinking.error) {
+          return textResult(`${stepThinking.error} (step ${i + 1})`, true);
+        }
       }
       if (!runtime.canStart()) {
         return textResult(
@@ -2647,6 +2687,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         const { worker, error } = await spawnWorker(def, {
           prompt,
           cwd,
+          thinkingOverride: parseThinkingOverride(step.thinking).thinking,
           lastPhaseTag: `task_chain:spawn step=${i + 1}/${steps.length}`,
           ctx,
         });

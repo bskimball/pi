@@ -30,8 +30,10 @@ import {
   isWorkCrewAgent,
   orchestrateAgentParamDescription,
   piAgentParamDescription,
+  parseThinkingOverride,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
+  THINKING_OVERRIDE_DESCRIPTION,
   stderrDiagnostic,
   WORK_CREW_AGENTS,
 } from "./runtime/agent-discovery.ts";
@@ -559,6 +561,11 @@ export default function (pi: ExtensionAPI) {
         description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
       }),
     ),
+    thinking: Type.Optional(
+      Type.String({
+        description: THINKING_OVERRIDE_DESCRIPTION,
+      }),
+    ),
   });
 
   const apexAgentNames = [...apexAgents.keys()].join(", ");
@@ -649,6 +656,25 @@ export default function (pi: ExtensionAPI) {
       const idleMs = MODEL_IDLE_MS;
       const toolIdleMs = TOOL_IDLE_MS;
       const maxTurns = def.maxTurns ?? 30;
+      const thinkingRequest = parseThinkingOverride(params.thinking);
+      if (thinkingRequest.error) {
+        const text = thinkingRequest.error;
+        return {
+          content: [{ type: "text", text }],
+          isError: true,
+          details: {
+            agent: def.name,
+            mission,
+            status: "failed",
+            startedAt,
+            duration: Date.now() - startedAt,
+            activities: [],
+            attemptedModels: [],
+            attemptFailures: [text],
+            turns: 0,
+          } satisfies TaskDetails,
+        };
+      }
       const resolved = resolveSubagentModelsAndThinking({
         def,
         parentThinking: pi.getThinkingLevel(),
@@ -657,7 +683,7 @@ export default function (pi: ExtensionAPI) {
         ctx,
         emitEvent: (ev, payload) => pi.events.emit(ev, payload),
       });
-      const thinking = resolved.thinking;
+      const thinking = thinkingRequest.thinking ?? resolved.thinking;
       const attempts = resolved.attempts;
       if (resolved.error) {
         const text = resolved.error;
@@ -1226,9 +1252,8 @@ export default function (pi: ExtensionAPI) {
           status: "queued",
           startedAt: context.state.startedAt,
           model: def?.model,
-          thinking: def
-            ? resolveAgentThinking(def, pi.getThinkingLevel())
-            : undefined,
+          thinking: parseThinkingOverride(args.thinking).thinking
+            ?? (def ? resolveAgentThinking(def, pi.getThinkingLevel()) : undefined),
           activities: [],
           attemptedModels: [],
           attemptFailures: [],

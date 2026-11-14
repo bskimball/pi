@@ -6,6 +6,7 @@ import {
   parseAgentFile,
   orchestrateAgentList,
   orchestrateAgentParamDescription,
+  parseThinkingOverride,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
   scopeRebindAttempts,
@@ -200,6 +201,15 @@ describe("resolveAgentThinking", () => {
       if (savedScope === undefined) delete process.env.PI_HYDRA_SCOPE;
       else process.env.PI_HYDRA_SCOPE = savedScope;
     }
+  });
+});
+
+describe("parseThinkingOverride", () => {
+  it("accepts Pi thinking levels case-insensitively and rejects unknown values", () => {
+    assert.deepEqual(parseThinkingOverride(undefined), {});
+    assert.deepEqual(parseThinkingOverride("  "), {});
+    assert.deepEqual(parseThinkingOverride("XHigh"), { thinking: "xhigh" });
+    assert.match(parseThinkingOverride("extra")?.error ?? "", /Invalid thinking level "extra"/);
   });
 });
 

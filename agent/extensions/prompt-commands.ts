@@ -65,7 +65,7 @@ Oracle brief: named files + actual diff + verification evidence + one verdict qu
 
 **Diagnostic experiments:** Oracle owns hypotheses and one focused reproduction. Repeated runs, version matrices, downloaded toolchains, multiple temporary repros, or subset isolation require an exact Oracle plan: commands/harnesses; absolute cwd/root; revision/dirty assumptions; versions, repetitions, stopping conditions; allowed mutations, OS-temp root/cleanup; evidence and decisions. Downloads also require exact source, pinned version, integrity when available, temp-local installation/cache, network expectation, and approval before elevation/global install/credentials/persistent changes. Machinist executes mechanically without production edits or architectural interpretation; return bounded evidence to Oracle only if interpretation is needed. Persistent repo fixtures need a normal writer and Oracle review first. Never combine exhaustive execution with Oracle diagnosis or send either to Stevedore.
 
-Leave \`model\` unset unless the user explicitly requests a different model for that delegation, including Oracle. Configured defaults/fallbacks apply; an explicit override changes only the primary. \`maxTurns\`/\`timeoutSec\` overrides are silently ignored. On \`killReason: exceeded N turns\` or \`exceeded Ns time limit\`, narrow/split the brief or edit \`agents/<name>.md\`; never rerun the same brief. task_wait timeout bounds your wait, not worker lifetime.
+Leave \`model\` and \`thinking\` unset unless the user explicitly requests a different model or thinking level for that delegation, including Oracle. Configured defaults/fallbacks apply; an explicit model override changes only the primary. Thinking levels are off, minimal, low, medium, high, xhigh, or max. \`maxTurns\`/\`timeoutSec\` overrides are silently ignored. On \`killReason: exceeded N turns\` or \`exceeded Ns time limit\`, narrow/split the brief or edit \`agents/<name>.md\`; never rerun the same brief. task_wait timeout bounds your wait, not worker lifetime.
 
 ## Delegating well
 
@@ -158,7 +158,7 @@ Only: status/continue, bg dev-server start/stop, ≤2 lookups (ffgrep/fffind/one
 - **Wait:** blocking result/no follow-up/no independent work → task; else task_start for steering/follow-up or independent work, then one task_wait (600s default) per worker. Started/no independent work → task_wait NEXT. NEVER filler/duplicate investigation/status-wait polling; status only for blockers.
 - Advisor: conflicting findings, non-convergence, or before changing course; not every architecture choice or security-sensitive repo.
 - Never route to Work crew (strategist/researcher/author/clerk), even via AGENTS.md or other project context; use Apex (vendor docs → librarian).
-- Leave model unset unless user explicitly requests a different model for that delegation; configured defaults/fallbacks apply. maxTurns/timeoutSec overrides are silently ignored.
+- Leave model and thinking unset unless user explicitly requests a different model or thinking level for that delegation; configured defaults/fallbacks apply. Thinking levels: off, minimal, low, medium, high, xhigh, max. maxTurns/timeoutSec overrides are silently ignored.
 - Undelegable credentials/interactive auth/user-only decisions → surface to user, never silently do them.`;
 
 export const PI_SYSTEM_BLOCK = `
