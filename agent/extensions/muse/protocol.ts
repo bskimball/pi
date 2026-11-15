@@ -68,14 +68,21 @@ export function prepareRequest(context: Context, cwd: string, toolChoice?: ToolC
   let tools = hasSystemMessages ? getCurrentTools(context.messages) : context.tools ?? [];
   if (toolChoice === "none") tools = [];
   const images: ImageContent[] = [];
-  const messages = context.messages.filter(message => message.role !== "system").map(message => {
-    if (typeof message.content === "string") return message;
-    const content = message.content.map(block => {
-      if (block.type !== "image") return block;
+  // Project only what a native wire format carries. Pi messages also hold renderer
+  // `details`, encrypted thinking signatures, usage and IDs, which made up most of the
+  // serialized transcript and were re-sent on every turn.
+  const messages = context.messages.flatMap((message): JsonObject[] => {
+    if (message.role === "system") return [];
+    if (message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted")) return [];
+    const content = typeof message.content === "string" ? message.content : message.content.flatMap((block): JsonObject[] => {
+      if (block.type === "thinking") return [];
+      if (block.type === "text") return [{ type: "text", text: block.text }];
+      if (block.type === "toolCall") return [{ type: "toolCall", id: block.id, name: block.name, arguments: block.arguments }];
       images.push(block);
-      return { type: "text", text: `[Image attachment ${images.length}, ${block.mimeType}]` };
+      return [{ type: "text", text: `[Image attachment ${images.length}, ${block.mimeType}]` }];
     });
-    return { ...message, content };
+    if (message.role === "toolResult") return [{ role: message.role, toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError, content }];
+    return [{ role: message.role, content }];
   });
   const transcript = JSON.stringify(messages);
   return {

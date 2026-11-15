@@ -177,8 +177,9 @@ test("Muse preserves the request before advisories, system patches, tool results
   const context: Context = { messages: [
     { role: "system", content: "Base instructions", sections: { mode: "Old mode", profile: "Keep profile" }, toolsAdded: [readTool], timestamp: 0 },
     { role: "user", content: "Analyze our prompts and skills; compare the show-me article", timestamp: 1 },
-    { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "agent/SYSTEM.md" } }], api: "openai-responses", provider: "openai", model: "previous", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
-    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Actual file contents" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], isError: false, timestamp: 3 },
+    { role: "assistant", content: [{ type: "thinking", thinking: "Private reasoning", thinkingSignature: "ENCRYPTED-SIGNATURE" }, { type: "toolCall", id: "read-1", name: "read", arguments: { path: "agent/SYSTEM.md" } }], api: "openai-responses", provider: "openai", model: "previous", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
+    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Actual file contents" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], details: { rendererOnly: "RENDERER-DETAILS" }, isError: false, timestamp: 3 },
+    { role: "assistant", content: [{ type: "text", text: "Partial aborted turn" }], api: "openai-responses", provider: "openai", model: "previous", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "aborted", timestamp: 3 },
     { role: "system", content: "Later instructions", sections: { mode: "Regular mode" }, timestamp: 4 },
     { role: "user", content: "Jev routing advisory: underspecified scope. Hint, not a verdict.", timestamp: 5 },
   ] };
@@ -195,6 +196,7 @@ test("Muse preserves the request before advisories, system patches, tool results
   assert.match(request.prompt, /Actual file contents/);
   assert.match(request.prompt, /Image attachment 1/);
   assert.doesNotMatch(request.prompt, /aW1hZ2U=/);
+  for (const dropped of [/ENCRYPTED-SIGNATURE/, /Private reasoning/, /RENDERER-DETAILS/, /Partial aborted turn/, /"usage"/, /openai-responses/]) assert.doesNotMatch(request.prompt, dropped);
   assert.deepEqual(request.images, [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
   assert.deepEqual(request.tools, [readTool]);
   assert.deepEqual(prepareRequest(context, "C:/workspace", "none").tools, []);
