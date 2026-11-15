@@ -150,11 +150,11 @@ describe("standalone Task presentation", () => {
   });
 });
 
-describe("/dispatch command", () => {
+describe("/task command", () => {
   it("records unique session entries, steers parent once, and does not claim assignment", async () => {
     const harness = loadAsyncDispatch();
-    await harness.commands.dispatch!("first extra slice", harness.ctx);
-    await harness.commands.dispatch!("second extra slice", harness.ctx);
+    await harness.commands.task!("first extra slice", harness.ctx);
+    await harness.commands.task!("second extra slice", harness.ctx);
     assert.equal(harness.entries.length, 2);
     assert.equal(harness.messages.length, 2);
     assert.equal(harness.userMessages.length, 0);
@@ -180,24 +180,24 @@ describe("/dispatch command", () => {
 
   it("prints usage on empty args and does not record or send", async () => {
     const harness = loadAsyncDispatch();
-    await harness.commands.dispatch!("   ", harness.ctx);
+    await harness.commands.task!("   ", harness.ctx);
     assert.equal(harness.entries.length, 0);
     assert.equal(harness.messages.length, 0);
     assert.equal(harness.userMessages.length, 0);
-    assert.equal(harness.notices[0], "Usage: /dispatch <request>");
+    assert.equal(harness.notices[0], "Usage: /task <request>");
   });
 
   it("isolates dispatch sequence across session_start", async () => {
     const a = loadAsyncDispatch();
     const b = loadAsyncDispatch();
-    await a.commands.dispatch!("from a", a.ctx);
-    await b.commands.dispatch!("from b", b.ctx);
+    await a.commands.task!("from a", a.ctx);
+    await b.commands.task!("from b", b.ctx);
     const idA = (a.entries[0]!.data as { id: string }).id;
     const idB = (b.entries[0]!.data as { id: string }).id;
     assert.ok(idA);
     assert.ok(idB);
     a.sessionStart();
-    await a.commands.dispatch!("from a again", a.ctx);
+    await a.commands.task!("from a again", a.ctx);
     assert.equal(a.entries.length, 2);
     a.sessionShutdown();
   });

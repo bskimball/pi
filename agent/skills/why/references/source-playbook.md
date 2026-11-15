@@ -16,4 +16,4 @@ The why method searches the reachable categories that bear on the question, in d
 
 Cross-cutting:
 
-- [`incident-postmortem.md`](./sources/incident-postmortem.md). Add this if the target code looks defensive (null checks, retry, timeout, rate limit, feature flag, egress guard, OOM handler).
+- [`incident-postmortem.md`](./sources/incident-postmortem.md). Add this when incident history is a plausible lead.

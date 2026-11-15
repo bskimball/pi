@@ -7,6 +7,8 @@ import {
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   parseThinkingOverride,
+  validateThinkingForAttempts,
+  taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
   scopeRebindAttempts,
@@ -311,4 +313,23 @@ describe("orchestrateAgentParamDescription", () => {
     assert.doesNotMatch(description, /artisan/);
     assert.match(description, /non-visual implementation slices to machinist/);
   });
+});
+
+
+describe("explicit thinking validation", () => {
+  it("rejects levels Pi would clamp and accepts supported levels", () => {
+    const registry = { getAll: () => [{ provider: "p", id: "m", reasoning: true, thinkingLevelMap: { high: null, xhigh: "xhigh" } }] } as unknown as Parameters<typeof validateThinkingForAttempts>[2];
+    assert.equal(validateThinkingForAttempts("xhigh", ["p/m"], registry), undefined);
+    assert.match(validateThinkingForAttempts("high", ["p/m"], registry) ?? "", /does not support/);
+    assert.match(validateThinkingForAttempts("high", ["p/missing"], registry) ?? "", /Cannot verify/);
+    assert.equal(validateThinkingForAttempts(undefined, ["p/missing"], registry), undefined);
+  });
+});
+
+
+it("defaults explicit model overrides to no fallback", () => {
+  assert.equal(taskAllowsFallback("p/m", undefined), false);
+  assert.equal(taskAllowsFallback("p/m", true), true);
+  assert.equal(taskAllowsFallback(undefined, undefined), true);
+  assert.equal(taskAllowsFallback(undefined, false), false);
 });

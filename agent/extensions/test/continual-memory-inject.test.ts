@@ -124,6 +124,37 @@ test("continual memory injection gates subagents and emits compact reminder once
   });
 });
 
+test("compaction reminder is deferred in Pi mode but cannot cross session boundaries", async () => {
+  const cwd = join(testRoot, "reminder-reset");
+  mkdirSync(cwd);
+  const previousMode = process.env.PI_BEHAVIOR_MODE;
+  try {
+    const { handlers } = loadExtension();
+    const ctx = context(cwd);
+    await handlers.session_start({}, ctx);
+    handlers.session_compact({});
+    process.env.PI_BEHAVIOR_MODE = "pi";
+    const deferred = { appendSystemPrompt: "base" };
+    await handlers.before_agent_start({ systemPromptOptions: deferred }, ctx);
+    assert.equal(deferred.appendSystemPrompt, "base");
+    process.env.PI_BEHAVIOR_MODE = "apex";
+    const consumed = { appendSystemPrompt: "base" };
+    await handlers.before_agent_start({ systemPromptOptions: consumed }, ctx);
+    assert.match(consumed.appendSystemPrompt, /offer memory_write — do not auto-write/);
+
+    for (const boundary of ["session_start", "session_shutdown"]) {
+      handlers.session_compact({});
+      await handlers[boundary]({}, ctx);
+      const next = { appendSystemPrompt: "base" };
+      await handlers.before_agent_start({ systemPromptOptions: next }, ctx);
+      assert.doesNotMatch(next.appendSystemPrompt, /offer memory_write — do not auto-write/, boundary);
+    }
+  } finally {
+    if (previousMode === undefined) delete process.env.PI_BEHAVIOR_MODE;
+    else process.env.PI_BEHAVIOR_MODE = previousMode;
+  }
+});
+
 test("worker inherits full parent project memories, not global or prompt entries", async () => {
   const parent = join(testRoot, "brief-parent"), worker = join(testRoot, "brief-worker");
   mkdirSync(parent); mkdirSync(worker);

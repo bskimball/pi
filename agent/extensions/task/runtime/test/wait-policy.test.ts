@@ -265,6 +265,9 @@ describe("dispatch steer copy", () => {
     assert.match(prompt, /whether the worker needs an isolated worktree/i);
     assert.match(prompt, /steer that owner or wait/i);
     assert.match(prompt, /add a second slice/);
+    assert.match(prompt, /explicitly requested model and thinking level/);
+    assert.match(prompt, /allowFallback: false/);
+    assert.match(prompt, /Keep the current mode and lead model and thinking unchanged/);
     assert.match(
       formatDispatchAck(a),
       /Recorded .* parent steering requested to launch a worker\. Launch is not yet confirmed/,
@@ -273,6 +276,6 @@ describe("dispatch steer copy", () => {
     const yieldWithReq = formatDispatchWaitYield(a, "investigate opportunity 2103");
     assert.match(yieldWithReq, /not a timeout/);
     assert.match(yieldWithReq, /Request: investigate opportunity 2103/);
-    assert.equal(DISPATCH_USAGE, "Usage: /dispatch <request>");
+    assert.equal(DISPATCH_USAGE, "Usage: /task <request>");
   });
 });

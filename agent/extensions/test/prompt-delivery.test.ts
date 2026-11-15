@@ -134,23 +134,23 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
       const projected = projectPromptCapture(capture, { skillReadTool: "none" });
       assert.match(projected!, new RegExp(marker), `${mode} bridge projection lost mode block`);
       const contracts: Record<string, RegExp[]> = {
-        pi: [/targeted, bounded reads/, /actual diff and direct callers/, /self-review, not independent review/, /explicit user direction only/],
-        apex: [/When delegation is warranted, select the specialist by deliverable/, /required Oracle review and Inspector live-proof gates/, /personal broad local exploration instead of scout/],
+        pi: [/targeted, bounded reads/, /actual diff and direct callers/, /self-review, not independent review/, /explicit user direction only/, /`\/task <request>`/, /Run it in the background with `task_start` and stay conversational/],
+        apex: [/Apex is inline-first/, /bring in a specialist only when separate context, distinct judgment, or parallelism clearly pays/, /independent Oracle review when the user asks/, /MAY end the conversational turn while workers are live/, /not an obligatory next call/],
         utopia: [
           /Utopia combines Apex inline-first ownership and the full specialist roster with a warm pool of reusable execution `sidekick` workers/,
           /Inline-first lead, sidekick-first loops:/,
           /small \(<30 line\) doc\/README\/comment updates on a lead-owned checkout/,
           /Warm sidekick pool \(<100k reuse \+ parallel waves\):/,
-          /In Utopia, dispatch `sidekick` \(including parallel sidekicks across disjoint shards, or `machinist` when heavy worktree isolation is required\) to execute mechanically/,
+          /MAY end the conversational turn while workers are live/,
       /accepted `sidekick` workers stay settled in the warm pool for reuse/,
       /Sidekick lifecycle:.*Never `task_close` an idle sidekick while another related unit is plausible/,
       /Preflight before blocking:.*call `browser_tabs` for an already-authenticated shared tab/,
       /Release closeout:.*built, installed, and live-verified as separate facts/,
           /Ephemeral specialists when distinct judgment or isolation pays:/,
         ],
-        "apex-orchestrate": [/read-only outcome gets one appropriate evidence-returning role/, /one writer, and independent Oracle review/, /exact integrated content and environment are unchanged/, /User-visible live-page changes still need Inspector proof/],
-        fusion: [/execution is theirs by default: iterative edit\/run\/inspect loops/, /Sidekick by default for execution/, /Put each item's owner, `lead` or `sidekick`, in its note/, /inspect the actual diff \(for writers\), boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/],
-        work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/],
+        "apex-orchestrate": [/read-only outcome gets one appropriate evidence-returning role/, /one writer, and independent Oracle review/, /exact integrated content and environment are unchanged/, /User-visible live-page changes still need Inspector proof/, /MAY end the conversational turn while workers are live/],
+        fusion: [/execution is theirs by default: iterative edit\/run\/inspect loops/, /Sidekick by default for execution/, /Put each item's owner, `lead` or `sidekick`, in its note/, /inspect the actual diff \(for writers\), boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/, /Stay conversational while the wave runs/, /stay conversational while they run/],
+        work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/, /Stay conversational while the crew works/, /You may end the turn while they run/],
       };
       for (const [projection, text] of [["Pi", current], ["Muse", musePrompt], ["bridge", projected!]]) {
         for (const contract of contracts[mode]!) assert.match(text, contract, `${mode} ${projection} missing ${contract}`);

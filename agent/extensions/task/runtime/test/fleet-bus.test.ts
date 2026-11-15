@@ -469,3 +469,43 @@ describe("task extension runner bridge", () => {
     }
   });
 });
+
+
+describe("task command", () => {
+  it("registers only task, validates usage, and steers without changing lead settings", async () => {
+    const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+    const entries: unknown[] = [], messages: unknown[] = [], notices: unknown[] = [];
+    const mode = process.env.PI_BEHAVIOR_MODE;
+    const leadThinking = "high";
+    const mockPi = {
+      registerTool() {}, registerMessageRenderer() {}, on() {}, events: { on() {} },
+      registerCommand(name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) { commands.set(name, command); },
+      appendEntry(...args: unknown[]) { entries.push(args); },
+      sendMessage(...args: unknown[]) { messages.push(args); },
+      getThinkingLevel() { return leadThinking; },
+    };
+    const mod = await import("../../async-task.ts");
+    (mod.default as (pi: unknown) => void)(mockPi);
+    assert.equal(commands.has("dispatch"), false);
+    const task = commands.get("task");
+    assert.ok(task);
+    const ctx = { ui: { notify: (...args: unknown[]) => notices.push(args) } };
+    await task.handler("  ", ctx);
+    assert.deepEqual(notices[0], ["Usage: /task <request>", "warning"]);
+    assert.equal(entries.length, 0);
+    assert.equal(messages.length, 0);
+    await task.handler(" scout using provider/model at high thinking ", ctx);
+    assert.equal(entries.length, 1);
+    assert.equal(messages.length, 1);
+    const [entryType, entry] = entries[0] as [string, { id: string; request: string }];
+    assert.equal(entryType, "async-task-dispatch");
+    assert.equal(entry.request, "scout using provider/model at high thinking");
+    const [message, options] = messages[0] as [{ content: string; details: { id: string }; display: boolean }, unknown];
+    assert.equal(message.details.id, entry.id);
+    assert.match(message.content, /scout using provider\/model at high thinking/);
+    assert.equal(message.display, false);
+    assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
+    assert.equal(process.env.PI_BEHAVIOR_MODE, mode);
+    assert.equal(mockPi.getThinkingLevel(), leadThinking);
+  });
+});

@@ -2,6 +2,9 @@
   "name": "@pi/ui-kit",
   "type": "module",
   "private": true,
+  "dependencies": {
+    "xstate": "^5.33.4"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",

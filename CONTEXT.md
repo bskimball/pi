@@ -76,6 +76,17 @@ The behavior-mode transition module in `prompt-commands/modes.ts` owns staged mo
 
 Presentation remains independent: `pi:ui:changed` lets the active UI host refresh chrome without changing execution, active tools, or the stored plan. Claude uses a per-run verb from a documented Claude Code phrase subset. HAL uses geometric square activity with a neutral working label and a static HAL lens-orb landing instead of the shark/star field; Pi still owns animation timing.
 
+## Explicit lifecycle ownership
+
+The mode transition controller, dock interaction controller, worker lifecycle, and compaction reminder use XState v5 pure snapshots (`initialTransition` / `transition`). Events authorize state changes; Pi hooks retain ownership of external effects. These machines do not start actors, subscriptions, or presentation timers. Each machine lives under its owning extension or the UI kit, preserving extension isolation.
+
+- `prompt-commands/transition-controller.ts` coordinates mode operations, model availability, recovery blocks, manual selection, and lead failure. Operation tokens prevent an old completion from releasing a newer operation.
+- `packages/ui-kit/internal/todo/dock-interaction.ts` owns dock mounting/style and peek interaction/selection. Peek results identify the selected worker, and asynchronous action results must belong to the current interaction generation.
+- `task/runtime/worker-lifecycle.ts` separates generation lifecycle from process ownership. Settled generations can retain a reusable process and capacity; closed processes cannot be revived by late RPC events. Terminal workers clear pending questions.
+- `continual-memory/reminder-state.ts` scopes a pending compaction reminder to its session. Pi mode defers consumption; session start and shutdown reset it.
+
+Transition tests cover event sequences, failure recovery, and stale completions alongside the existing extension integration tests. Serialized session choices and public worker views remain compatible; XState snapshots are runtime-only.
+
 ## Task extension
 
 | | Sync (`task/amp-task.ts`) | Async (`task/async-task.ts`) |
@@ -87,11 +98,13 @@ Presentation remains independent: `pi:ui:changed` lets the active UI host refres
 
 Task owns specialist discovery, subprocess environment, process-tree reaping, transport/framing, lifecycle policy, output bounds, and presentation. Both task modes cap child concurrency, exclude nested task tools, and bound stored output.
 
+All modes keep the lead conversational while asynchronous workers run, retaining their own delegation and roster rules. The lead can answer new input or yield a conversational turn without stopping its workers. Settled/failed workers queue a bounded completion notice that triggers a lead turn when idle; the lead retrieves the report and integrates it. `task_wait` is for a result needed immediately or retrieval after completion, not a mandatory next call after every launch. Completion notices are process-local; session shutdown still follows the worker lifecycle rules below.
+
 The **Fusion sidekick lifecycle module** (`task/runtime/fusion-lifecycle.ts`) owns the configured pair, warm-pool sidekick reuse (`reuse: "task_N"` targets a specific idle worker; `context: "fresh"` starts a clean worker without parking other idle sidekicks unless the 5-worker cap is full), configuration acknowledgement/rollback, parking, parent-session isolation, and tool gates. `async-task.ts` retains process spawn, RPC framing, and settle-any `task_wait({ ids })` collection across parallel waves; `worker-runtime.ts` enforces Fusion's idle-timeout exemption through every generation/event path and triggers a one-shot mid-unit steer when a running sidekick crosses `FUSION_REUSE_CONTEXT_TOKENS`. Rejected prompts settle; unknown prompt acceptance requires abort/closure before releasing the single-writer gate. Saved transcripts are parent-scoped; a missing saved file is an error, never a silent context reset. Reuse is context-bounded: an idle sidekick or restored transcript over `FUSION_REUSE_CONTEXT_TOKENS` (100k, from last assistant usage or `get_session_stats`) starts clean and the `task_start` receipt says so; unknown size keeps the transcript.
 
-### `/dispatch <request>`
+### `/task <request>`
 
-Command for steering the active parent orchestrator with concurrent requests or priority shifts while workers run:
+Request a one-off subagent in the current mode, including Pi mode, or add work while workers run. For example: `/task use scout with openai/gpt-6.1-sol and high thinking to inspect the failing tests`. Ordinary messages can also explicitly request delegation and worker settings. Model and thinking overrides apply to the worker, not the lead; an explicit model disables fallback unless alternatives are allowed. This replaces the former `/dispatch` command.
 
 - **Target & Scope**: Directs additional work to the **same orchestrator** session and asks it to launch an appropriate subagent promptly via `task_start`, even in inline-first modes. The lead chooses the specialist and whether isolation is needed. It preserves active work and avoids conflicting concurrent writers; overlapping work may be steered to its existing owner or wait. Capacity and mode restrictions still apply. The command itself does not launch a worker or confirm one was launched. Ordinary chat messages remain unchanged.
 - **Recording & Delivery**: Records an `async-task-dispatch` entry in the session log and requests steering via hidden custom message (`deliverAs: "steer"`, `triggerTurn: true`).

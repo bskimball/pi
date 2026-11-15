@@ -1,19 +1,9 @@
-Applies when: Apply when two or more fixes that share one premise have failed the same gate. Take a census of which actors hold the imbalance before the next fix, then question the premise instead of writing another fix that assumes it.
+Applies when: Several failed fixes share the same assumption.
 
 # Attack the Premise
 
-When two or more fixes that share one premise have failed the same gate, suspect the premise, not the fixes.
+After repeated failures, state the shared assumption and seek evidence that could disprove it before trying another variant.
 
-**Why:** Each failure under a shared premise is evidence about the premise.
+Inspect the failing path and compare competing explanations with the cheapest useful observation. When the problem is an imbalance between actors, measure per actor to distinguish assignment skew from total load; a focused rerunnable query or script can help. Other failures need evidence suited to their own premise, not a mandatory actor census.
 
-**Pattern:**
-- **Write the premise down.** The premise is the one sentence that every failed fix assumed.
-- **Take a census before the next fix.** Count the imbalance per actor. The census shows which actors hold the imbalance, not how large it is. Write the census as a rerunnable script per [Build the Lever](build-the-lever.md).
-- **Read the skew.** If the same few actors hold most of the imbalance on every run, something assigns them that role. Find what assigns the role. That assignment is the next "why" per Fix Root Causes.
-- **Remove the asymmetry instead of compensating for it**, per the Laziness Protocol. Rotate the role between actors, randomize the assignment, or move the role, so that no actor holds it on every run. A return path, a shared pool, a batched hand-off, or a periodic rebalance leaves the assignment in place and adds work on every run.
-
-**Stop:**
-- Do not start the next fix before the premise is written down and the census exists.
-- If the census is even across actors, the premise is not the cause. Look for the cause elsewhere and keep the census as evidence.
-
-This principle is distinct from Redesign from First Principles, which rebuilds a design around a new requirement. It questions a fact the current design assumes.
+Change the disproven assumption rather than adding compensating machinery. If the evidence is inconclusive, report what remains uncertain and choose a bounded next check.

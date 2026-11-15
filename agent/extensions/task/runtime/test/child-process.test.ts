@@ -14,7 +14,7 @@ describe("childToolArgs", () => {
   it("injects both extensions, extends an allowlist, and excludes nested browser tasks", () => {
     assert.deepEqual(childToolArgs({ apexBrowser: true, tools: "read, bash" }, "task", env), [
       "--extension", "/browser.ts", "--extension", "/browser-agent.ts",
-      "--exclude-tools", "task,browser_task",
+      "--exclude-tools", "task,mcp__*,browser_task",
       "--tools", `read,bash,${browserTools},browser_run`,
     ]);
   });
@@ -23,7 +23,7 @@ describe("childToolArgs", () => {
     for (const key of ["PRIME_WORK_BROWSER_URL", "PRIME_WORK_BROWSER_TOKEN", "PRIME_WORK_BROWSER_EXTENSION_PATH"]) {
       for (const value of [undefined, "", "  "]) {
         assert.deepEqual(childToolArgs({ apexBrowser: true, tools: "read" }, "task", { ...env, [key]: value }), [
-          "--exclude-tools", "task", "--tools", "read",
+          "--exclude-tools", "task,mcp__*", "--tools", "read",
         ]);
       }
     }
@@ -31,7 +31,7 @@ describe("childToolArgs", () => {
 
   it("does not inject for an agent without opt-in", () => {
     assert.deepEqual(childToolArgs({ tools: "read" }, "task", env), [
-      "--exclude-tools", "task", "--tools", "read",
+      "--exclude-tools", "task,mcp__*", "--tools", "read",
     ]);
   });
 
@@ -47,5 +47,11 @@ describe("childToolArgs", () => {
     assert.deepEqual(childToolArgs({ name: "sidekick" }, "task", env), [
       "--exclude-tools", "task",
     ]);
+  });
+
+  it("preserves explicit MCP lists and dynamic discovery roles", () => {
+    for (const tools of ["read,mcp__context7__*", "read,tool_search", "read,codemode", "+codemode", "*"]) {
+      assert.deepEqual(childToolArgs({ tools }, "task", {}), ["--exclude-tools", "task", "--tools", tools]);
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { createTransitionController } from "./transition-controller.ts";
 import { join } from "node:path";
 import { clampThinkingLevel, getCurrentSystemMessage, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
@@ -117,17 +118,21 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   const preferencePath = join(getAgentDir(), "mode-settings.json");
   let preferences = readPreferences(preferencePath);
   let state: ModeState = structuredClone(preferences);
-  let changing = false;
+  const lifecycle = createTransitionController();
+  pi.events.on?.("pi:modes:query-busy", (payload: unknown) => {
+    if (payload && typeof payload === "object" && "busy" in payload && lifecycle.busy) payload.busy = true;
+  });
+  let modeGeneration = 0;
   let cuaEnabled = true;
   const availableTools = () => pi.getAllTools()
     .filter(tool => !isComputerUseTool(tool.name) || !tool.exposure || tool.exposure === "direct" || (tool.exposure as string) === "model-only")
     .map(tool => tool.name);
   const applyModeTools = (mode: Mode) => pi.setActiveTools(toolsForMode(mode, availableTools(), cuaEnabled));
-  let modelBlocked: string | false = false;
+
   // Set when a mode switch fails and its compensation is incomplete: input
   // stays blocked until a later /mode succeeds. Deliberately separate from
   // modelBlocked so /model and thinking selection cannot clear it.
-  let recoveryBlocked: string | false = false;
+
   const fusionPairLabel = (pair: FusionPair) =>
     `Lead ${pair.lead.provider}/${pair.lead.modelId} (${pair.lead.thinking}); sidekick ${pair.sidekick.provider}/${pair.sidekick.modelId} (${pair.sidekick.thinking}).`;
   const persist = (setDefault = false) => {
@@ -172,7 +177,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     pi.events.emit("pi:modes:changed", { mode: state.mode, fusion: state.fusion, hydra: state.hydra, hydraScope: state.hydraScope, cuaEnabled });
   };
   const idle = (ctx: ExtensionContext) => {
-    const query = { busy: !ctx.isIdle() || changing };
+    const query = { busy: !ctx.isIdle() || lifecycle.busy };
     pi.events.emit("pi:modes:query-busy", query);
     if (query.busy) ctx.ui.notify("Stop active agent work before switching modes or UI.", "warning");
     return !query.busy;
@@ -243,9 +248,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   // own record until the provider's reset time.
   const familyCooldowns = new Map<string, number>();
   let quotaRefreshForced = false;
-  let failedLead: string | undefined;
+
   // A manual /model pick holds for the user's next run instead of being re-routed.
-  let manualPin = false;
+
   const familyCooling = (provider: string, modelId: string): boolean => {
     const family = inferModelFamily(provider, modelId);
     const until = familyCooldowns.get(family);
@@ -317,212 +322,224 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     tier: ActiveHydraTier,
     signal?: HydraTurnSignalInput,
     forceModelPick = false,
+    ownerToken?: number,
   ): Promise<HydraRouteResult | undefined> {
+    const generation = modeGeneration;
     let outcome: HydraRouteResult | undefined;
     const run = async () => {
-      await refreshQuotaIfStale();
-      signal = isReliableHydraSignal(signal) ? signal : undefined;
-      if (!forceModelPick) lastJevTurnSignal = signal;
-      if (forceModelPick) manualPin = false;
-      if (manualPin && ctx.model) {
-        outcome = {
-          summary: `${ctx.model.provider}/${ctx.model.id} (${pi.getThinkingLevel()}, manual selection)`,
-          model: `${ctx.model.provider}/${ctx.model.id}`,
-          thinking: pi.getThinkingLevel(),
-          switchedModel: false,
-        };
-        return;
-      }
-      const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
-      const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
-      const winner = ranked[0];
-      const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-      // A missing catalog match is not itself evidence that an available model is unhealthy.
-      const scope = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
-      const allowed = (ctx.modelRegistry?.getAvailable?.() ?? []).filter(m =>
-        !EXCLUDED_HYDRA_PROVIDERS.has(m.provider.toLowerCase()) && (!scope || scope.has(m.provider)));
-      const scopedKeys = new Set((ctx.scopedModels ?? []).map(({ model }: any) => `${model.provider}/${model.id}`));
-      const scoped = allowed.filter(m => scopedKeys.has(`${m.provider}/${m.id}`));
-      const pool = scoped.length ? scoped : allowed;
-      const eligible = !!currentKey && !!ctx.model && pool.some(m => `${m.provider}/${m.id}` === currentKey) &&
-        quotaMultiplierForModel(ctx.model.provider, ctx.model.id, tier, openCircuitsFor([currentKey]), readQuotaSnapshot()).multiplier > 0;
-      if (!winner) {
-        if (eligible && ctx.model) outcome = { summary: `${currentKey} (${pi.getThinkingLevel()}, held)`, model: currentKey!, thinking: pi.getThinkingLevel(), switchedModel: false };
-        return;
-      }
-      const holdUncertain = !forceModelPick && !signal && eligible;
-      const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey ||
-        (ctx.model?.id.startsWith("muse-") && c.key === `${currentKey}-contributor`)) : undefined;
-      const shallowTurn = !!signal && (signal.domain === "fast_edit" || signal.reasoningDepth < 1.75);
-      const capableForShallow = shallowTurn && (currentRanked?.aa.codingScore ?? 0) >= 40;
-      // Keep the lead model session-sticky while its cache is warm and it remains
-      // eligible and meets the task's quality floor (or is a capable model on a
-      // shallow turn where speed weights would otherwise down-shift to a fast model);
-      // modulate thinking effort per turn.
-      const shouldSwitchModel = !holdUncertain && (
-        forceModelPick ||
-        !cacheWarm ||
-        !currentKey ||
-        !currentRanked ||
-        (signal !== undefined && !currentRanked.meetsQuality && !capableForShallow) ||
-        (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`));
-
-      const prevState = structuredClone(state);
-      const prevModel = current(ctx);
-      let rollback: (() => Promise<void>) | undefined;
-      changing = true;
+      if (generation !== modeGeneration || activeHydra() !== tier) return;
+      const routeToken = ownerToken ?? lifecycle.begin("routing");
+      if (routeToken === undefined) return;
       try {
-        if (shouldSwitchModel && winner.key !== currentKey) {
-          const choice: ModelChoice = {
-            provider: winner.model.provider,
-            modelId: winner.model.id,
-            thinking: winner.recommendedThinking,
+        await refreshQuotaIfStale();
+        if (generation !== modeGeneration || activeHydra() !== tier) return;
+        signal = isReliableHydraSignal(signal) ? signal : undefined;
+        if (!forceModelPick) lastJevTurnSignal = signal;
+        if (forceModelPick) lifecycle.manualPin = false;
+        if (lifecycle.manualPin && ctx.model) {
+          outcome = {
+            summary: `${ctx.model.provider}/${ctx.model.id} (${pi.getThinkingLevel()}, manual selection)`,
+            model: `${ctx.model.provider}/${ctx.model.id}`,
+            thinking: pi.getThinkingLevel(),
+            switchedModel: false,
           };
-          const stagedChoice = structuredClone(choice);
-          await applyModel(ctx, stagedChoice);
-          choice.thinking = stagedChoice.thinking;
+          return;
+        }
+        const cacheWarm = !forceModelPick && isSessionCacheWarm(ctx);
+        const ranked = rankForCurrentScope(ctx, tier, signal, cacheWarm);
+        const winner = ranked[0];
+        const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+        // A missing catalog match is not itself evidence that an available model is unhealthy.
+        const scope = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
+        const allowed = (ctx.modelRegistry?.getAvailable?.() ?? []).filter(m =>
+          !EXCLUDED_HYDRA_PROVIDERS.has(m.provider.toLowerCase()) && (!scope || scope.has(m.provider)));
+        const scopedKeys = new Set((ctx.scopedModels ?? []).map(({ model }: any) => `${model.provider}/${model.id}`));
+        const scoped = allowed.filter(m => scopedKeys.has(`${m.provider}/${m.id}`));
+        const pool = scoped.length ? scoped : allowed;
+        const eligible = !!currentKey && !!ctx.model && pool.some(m => `${m.provider}/${m.id}` === currentKey) &&
+          quotaMultiplierForModel(ctx.model.provider, ctx.model.id, tier, openCircuitsFor([currentKey]), readQuotaSnapshot()).multiplier > 0;
+        if (!winner) {
+          if (eligible && ctx.model) outcome = { summary: `${currentKey} (${pi.getThinkingLevel()}, held)`, model: currentKey!, thinking: pi.getThinkingLevel(), switchedModel: false };
+          return;
+        }
+        const holdUncertain = !forceModelPick && !signal && eligible;
+        const currentRanked = currentKey ? ranked.find((c) => c.key === currentKey ||
+          (ctx.model?.id.startsWith("muse-") && c.key === `${currentKey}-contributor`)) : undefined;
+        const shallowTurn = !!signal && (signal.domain === "fast_edit" || signal.reasoningDepth < 1.75);
+        const capableForShallow = shallowTurn && (currentRanked?.aa.codingScore ?? 0) >= 40;
+        // Keep the lead model session-sticky while its cache is warm and it remains
+        // eligible and meets the task's quality floor (or is a capable model on a
+        // shallow turn where speed weights would otherwise down-shift to a fast model);
+        // modulate thinking effort per turn.
+        const shouldSwitchModel = !holdUncertain && (
+          forceModelPick ||
+          !cacheWarm ||
+          !currentKey ||
+          !currentRanked ||
+          (signal !== undefined && !currentRanked.meetsQuality && !capableForShallow) ||
+          (ctx.model?.id.startsWith("muse-") && winner.key === `${currentKey}-contributor`));
 
-          if (usesPersistentSidekick(state.mode)) {
-            const sidekickProfile = subagentHydraProfile("sidekick", tier);
-            const sidekickRanked = rankForCurrentScope(
-              ctx,
-              sidekickProfile.tier,
-              sidekickProfile.signal,
-              false,
-            );
-            const sidekickWinner = sidekickRanked[0] ?? winner;
-            const existingSidekick = state.fusion?.sidekick;
+        const prevState = structuredClone(state);
+        const prevModel = current(ctx);
+        const prevPreferences = readPreferences(preferencePath);
+        let rollback: (() => Promise<void>) | undefined;
+        try {
+          if (shouldSwitchModel && winner.key !== currentKey) {
+            const choice: ModelChoice = {
+              provider: winner.model.provider,
+              modelId: winner.model.id,
+              thinking: winner.recommendedThinking,
+            };
+            const stagedChoice = structuredClone(choice);
+            await applyModel(ctx, stagedChoice);
+            choice.thinking = stagedChoice.thinking;
+
+            if (usesPersistentSidekick(state.mode)) {
+              const sidekickProfile = subagentHydraProfile("sidekick", tier);
+              const sidekickRanked = rankForCurrentScope(
+                ctx,
+                sidekickProfile.tier,
+                sidekickProfile.signal,
+                false,
+              );
+              const sidekickWinner = sidekickRanked[0] ?? winner;
+              const existingSidekick = state.fusion?.sidekick;
+              const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
+              const nextPair: FusionPair = {
+                lead: choice,
+                // Keep an existing sidekick only while it satisfies the active Hydra scope.
+                sidekick: existingSidekick && (!scopeProviders || scopeProviders.has(existingSidekick.provider))
+                  ? existingSidekick
+                  : {
+                    provider: sidekickWinner.model.provider,
+                    modelId: sidekickWinner.model.id,
+                    thinking: sidekickWinner.recommendedThinking,
+                  },
+              };
+              const request: {
+                fusion: FusionPair;
+                acknowledged?: boolean;
+                error?: string;
+                promise?: Promise<void>;
+                rollback?: () => Promise<void>;
+              } = {
+                fusion: structuredClone(nextPair),
+              };
+              pi.events.emit("pi:fusion:configure", request);
+              if (!request.acknowledged) {
+                throw new Error(`${labels[state.mode]} runtime did not acknowledge sidekick configuration.`);
+              }
+              rollback = request.rollback;
+              if (request.promise) await request.promise;
+              if (request.error) throw new Error(request.error);
+              state.fusion = nextPair;
+            }
+
+            state.models[state.mode] = choice;
+            persist();
+            publishPair(ctx);
+            outcome = {
+              summary: `${winner.key} (${choice.thinking}, score ${winner.finalScore.toFixed(2)})`,
+              model: winner.key,
+              thinking: choice.thinking,
+              score: winner.finalScore,
+              switchedModel: true,
+            };
+            return;
+          }
+
+          // Keep current lead model and dynamically adjust thinking effort.
+          const activeModel = ctx.model ?? winner.model;
+          const activeKey = `${activeModel.provider}/${activeModel.id}`;
+          const activeScore = ranked.find((c) => c.key === activeKey ||
+            (activeModel.id.startsWith("muse-") && c.key === `${activeKey}-contributor`))?.finalScore;
+          const nextThinking = holdUncertain ? pi.getThinkingLevel() : selectThinkingForModel(activeModel, tier, signal);
+          if (nextThinking !== pi.getThinkingLevel()) {
+            pi.setThinkingLevel(nextThinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
+            const actualThinking = pi.getThinkingLevel();
+            const activeChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
+            if (activeChoice) {
+              activeChoice.thinking = actualThinking;
+              persist();
+            }
+          }
+          // The lead held, but an active Hydra scope may still invalidate the Fusion sidekick.
+          if (usesPersistentSidekick(state.mode) && state.fusion) {
             const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
-            const nextPair: FusionPair = {
-              lead: choice,
-              // Keep an existing sidekick only while it satisfies the active Hydra scope.
-              sidekick: existingSidekick && (!scopeProviders || scopeProviders.has(existingSidekick.provider))
-                ? existingSidekick
-                : {
+            if (scopeProviders && !scopeProviders.has(state.fusion.sidekick.provider)) {
+              const sidekickProfile = subagentHydraProfile("sidekick", tier);
+              const sidekickRanked = rankForCurrentScope(
+                ctx,
+                sidekickProfile.tier,
+                sidekickProfile.signal,
+                false,
+              );
+              const sidekickWinner = sidekickRanked[0] ?? winner;
+              const nextPair: FusionPair = {
+                lead: { provider: activeModel.provider, modelId: activeModel.id, thinking: pi.getThinkingLevel() },
+                sidekick: {
                   provider: sidekickWinner.model.provider,
                   modelId: sidekickWinner.model.id,
                   thinking: sidekickWinner.recommendedThinking,
                 },
-            };
-            const request: {
-              fusion: FusionPair;
-              acknowledged?: boolean;
-              error?: string;
-              promise?: Promise<void>;
-              rollback?: () => Promise<void>;
-            } = {
-              fusion: structuredClone(nextPair),
-            };
-            pi.events.emit("pi:fusion:configure", request);
-            if (!request.acknowledged) {
-              throw new Error(`${labels[state.mode]} runtime did not acknowledge sidekick configuration.`);
+              };
+              const request: {
+                fusion: FusionPair;
+                acknowledged?: boolean;
+                error?: string;
+                promise?: Promise<void>;
+                rollback?: () => Promise<void>;
+              } = { fusion: structuredClone(nextPair) };
+              pi.events.emit("pi:fusion:configure", request);
+              if (!request.acknowledged) {
+                throw new Error(`${labels[state.mode]} runtime did not acknowledge sidekick configuration.`);
+              }
+              rollback = request.rollback;
+              if (request.promise) await request.promise;
+              if (request.error) throw new Error(request.error);
+              state.fusion = nextPair;
+              persist();
             }
-            rollback = request.rollback;
-            if (request.promise) await request.promise;
-            if (request.error) throw new Error(request.error);
-            state.fusion = nextPair;
           }
-
-          state.models[state.mode] = choice;
-          persist();
           publishPair(ctx);
-          outcome = {
-            summary: `${winner.key} (${choice.thinking}, score ${winner.finalScore.toFixed(2)})`,
-            model: winner.key,
-            thinking: choice.thinking,
-            score: winner.finalScore,
-            switchedModel: true,
-          };
-          return;
-        }
-
-        // Keep current lead model and dynamically adjust thinking effort.
-        const activeModel = ctx.model ?? winner.model;
-        const activeKey = `${activeModel.provider}/${activeModel.id}`;
-        const activeScore = ranked.find((c) => c.key === activeKey ||
-          (activeModel.id.startsWith("muse-") && c.key === `${activeKey}-contributor`))?.finalScore;
-        const nextThinking = holdUncertain ? pi.getThinkingLevel() : selectThinkingForModel(activeModel, tier, signal);
-        if (nextThinking !== pi.getThinkingLevel()) {
-          pi.setThinkingLevel(nextThinking as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
           const actualThinking = pi.getThinkingLevel();
-          const activeChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
-          if (activeChoice) {
-            activeChoice.thinking = actualThinking;
-            persist();
+          outcome = {
+            summary: `${activeKey} (${actualThinking}, ${activeScore === undefined ? "held; no AA score" : `score ${activeScore.toFixed(2)}`})`,
+            model: activeKey,
+            thinking: actualThinking,
+            score: activeScore,
+            switchedModel: false,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const failures: string[] = [];
+          try { await rollback?.(); }
+          catch (rollbackError) { failures.push(`sidekick rollback: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`); }
+          const repairTarget = usesPersistentSidekick(prevState.mode) ? prevState.fusion?.lead : prevState.models[prevState.mode];
+          try {
+            await applyModel(ctx, repairTarget ? structuredClone(repairTarget) : (prevModel ? structuredClone(prevModel) : undefined));
+          } catch (modelError) {
+            failures.push(`model restore: ${modelError instanceof Error ? modelError.message : String(modelError)}`);
           }
-        }
-        // The lead held, but an active Hydra scope may still invalidate the Fusion sidekick.
-        if (usesPersistentSidekick(state.mode) && state.fusion) {
-          const scopeProviders = state.hydraScope ? HYDRA_SCOPE_PROVIDERS[state.hydraScope] : undefined;
-          if (scopeProviders && !scopeProviders.has(state.fusion.sidekick.provider)) {
-            const sidekickProfile = subagentHydraProfile("sidekick", tier);
-            const sidekickRanked = rankForCurrentScope(
-              ctx,
-              sidekickProfile.tier,
-              sidekickProfile.signal,
-              false,
-            );
-            const sidekickWinner = sidekickRanked[0] ?? winner;
-            const nextPair: FusionPair = {
-              lead: { provider: activeModel.provider, modelId: activeModel.id, thinking: pi.getThinkingLevel() },
-              sidekick: {
-                provider: sidekickWinner.model.provider,
-                modelId: sidekickWinner.model.id,
-                thinking: sidekickWinner.recommendedThinking,
-              },
-            };
-            const request: {
-              fusion: FusionPair;
-              acknowledged?: boolean;
-              error?: string;
-              promise?: Promise<void>;
-              rollback?: () => Promise<void>;
-            } = { fusion: structuredClone(nextPair) };
-            pi.events.emit("pi:fusion:configure", request);
-            if (!request.acknowledged) {
-              throw new Error(`${labels[state.mode]} runtime did not acknowledge sidekick configuration.`);
-            }
-            rollback = request.rollback;
-            if (request.promise) await request.promise;
-            if (request.error) throw new Error(request.error);
-            state.fusion = nextPair;
-            persist();
+          state = prevState;
+          try {
+            const latest = readPreferences(preferencePath);
+            latest.models[prevState.mode] = prevPreferences.models[prevState.mode];
+            latest.fusion = prevPreferences.fusion;
+            savePreferences(preferencePath, latest);
+          } catch (prefsError) { failures.push(`preferences restore: ${String(prefsError)}`); }
+          try { pi.appendEntry("behavior-mode", structuredClone(prevState)); }
+          catch (entryError) { failures.push(`session entry: ${entryError instanceof Error ? entryError.message : String(entryError)}`); }
+          try { publishPair(ctx); } catch { /* cosmetic */ }
+          if (failures.length) {
+            lifecycle.recoveryBlocked = `Hydra routing in ${labels[prevState.mode]} failed (${message}) and recovery is incomplete: ${failures.join("; ")}. Retry /mode when ready.`;
+            ctx.ui.notify(lifecycle.recoveryBlocked, "error");
+          } else {
+            ctx.ui.notify(`Hydra routing failed (${message}); restored ${labels[prevState.mode]} model.`, "error");
           }
+          outcome = undefined;
         }
-        publishPair(ctx);
-        const actualThinking = pi.getThinkingLevel();
-        outcome = {
-          summary: `${activeKey} (${actualThinking}, ${activeScore === undefined ? "held; no AA score" : `score ${activeScore.toFixed(2)}`})`,
-          model: activeKey,
-          thinking: actualThinking,
-          score: activeScore,
-          switchedModel: false,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const failures: string[] = [];
-        try { await rollback?.(); }
-        catch (rollbackError) { failures.push(`sidekick rollback: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`); }
-        const repairTarget = usesPersistentSidekick(prevState.mode) ? prevState.fusion?.lead : prevState.models[prevState.mode];
-        try {
-          await applyModel(ctx, repairTarget ? structuredClone(repairTarget) : (prevModel ? structuredClone(prevModel) : undefined));
-        } catch (modelError) {
-          failures.push(`model restore: ${modelError instanceof Error ? modelError.message : String(modelError)}`);
-        }
-        state = prevState;
-        try { pi.appendEntry("behavior-mode", structuredClone(prevState)); }
-        catch (entryError) { failures.push(`session entry: ${entryError instanceof Error ? entryError.message : String(entryError)}`); }
-        try { publishPair(ctx); } catch { /* cosmetic */ }
-        if (failures.length) {
-          recoveryBlocked = `Hydra routing in ${labels[prevState.mode]} failed (${message}) and recovery is incomplete: ${failures.join("; ")}. Retry /mode when ready.`;
-          ctx.ui.notify(recoveryBlocked, "error");
-        } else {
-          ctx.ui.notify(`Hydra routing failed (${message}); restored ${labels[prevState.mode]} model.`, "error");
-        }
-        outcome = undefined;
-      } finally {
-        changing = false;
-      }
+      } finally { if (ownerToken === undefined) lifecycle.end(routeToken); }
     };
     const next = hydraRouteChain.then(run, run);
     hydraRouteChain = next.then(() => undefined, () => undefined);
@@ -557,7 +574,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return;
     }
     const nextState = structuredClone(state);
-    if (prevModel && !recoveryBlocked && !modelBlocked) nextState.models[nextState.mode] = structuredClone(prevModel);
+    if (prevModel && !lifecycle.recoveryBlocked && !lifecycle.modelBlocked) nextState.models[nextState.mode] = structuredClone(prevModel);
     if (!nextState.models[mode] && prevModel) nextState.models[mode] = structuredClone(prevModel);
     nextState.mode = mode;
     nextState.fusion = structuredClone(nextFusion);
@@ -570,13 +587,15 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
     // Hydra owns lead selection: keep the current (cache-warm) model and let the
     // route below hold or replace it, instead of flashing a stale slot model.
-    const hydraOwnsLead = !usesPersistentSidekick(mode) && !!nextState.hydra && !!prevModel && !modelBlocked && !recoveryBlocked;
+    const hydraOwnsLead = !usesPersistentSidekick(mode) && !!nextState.hydra && !!prevModel && !lifecycle.modelBlocked && !lifecycle.recoveryBlocked;
     if (hydraOwnsLead) nextState.models[mode] = structuredClone(prevModel);
     const targetModel = usesPersistentSidekick(mode) ? nextFusion?.lead : hydraOwnsLead ? undefined : nextState.models[mode];
     let persisted = false;
     let rollback: (() => Promise<void>) | undefined;
-    const prevBlocked = recoveryBlocked;
-    changing = true;
+    const prevBlocked = lifecycle.recoveryBlocked;
+    const switchToken = lifecycle.begin("switching");
+    if (switchToken === undefined) return;
+    modeGeneration++;
     try {
       // Apply to a staged copy and record the actual (possibly clamped) Pi
       // thinking level, so persisted state agrees with reality.
@@ -602,12 +621,12 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       persist(true);
       persisted = true;
       announce();
-      modelBlocked = false;
-      recoveryBlocked = false;
+      lifecycle.modelBlocked = false;
+      lifecycle.recoveryBlocked = false;
       ctx.ui.setStatus("mode", formatModeStatus(state));
       publishPair(ctx);
       const switchedHydra = activeHydra();
-      const routed = switchedHydra ? await routeWithHydra(ctx, switchedHydra, undefined, false) : undefined;
+      const routed = switchedHydra ? await routeWithHydra(ctx, switchedHydra, undefined, false, switchToken) : undefined;
       const identity = usesPersistentSidekick(mode) && state.fusion
         ? ` ${fusionPairLabel(state.fusion)}`
         : routed
@@ -656,19 +675,54 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       // A preexisting block survives until a SUCCESSFUL switch, not merely a
       // cleanly compensated failure.
       if (failures.length) {
-        recoveryBlocked = `Mode switch to ${labels[mode]} failed (${message}) and recovery is incomplete: ${failures.join("; ")}. Retry /mode when ready.`;
+        lifecycle.recoveryBlocked = `Mode switch to ${labels[mode]} failed (${message}) and recovery is incomplete: ${failures.join("; ")}. Retry /mode when ready.`;
       } else if (prevBlocked) {
-        recoveryBlocked = prevBlocked;
+        lifecycle.recoveryBlocked = prevBlocked;
       } else {
-        recoveryBlocked = false;
+        lifecycle.recoveryBlocked = false;
       }
       try { ctx.ui.setStatus("mode", formatModeStatus(prevState)); publishPair(ctx); } catch { /* cosmetic */ }
       let note = `Mode switch to ${labels[mode]} failed (${message}); restored ${labels[prevState.mode]}.`;
-      if (typeof recoveryBlocked === "string") {
-        note = failures.length ? recoveryBlocked : `${note} Prior recovery block still in effect: ${recoveryBlocked}`;
+      if (typeof lifecycle.recoveryBlocked === "string") {
+        note = failures.length ? lifecycle.recoveryBlocked : `${note} Prior recovery block still in effect: ${lifecycle.recoveryBlocked}`;
       }
       ctx.ui.notify(note, "error");
-    } finally { changing = false; }
+    } finally { lifecycle.end(switchToken); }
+  }
+  async function configureHydra<T>(ctx: ExtensionContext, change: (token: number) => Promise<T>): Promise<{ value: T } | undefined> {
+    if (!idle(ctx)) return;
+    const token = lifecycle.begin("switching");
+    if (token === undefined) return;
+    modeGeneration++;
+    const previous = structuredClone(state);
+    const previousPin = lifecycle.manualPin;
+    let saved: Preferences | undefined;
+    try {
+      saved = readPreferences(preferencePath);
+      state = structuredClone(state);
+      return { value: await change(token) };
+    } catch (error) {
+      const failures: string[] = [];
+      state = previous;
+      lifecycle.manualPin = previousPin;
+      try { announce(); } catch (restoreError) { failures.push(`announcement: ${String(restoreError)}`); }
+      try { pi.appendEntry("behavior-mode", structuredClone(previous)); }
+      catch (restoreError) { failures.push(`session entry: ${String(restoreError)}`); }
+      if (saved) {
+        try {
+          const latest = readPreferences(preferencePath);
+          latest.hydra = saved.hydra;
+          latest.hydraScope = saved.hydraScope;
+          latest.models[previous.mode] = saved.models[previous.mode];
+          latest.fusion = saved.fusion;
+          savePreferences(preferencePath, latest);
+        } catch (restoreError) { failures.push(`preferences: ${String(restoreError)}`); }
+      }
+      try { publishPair(ctx); } catch { /* cosmetic */ }
+      if (failures.length) lifecycle.recoveryBlocked = `Hydra configuration recovery incomplete: ${failures.join("; ")}. Retry /mode.`;
+      ctx.ui.notify(`Hydra configuration failed (${String(error)}).${failures.length ? ` ${lifecycle.recoveryBlocked}` : " Previous configuration restored."}`, "error");
+      return;
+    } finally { lifecycle.end(token); }
   }
   async function handleHydraCommand(subArgs: string[], ctx: ExtensionContext): Promise<void> {
     let sub = subArgs[0]?.toLowerCase() ?? "";
@@ -735,21 +789,21 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       return;
     }
     const nextTier: HydraTier = sub;
-    state.hydra = nextTier === "off" ? undefined : nextTier;
-    if (nextTier === "off") delete state.hydraScope;
-    persist();
-    announce();
-    publishPair(ctx);
-    if (nextTier === "off") {
-      ctx.ui.notify("Hydra model router: off (using pinned mode model).", "info");
-      return;
-    }
-    const pickedResult = await routeWithHydra(ctx, nextTier, undefined, true);
-    ctx.ui.notify(
-      `Hydra model router: ${nextTier}.${pickedResult ? ` Selected ${pickedResult.summary}.` : " No matching AA model available in current scope; keeping active model."}`,
-      "info",
-    );
+    const configured = await configureHydra(ctx, async token => {
+      state.hydra = nextTier === "off" ? undefined : nextTier;
+      if (nextTier === "off") delete state.hydraScope;
+      persist();
+      announce();
+      publishPair(ctx);
+      return nextTier === "off" ? undefined : routeWithHydra(ctx, nextTier, undefined, true, token);
+    });
+    if (!configured) return;
+    const picked = configured.value;
+    ctx.ui.notify(nextTier === "off"
+      ? "Hydra model router: off (using pinned mode model)."
+      : `Hydra model router: ${nextTier}.${picked ? ` Selected ${picked.summary}.` : " No matching AA model available in current scope; keeping active model."}`, "info");
   }
+
   pi.registerCommand("mode", {
     description: "Switch Pi, Apex, Apex Orchestrate, Fusion, Work, or Hydra (/mode hydra [off|standard|high|max|status|sync]); /mode configure edits the pair",
     handler: async (args, ctx) => {
@@ -835,45 +889,50 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
         ctx.ui.notify(`Mode preferences unreadable (${prefsError instanceof Error ? prefsError.message : String(prefsError)}); switch aborted before any change.`, "error");
         return;
       }
-      let activationPrev: { hydra: HydraTier | undefined; hydraScope: HydraScope | undefined } | undefined;
-      if (enable) {
-        const tier = activeHydra() ?? "high";
-        // Reject activation when the OpenAI pool is empty: enabling first and
-        // keeping the current model would silently run out of scope.
-        const prevHydra = state.hydra;
-        const prevScope = state.hydraScope;
-        activationPrev = { hydra: prevHydra, hydraScope: prevScope };
-        state.hydra = tier;
-        state.hydraScope = "openai";
-        const ranked = rankForCurrentScope(ctx, tier, undefined, false);
-        if (ranked.length === 0) {
-          state.hydra = prevHydra;
-          if (prevScope) state.hydraScope = prevScope;
-          else delete state.hydraScope;
-          ctx.ui.notify("Jippity unavailable: no OpenAI model is available to Hydra (check ChatGPT sign-in, quota, or open circuits). Scope not enabled; current routing unchanged.", "error");
-          return;
+      const configured = await configureHydra(ctx, async token => {
+        let activationPrev: { hydra: HydraTier | undefined; hydraScope: HydraScope | undefined } | undefined;
+        if (enable) {
+          const tier = activeHydra() ?? "high";
+          // Reject activation when the OpenAI pool is empty: enabling first and
+          // keeping the current model would silently run out of scope.
+          const prevHydra = state.hydra;
+          const prevScope = state.hydraScope;
+          activationPrev = { hydra: prevHydra, hydraScope: prevScope };
+          state.hydra = tier;
+          state.hydraScope = "openai";
+          const ranked = rankForCurrentScope(ctx, tier, undefined, false);
+          if (ranked.length === 0) {
+            state.hydra = prevHydra;
+            if (prevScope) state.hydraScope = prevScope;
+            else delete state.hydraScope;
+            ctx.ui.notify("Jippity unavailable: no OpenAI model is available to Hydra (check ChatGPT sign-in, quota, or open circuits). Scope not enabled; current routing unchanged.", "error");
+            return;
+          }
+        } else {
+          delete state.hydraScope;
         }
-      } else {
-        delete state.hydraScope;
-      }
-      persist();
-      announce();
-      publishPair(ctx);
-      const tier = activeHydra();
-      const picked = tier ? await routeWithHydra(ctx, tier, undefined, true) : undefined;
-      if (enable && !picked && activationPrev) {
-        // Routing failed and rolled the model/pair back: undo the scope
-        // activation too, so status, env, and preferences never advertise
-        // OpenAI-only routing while an out-of-scope model serves.
-        state.hydra = activationPrev.hydra;
-        if (activationPrev.hydraScope) state.hydraScope = activationPrev.hydraScope;
-        else delete state.hydraScope;
         persist();
         announce();
         publishPair(ctx);
-        ctx.ui.notify("Jippity activation failed; scope not enabled and previous routing restored. See the Hydra routing error above.", "error");
-        return;
-      }
+        const tier = activeHydra();
+        const picked = tier ? await routeWithHydra(ctx, tier, undefined, true, token) : undefined;
+        if (enable && !picked && activationPrev) {
+          // Routing failed and rolled the model/pair back: undo the scope
+          // activation too, so status, env, and preferences never advertise
+          // OpenAI-only routing while an out-of-scope model serves.
+          state.hydra = activationPrev.hydra;
+          if (activationPrev.hydraScope) state.hydraScope = activationPrev.hydraScope;
+          else delete state.hydraScope;
+          persist();
+          announce();
+          publishPair(ctx);
+          ctx.ui.notify("Jippity activation failed; scope not enabled and previous routing restored. See the Hydra routing error above.", "error");
+          return;
+        }
+        return { tier, picked };
+      });
+      if (!configured?.value) return;
+      const { tier, picked } = configured.value;
       const label = enable ? `Jippity: Hydra ${tier} on OpenAI models only.` : `Jippity off: Hydra ${tier ?? "off"} across all subscriptions.`;
       ctx.ui.notify(`${label}${picked ? ` Selected ${picked.summary}.` : tier ? " No matching OpenAI model available; keeping active model." : ""}`, "info");
     },
@@ -922,57 +981,63 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     return undefined;
   });
   pi.on("session_start", async (event, ctx) => {
-    cuaEnabled = true;
-    if (ctx.hasUI) ctx.ui.setStatus("cua", "cua:on");
-    preferences = readPreferences(preferencePath);
-    recoveryBlocked = false;
-    lastTurnAt = 0;
-    lastJevTurnSignal = undefined;
-    jevRoutedThisTurn = false;
-    manualPin = false;
-    const entries = ctx.sessionManager.getBranch();
-    const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
-    state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
-    const cliModelOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--model") && Boolean(ctx.model);
-    const cliThinkingOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--thinking");
-    if (cliModelOverride && ctx.model) {
-      const thinking = cliThinkingOverride ? pi.getThinkingLevel() : (state.models[state.mode]?.thinking ?? pi.getThinkingLevel());
-      state.models[state.mode] = { provider: ctx.model.provider, modelId: ctx.model.id, thinking };
-    } else if (cliThinkingOverride && state.models[state.mode]) {
-      state.models[state.mode]!.thinking = pi.getThinkingLevel();
-    }
-    changing = true;
-    modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion
-      ? "Fusion pair configuration is unavailable. Run /mode configure."
-      : false;
-    // Restore through a clone: applyModel records the actual (possibly
-    // clamped) Pi level on its input, which must not overwrite the stored
-    // desired choice that a later switch recovery repairs from.
-    const restoreChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
-    try { await applyModel(ctx, restoreChoice ? structuredClone(restoreChoice) : undefined); }
-    catch (error) {
-      modelBlocked = `Could not restore ${labels[state.mode]} mode: ${error instanceof Error ? error.message : String(error)} Retry /mode ${state.mode} or explicitly select a replacement with /model.`;
-      ctx.ui.notify(modelBlocked, "error");
-    }
-    finally { changing = false; }
-    applyModeTools(state.mode);
-    announce();
-    if (cliModelOverride || cliThinkingOverride) persist();
-    else pi.appendEntry("behavior-mode", structuredClone(state));
-    if (ctx.hasUI) ctx.ui.setStatus("mode", formatModeStatus(state));
-    publishPair(ctx);
-    const startupHydra = activeHydra();
-    if (startupHydra && !cliModelOverride) {
-      // AA metrics can refresh in the background; quota must be known before routing.
-      const aaSnap = readAaCatalog();
-      if (Date.now() - aaSnap.updatedAt > AA_STALE_MS) {
-        syncAaCatalog().catch(() => undefined);
+    const restoreToken = await lifecycle.acquire("restoring");
+    modeGeneration++;
+    try {
+      cuaEnabled = true;
+      if (ctx.hasUI) ctx.ui.setStatus("cua", "cua:on");
+      preferences = readPreferences(preferencePath);
+      lifecycle.recoveryBlocked = false;
+      lastTurnAt = 0;
+      lastJevTurnSignal = undefined;
+      jevRoutedThisTurn = false;
+      lifecycle.manualPin = false;
+      const entries = ctx.sessionManager.getBranch();
+      const fresh = event.reason === "new" || (event.reason === "startup" && !entries.some(entry => entry.type === "message"));
+      state = synchronizeFusionModel(restoreMode(entries, preferences, fresh));
+      const cliModelOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--model") && Boolean(ctx.model);
+      const cliThinkingOverride = event.reason === "startup" && !usesPersistentSidekick(state.mode) && hasCliFlag(process.argv, "--thinking");
+      if (cliModelOverride && ctx.model) {
+        const thinking = cliThinkingOverride ? pi.getThinkingLevel() : (state.models[state.mode]?.thinking ?? pi.getThinkingLevel());
+        state.models[state.mode] = { provider: ctx.model.provider, modelId: ctx.model.id, thinking };
+      } else if (cliThinkingOverride && state.models[state.mode]) {
+        state.models[state.mode]!.thinking = pi.getThinkingLevel();
       }
-      const routed = await routeWithHydra(ctx, startupHydra, undefined, fresh || !isSessionCacheWarm(ctx));
-      if (routed?.switchedModel) modelBlocked = false;
-    }
+      lifecycle.modelBlocked = usesPersistentSidekick(state.mode) && !state.fusion
+        ? "Fusion pair configuration is unavailable. Run /mode configure."
+        : false;
+      // Restore through a clone: applyModel records the actual (possibly
+      // clamped) Pi level on its input, which must not overwrite the stored
+      // desired choice that a later switch recovery repairs from.
+      const restoreChoice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
+      try { await applyModel(ctx, restoreChoice ? structuredClone(restoreChoice) : undefined); }
+      catch (error) {
+        lifecycle.modelBlocked = `Could not restore ${labels[state.mode]} mode: ${error instanceof Error ? error.message : String(error)} Retry /mode ${state.mode} or explicitly select a replacement with /model.`;
+        ctx.ui.notify(lifecycle.modelBlocked, "error");
+      }
+      applyModeTools(state.mode);
+      announce();
+      if (cliModelOverride || cliThinkingOverride) persist();
+      else pi.appendEntry("behavior-mode", structuredClone(state));
+      if (ctx.hasUI) ctx.ui.setStatus("mode", formatModeStatus(state));
+      publishPair(ctx);
+      const startupHydra = activeHydra();
+      if (startupHydra && !cliModelOverride) {
+        // AA metrics can refresh in the background; quota must be known before routing.
+        const aaSnap = readAaCatalog();
+        if (Date.now() - aaSnap.updatedAt > AA_STALE_MS) {
+          syncAaCatalog().catch(() => undefined);
+        }
+        const routed = await routeWithHydra(ctx, startupHydra, undefined, fresh || !isSessionCacheWarm(ctx), restoreToken);
+        if (routed?.switchedModel) lifecycle.modelBlocked = false;
+      }
+    } catch (error) {
+      lifecycle.recoveryBlocked = `Session mode restore incomplete (${String(error)}). Retry /mode.`;
+      ctx.ui.notify(lifecycle.recoveryBlocked, "error");
+    } finally { lifecycle.end(restoreToken); }
   });
   pi.events.on?.("pi:jev:turn-signal", (payload: unknown) => {
+    const generation = modeGeneration;
     const tier = activeHydra();
     if (!tier || !payload || typeof payload !== "object") return;
     const rec = payload as HydraTurnSignalInput & {
@@ -991,6 +1056,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
       domain: rec.domain,
       domainConfidence: rec.domainConfidence,
     }, false).then((res) => {
+      if (generation !== modeGeneration) return;
       lastTurnAt = Date.now();
       if (res) {
         jevRoutedThisTurn = true;
@@ -1064,24 +1130,26 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
   pi.on("message_end", (event) => {
     const message = event.message;
     if (message.role !== "assistant") return;
-    failedLead = undefined;
+    lifecycle.failedLead = undefined;
     if (message.stopReason === "error" && (SUBSCRIPTION_LIMIT_PATTERN.test(message.errorMessage ?? "") || RATE_LIMIT_PATTERN.test(message.errorMessage ?? ""))) {
       const now = Date.now();
       const until = parseLimitResetAt(message.errorMessage ?? "", now) ?? now + DEFAULT_FAMILY_COOLDOWN_MS;
       familyCooldowns.set(inferModelFamily(message.provider, message.model), until);
       quotaRefreshForced = true;
-      if (activeHydra()) failedLead = `${message.provider}/${message.model}`;
+      if (activeHydra()) lifecycle.failedLead = `${message.provider}/${message.model}`;
     } else if (message.stopReason !== "error" && message.stopReason !== "aborted") {
       familyCooldowns.delete(inferModelFamily(message.provider, message.model));
     }
   });
   pi.on("agent_end", async (_event, ctx) => {
-    manualPin = false;
-    const failed = failedLead;
-    failedLead = undefined;
+    const generation = modeGeneration;
+    lifecycle.manualPin = false;
+    const failed = lifecycle.failedLead;
+    lifecycle.failedLead = undefined;
     const tier = activeHydra();
     if (!failed || !tier || !ctx.model || `${ctx.model.provider}/${ctx.model.id}` !== failed) return;
     const result = await routeWithHydra(ctx, tier, lastJevTurnSignal, true);
+    if (generation !== modeGeneration) return;
     if (!result?.switchedModel) {
       ctx.ui.notify("Hydra could not recover from the lead rate limit: no eligible replacement model was selected.", "warning");
       return;
@@ -1094,9 +1162,9 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }, { triggerTurn: true });
   });
   pi.on("model_select", (event, ctx) => {
-    if (changing || event.source === "restore") return;
-    if (activeHydra()) manualPin = true;
-    modelBlocked = false;
+    if (lifecycle.busy || event.source === "restore") return;
+    if (activeHydra()) lifecycle.manualPin = true;
+    lifecycle.modelBlocked = false;
     const choice = { provider: event.model.provider, modelId: event.model.id, thinking: pi.getThinkingLevel() };
     state.models[state.mode] = choice;
     if (usesPersistentSidekick(state.mode) && state.fusion) state.fusion.lead = choice;
@@ -1104,17 +1172,17 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     publishPair(ctx);
   });
   pi.on("thinking_level_select", (event, ctx) => {
-    if (changing) return;
+    if (lifecycle.busy) return;
     const choice = usesPersistentSidekick(state.mode) ? state.fusion?.lead : state.models[state.mode];
     if (choice) { choice.thinking = event.level; persist(); publishPair(ctx); }
   });
   pi.on("input", (_event, ctx) => {
-    if (recoveryBlocked) {
-      ctx.ui.notify(recoveryBlocked, "error");
+    if (lifecycle.recoveryBlocked) {
+      ctx.ui.notify(lifecycle.recoveryBlocked, "error");
       return { action: "handled" as const };
     }
-    if (modelBlocked) {
-      ctx.ui.notify(modelBlocked, "error");
+    if (lifecycle.modelBlocked) {
+      ctx.ui.notify(lifecycle.modelBlocked, "error");
       return { action: "handled" as const };
     }
     return undefined;
@@ -1164,6 +1232,7 @@ export function registerModes(pi: ExtensionAPI, regular: string, orchestrate: st
     }
   });
   pi.on("session_shutdown", () => {
+    modeGeneration++;
     clearParentCuaState();
   });
   registerPresentationSwitch(pi);

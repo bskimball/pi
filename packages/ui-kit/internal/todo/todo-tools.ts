@@ -12,6 +12,7 @@
 // because renderer slots snapshot at registration time.
 
 import { Type } from "typebox";
+import { createDockInteraction } from "./dock-interaction.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -375,12 +376,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let current: TodoListView | undefined;
   let lastNudgedOpen: string | undefined;
   let currentCtx: ExtensionContext | undefined;
-  let panelCollapsed = false;
-  let dockPane: DockPane = "todos";
+  const interaction = createDockInteraction();
   let liveAgents: DockAgentItem[] = currentDockAgents();
   /** Selected agents-pane row; clamped on every fleet update. */
-  let selectedAgent = 0;
-  let dockMounted = false;
   let unsubscribeFleet = () => {};
   let removeDockInput: (() => void) | undefined;
   let uiPromptDepth = 0;
@@ -391,8 +389,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   function clearPanel(): void {
     const ctx = currentCtx;
-    const wasMounted = dockMounted;
-    dockMounted = false;
+    const wasMounted = interaction.mounted;
+    interaction.send({ type: "CLOSE" });
+    setAgentWorkspaceOpen(false);
+    interaction.send({ type: "DOCK", style: "unmounted" });
     removeDockInput?.();
     removeDockInput = undefined;
     if (wasMounted) writeLastPhase("todo-dock:unmount");
@@ -411,7 +411,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   function dockTabs() {
     if (!liveAgents.length) return undefined;
     return {
-      pane: dockPane,
+      pane: interaction.context.dockPane,
       agentCount: liveAgents.length,
       switchHint: presentationEnabled ? SWITCH_HINT : undefined,
     };
@@ -419,8 +419,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   /** Clamp the selection after the fleet changes; open rows stay valid. */
   function clampSelection(): void {
-    if (selectedAgent >= liveAgents.length) selectedAgent = Math.max(0, liveAgents.length - 1);
-    if (selectedAgent < 0) selectedAgent = 0;
+    if (interaction.context.selectedAgent >= liveAgents.length) interaction.send({ type: "SELECT", patch: { selectedAgent: Math.max(0, liveAgents.length - 1) } });
+    if (interaction.context.selectedAgent < 0) interaction.send({ type: "SELECT", patch: { selectedAgent: 0 } });
   }
 
   /**
@@ -431,9 +431,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
   function moveSelection(delta: number): void {
     if (!liveAgents.length) return;
     clampSelection();
-    const next = Math.max(0, Math.min(liveAgents.length - 1, selectedAgent + delta));
-    if (next === selectedAgent) return;
-    selectedAgent = next;
+    const next = Math.max(0, Math.min(liveAgents.length - 1, interaction.context.selectedAgent + delta));
+    if (next === interaction.context.selectedAgent) return;
+    interaction.send({ type: "SELECT", patch: { selectedAgent: next } });
     if (currentCtx) renderPanel();
   }
 
@@ -450,8 +450,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
     // including a prepared `/agents open` command. Fusion's Escape abort is
     // gated on the shared workspace-open flag, not consume, so overlay Esc
     // still reaches handleInput and closes the view.
-    if (peekOpen || uiPromptDepth > 0) return undefined;
-    if (!dockMounted || dockPane !== "agents" || panelCollapsed || !liveAgents.length) return undefined;
+    if (interaction.open || uiPromptDepth > 0) return undefined;
+    if (!interaction.mounted || interaction.context.dockPane !== "agents" || interaction.context.panelCollapsed || !liveAgents.length) return undefined;
     try {
       if (currentCtx.ui.getEditorText().length > 0) return undefined;
     } catch {
@@ -519,8 +519,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
    * another. Fusion's Escape abort is gated on this flag because overlay
    * handleInput does not consume TUI input listeners.
    */
-  let peekOpen = false;
-  let peekItemId: string | undefined;
+
   let peekSnapshot: DockAgentItem | undefined;
   /** Component transcript for the open peek; built at overlay mount. */
   let peekDoc: PeekTranscript | undefined;
@@ -532,16 +531,10 @@ export function installTodoTools(pi: ExtensionAPI): void {
   let peekHideThinking = false;
   let peekScrollOffset: number | undefined;
   let peekInvalidate: (() => void) | undefined;
-  /** Single-line steer/follow-up editor open in the peek footer. */
-  let peekInput: { mode: "steer" | "follow_up" | "prompt"; id: string; label: string; editor: Input } | undefined;
-  /** Pending destructive confirm (`abort task_1? y/n`). */
-  let peekConfirm: { action: "abort" | "close"; id: string } | undefined;
-  /** Bounded one-line action result shown until the next key. */
-  let peekStatus: string | undefined;
 
   function refreshOpenPeek(items: readonly DockAgentItem[]): void {
-    if (!peekOpen || !peekItemId) return;
-    const next = items.find((item) => item.id === peekItemId);
+    if (!interaction.open || !interaction.context.peekItemId) return;
+    const next = items.find((item) => item.id === interaction.context.peekItemId);
     if (!next) return;
     peekSnapshot = next;
     // Structural fleet publications are the refresh boundary. This bounded
@@ -564,11 +557,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     item: DockAgentItem,
     canOpenHere = false,
-  ): Promise<{ open: boolean }> {
-    if (peekOpen) return { open: false };
-    peekOpen = true;
+  ): Promise<{ open: boolean; item?: DockAgentItem }> {
+    if (interaction.open) return { open: false };
+    interaction.send({ type: "OPEN", id: item.id });
+    const owner = interaction.context.owner;
     setAgentWorkspaceOpen(true);
-    peekItemId = item.id;
     peekSnapshot = item;
     peekDoc = undefined;
     peekOffset = 0;
@@ -576,11 +569,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
     peekExpandedAll = readToolsExpanded(ctx);
     peekHideThinking = false;
     peekScrollOffset = undefined;
-    peekInput = undefined;
-    peekConfirm = undefined;
-    peekStatus = undefined;
+    interaction.send({ type: "INPUT", value: undefined });
+    interaction.send({ type: "CONFIRM", value: undefined });
+    interaction.send({ type: "STATUS", value: undefined });
     const openerCwd = ctx.cwd;
-    let result: { open: boolean } | undefined;
+    let result: { open: boolean; item?: DockAgentItem } | undefined;
     try {
       let currentRows = () => 24;
       let currentWidth = 80;
@@ -588,8 +581,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
       // same way currentRows() reads rows, falling back to the last render
       // width when the terminal is unavailable, else 80.
       let currentTermWidth = () => 80;
-      result = await ctx.ui.custom<{ open: boolean }>(
+      result = await ctx.ui.custom<{ open: boolean; item?: DockAgentItem }>(
         (tui, theme, keys, done) => {
+          if (interaction.context.owner !== owner) {
+            done({ open: false });
+            return { render: () => [], handleInput() {}, invalidate() {} };
+          }
           currentRows = () => Math.max(3, Math.min(80, tui?.terminal?.rows ?? 24));
           currentTermWidth = () => {
             // Terminal exposes columns, not width (rows is its sibling).
@@ -635,69 +632,71 @@ export function installTodoTools(pi: ExtensionAPI): void {
               void submitPeekInput(value);
             };
             editor.onEscape = () => {
-              peekInput = undefined;
+              interaction.send({ type: "INPUT", value: undefined });
               peekInvalidate?.();
             };
-            peekInput = { mode, id, label, editor };
-            peekConfirm = undefined;
-            peekStatus = undefined;
+            interaction.send({ type: "INPUT", value: { mode, id, label, editor } });
+            interaction.send({ type: "CONFIRM", value: undefined });
+            interaction.send({ type: "STATUS", value: undefined });
             peekInvalidate?.();
           };
           const submitPeekInput = async (value: string): Promise<void> => {
-            const pending = peekInput;
-            peekInput = undefined;
+            const pending = interaction.context.peekInput;
+            interaction.send({ type: "INPUT", value: undefined });
             if (!pending || !value.trim()) {
               peekInvalidate?.();
               return;
             }
             const control = fleetControl();
             if (!control) {
-              peekStatus = "task extension not loaded";
+              interaction.send({ type: "STATUS", value: "task extension not loaded" });
               peekInvalidate?.();
               return;
             }
-            peekStatus = `sending ${pending.label} to ${pending.id}...`;
+            interaction.send({ type: "BEGIN", value: `sending ${pending.label} to ${pending.id}...` });
             peekInvalidate?.();
+            const generation = interaction.context.generation;
             try {
               const result = await control.send(pending.id, pending.mode, value.trim());
-              peekStatus = result.message || (result.ok ? "sent" : "failed");
+              interaction.send({ type: "RESOLVE", generation, value: result.message || (result.ok ? "sent" : "failed") });
             } catch {
-              peekStatus = "control call failed";
+              interaction.send({ type: "RESOLVE", generation, value: "control call failed" });
             }
-            peekInvalidate?.();
+            if (interaction.owns(generation)) peekInvalidate?.();
           };
           /** Run a confirmed abort/close through the shared control channel. */
           const runPeekConfirm = async (): Promise<void> => {
-            const pending = peekConfirm;
-            peekConfirm = undefined;
+            const pending = interaction.context.peekConfirm;
+            interaction.send({ type: "CONFIRM", value: undefined });
             if (!pending) return;
             const control = fleetControl();
             if (!control) {
-              peekStatus = "task extension not loaded";
+              interaction.send({ type: "STATUS", value: "task extension not loaded" });
               peekInvalidate?.();
               return;
             }
-            peekStatus = `${pending.action === "abort" ? "aborting" : "closing"} ${pending.id}...`;
+            interaction.send({ type: "BEGIN", value: `${pending.action === "abort" ? "aborting" : "closing"} ${pending.id}...` });
             peekInvalidate?.();
+            const generation = interaction.context.generation;
             try {
               const result =
                 pending.action === "abort"
                   ? await control.abort(pending.id)
                   : await control.close(pending.id);
-              peekStatus = result.message || (result.ok ? `${pending.action} done` : "failed");
+              interaction.send({ type: "RESOLVE", generation, value: result.message || (result.ok ? `${pending.action} done` : "failed") });
             } catch {
-              peekStatus = "control call failed";
+              interaction.send({ type: "RESOLVE", generation, value: "control call failed" });
             }
-            peekInvalidate?.();
+            if (interaction.owns(generation)) peekInvalidate?.();
           };
           /** Footer override for input / confirm / result states. */
           const peekFooterOptions = (
             innerWidth: number,
           ): { inputLine?: string; confirmLine?: string; statusLine?: string } => {
-            if (peekInput) {
+            if (interaction.editing && interaction.context.peekInput) {
               let line: string | undefined;
               try {
-                line = peekInput.editor.render(Math.max(1, innerWidth))[0];
+                line = interaction.context.peekInput.editor.render(Math.max(1, innerWidth))[0];
               } catch {
                 line = undefined;
               }
@@ -705,12 +704,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
               // would count `_pi:c` as visible text; strip it (cursor hidden).
               const stripped =
                 typeof line === "string" ? line.split(CURSOR_MARKER).join("") : undefined;
-              return { inputLine: stripped ?? `${peekInput.label} ${peekInput.id}> ` };
+              return { inputLine: stripped ?? `${interaction.context.peekInput.label} ${interaction.context.peekInput.id}> ` };
             }
-            if (peekConfirm) {
-              return { confirmLine: `${peekConfirm.action} ${peekConfirm.id}? y/n` };
+            if (interaction.confirming && interaction.context.peekConfirm) {
+              return { confirmLine: `${interaction.context.peekConfirm.action} ${interaction.context.peekConfirm.id}? y/n` };
             }
-            if (peekStatus !== undefined) return { statusLine: peekStatus };
+            if (interaction.context.peekStatus !== undefined) return { statusLine: interaction.context.peekStatus };
             return {};
           };
           // Same inner width the peek renderer measures (border rail +
@@ -741,13 +740,13 @@ export function installTodoTools(pi: ExtensionAPI): void {
           /** Switch to the previous/next dock agent without closing. */
           const switchPeek = (delta: number): void => {
             if (liveAgents.length < 2 || !peekDoc) return;
-            const from = liveAgents.findIndex((entry) => entry.id === peekItemId);
-            const base = from === -1 ? selectedAgent : from;
+            const from = liveAgents.findIndex((entry) => entry.id === interaction.context.peekItemId);
+            const base = from === -1 ? interaction.context.selectedAgent : from;
             const next = liveAgents[(base + delta + liveAgents.length) % liveAgents.length];
-            if (!next || next.id === peekItemId) return;
-            peekItemId = next.id;
+            if (!next || next.id === interaction.context.peekItemId) return;
+            interaction.send({ type: "CYCLE", id: next.id });
             peekSnapshot = next;
-            selectedAgent = liveAgents.indexOf(next);
+            interaction.send({ type: "SELECT", patch: { selectedAgent: liveAgents.indexOf(next) } });
             const replacement = new PeekTranscript({
               tui,
               cwd: openerCwd,
@@ -766,14 +765,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
             }
             peekDoc = replacement;
             peekScrollOffset = undefined;
-            peekInput = undefined;
-            peekConfirm = undefined;
-            peekStatus = undefined;
+            interaction.send({ type: "INPUT", value: undefined });
+            interaction.send({ type: "CONFIRM", value: undefined });
+            interaction.send({ type: "STATUS", value: undefined });
             if (currentCtx) renderPanel();
             peekInvalidate?.();
           };
           return {
             render(width: number): string[] {
+              if (interaction.context.owner !== owner || !interaction.open) return [];
               currentWidth = width;
               const body = peekDoc?.renderBody(innerWidthOf(width)) ?? { lines: [], trimmed: false };
               return renderPeekBody(theme, width, peekSnapshot ?? item, {
@@ -785,16 +785,17 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 // Fleet snapshot at render call time: no IO in render, and
                 // the same list the budget call sites below measure against.
                 agents: [...liveAgents],
-                selectedAgentId: peekItemId,
+                selectedAgentId: interaction.context.peekItemId,
                 ...peekFooterOptions(innerWidthOf(width)),
               });
             },
             handleInput(data: string): void {
+              if (interaction.context.owner !== owner || !interaction.open) return;
               // While the single-line editor is active it owns every key;
               // Esc cancels via the editor, never by closing the peek.
-              if (peekInput) {
+              if (interaction.editing && interaction.context.peekInput) {
                 try {
-                  peekInput.editor.handleInput(data);
+                  interaction.context.peekInput.editor.handleInput(data);
                 } catch {
                   // Editor input never breaks the overlay.
                 }
@@ -802,18 +803,18 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 return;
               }
               // A pending confirm owns the next key: y executes, anything else cancels.
-              if (peekConfirm) {
+              if (interaction.confirming && interaction.context.peekConfirm) {
                 if (data === "y" || data === "Y") void runPeekConfirm();
                 else {
-                  peekConfirm = undefined;
+                  interaction.send({ type: "CONFIRM", value: undefined });
                   peekInvalidate?.();
                 }
                 return;
               }
               // The one-line result survives only until the next key; the key
               // still acts, so clear first and repaint below when unclaimed.
-              const hadStatus = peekStatus !== undefined;
-              peekStatus = undefined;
+              const hadStatus = interaction.context.peekStatus !== undefined;
+              interaction.send({ type: "STATUS", value: undefined });
               if (
                 keys.matches(data, "tui.select.cancel") ||
                 data === "\u0003" ||
@@ -898,14 +899,14 @@ export function installTodoTools(pi: ExtensionAPI): void {
               if (data === "x" || data === "X") {
                 const current = peekSnapshot ?? item;
                 if (!canSwitchToSession(current.lifecycle)) {
-                  peekConfirm = { action: "abort", id: current.id };
+                  interaction.send({ type: "CONFIRM", value: { action: "abort", id: current.id } });
                 }
                 peekInvalidate?.();
                 return;
               }
               if (data === "c" || data === "C") {
                 const current = peekSnapshot ?? item;
-                peekConfirm = { action: "close", id: current.id };
+                interaction.send({ type: "CONFIRM", value: { action: "close", id: current.id } });
                 peekInvalidate?.();
                 return;
               }
@@ -915,7 +916,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
                 keys.matches(data, "tui.select.confirm")
               ) {
                 const current = peekSnapshot ?? item;
-                if (canSwitchToSession(current.lifecycle)) done({ open: true });
+                if (canSwitchToSession(current.lifecycle)) done({ open: true, item: current });
                 else if (hadStatus) peekInvalidate?.();
                 return;
               }
@@ -930,36 +931,39 @@ export function installTodoTools(pi: ExtensionAPI): void {
         },
       );
     } finally {
-      peekOpen = false;
-      setAgentWorkspaceOpen(false);
-      peekItemId = undefined;
-      peekSnapshot = undefined;
-      peekDoc = undefined;
-      peekOffset = 0;
-      peekWindowTrimmed = false;
-      peekExpandedAll = false;
-      peekHideThinking = false;
-      peekScrollOffset = undefined;
-      peekInput = undefined;
-      peekConfirm = undefined;
-      peekStatus = undefined;
-      peekInvalidate = undefined;
+      if (interaction.context.owner === owner) {
+        interaction.send({ type: "CLOSE" });
+        setAgentWorkspaceOpen(false);
+        peekSnapshot = undefined;
+        peekDoc = undefined;
+        peekOffset = 0;
+        peekWindowTrimmed = false;
+        peekExpandedAll = false;
+        peekHideThinking = false;
+        peekScrollOffset = undefined;
+        interaction.send({ type: "INPUT", value: undefined });
+        interaction.send({ type: "CONFIRM", value: undefined });
+        interaction.send({ type: "STATUS", value: undefined });
+        peekInvalidate = undefined;
+      } else {
+        result = { open: false };
+      }
     }
     return result ?? { open: false };
   }
 
   /** Peek the selected agents-pane row; stash nothing, resolve inline. */
   async function peekSelected(ctx: ExtensionContext): Promise<void> {
-    if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
+    if (!presentationEnabled || interaction.context.dockPane !== "agents" || interaction.context.panelCollapsed) return;
     clampSelection();
-    const item = liveAgents[selectedAgent];
+    const item = liveAgents[interaction.context.selectedAgent];
     if (!item) {
       ctx.ui.notify("No agents.", "info");
       return;
     }
     currentCtx = ctx;
     const resolved = await openPeek(ctx, item);
-    if (resolved.open) prepareOpenCommand(ctx, item);
+    if (resolved.open && resolved.item) prepareOpenCommand(ctx, resolved.item);
     if (currentCtx) renderPanel();
   }
 
@@ -986,23 +990,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
     if (!ctx?.hasUI || ctx.mode !== "tui") return;
     if (process.env.PI_BEHAVIOR_MODE === "pi") { clearPanel(); return; }
     if (!dockHasSurface()) {
-      if (dockMounted) clearPanel();
+      if (interaction.mounted) clearPanel();
       return;
     }
-    if (dockPane === "agents" && liveAgents.length === 0) dockPane = "todos";
+    if (interaction.context.dockPane === "agents" && liveAgents.length === 0) interaction.send({ type: "SELECT", patch: { dockPane: "todos" } });
     // The WidthText factory closes over this state. Remounting via setWidget
     // on every todo_write / fleet lifecycle tick rebuilds the above-editor
     // widget and has coincided with unclean Windows parent deaths. Paint
     // the live host instead; remount only to create or destroy the surface.
-    if (dockMounted) {
-      requestHostRender();
-      return;
-    }
-    writeLastPhase("todo-dock:mount");
-    try {
-      // Keyboard selection rides onTerminalInput while the dock is mounted;
-      // the handler self-gates to the visible agents pane. One listener
-      // per mount, removed on unmount, so input never stacks.
+    if (interaction.styled !== presentationEnabled || !interaction.mounted) {
       removeDockInput?.();
       removeDockInput = undefined;
       try {
@@ -1013,27 +1009,38 @@ export function installTodoTools(pi: ExtensionAPI): void {
       } catch {
         removeDockInput = undefined;
       }
+      if (interaction.mounted) interaction.send({ type: "DOCK", style: presentationEnabled ? "styled" : "plain" });
+    }
+    if (interaction.mounted) {
+      requestHostRender();
+      return;
+    }
+    writeLastPhase("todo-dock:mount");
+    try {
+      // Keyboard selection rides onTerminalInput while the dock is mounted;
+      // the handler self-gates to the visible agents pane. One listener
+      // per mount, removed on unmount, so input never stacks.
       ctx.ui.setWidget(
         PANEL_KEY,
         (_tui, theme) =>
           new DockPanel(
             (width) => {
-              if (dockPane === "agents") {
+              if (interaction.context.dockPane === "agents") {
                 return renderAgentList(theme, width, liveAgents, {
-                  collapsed: panelCollapsed,
+                  collapsed: interaction.context.panelCollapsed,
                   tabs: dockTabs(),
-                  selectedIndex: selectedAgent,
+                  selectedIndex: interaction.context.selectedAgent,
                 });
               }
               if (!current) {
                 return renderAgentList(theme, width, liveAgents, {
-                  collapsed: panelCollapsed,
+                  collapsed: interaction.context.panelCollapsed,
                   tabs: dockTabs(),
                 });
               }
               if (!presentationEnabled) return renderPlainTodoList(current, width);
               return renderTodoList(theme, width, current, {
-                collapsed: panelCollapsed,
+                collapsed: interaction.context.panelCollapsed,
                 toggleHint: TOGGLE_HINT,
                 tabs: dockTabs(),
               });
@@ -1041,24 +1048,24 @@ export function installTodoTools(pi: ExtensionAPI): void {
             {
               fallback: "[todo panel unavailable]",
               onAgentRow: (rowIndex) => {
-                if (!presentationEnabled || dockPane !== "agents" || panelCollapsed) return;
+                if (!presentationEnabled || interaction.context.dockPane !== "agents" || interaction.context.panelCollapsed) return;
                 clampSelection();
-                selectedAgent = rowIndex;
+                interaction.send({ type: "SELECT", patch: { selectedAgent: rowIndex } });
                 const item = liveAgents[rowIndex];
                 const host = currentCtx;
                 if (currentCtx) renderPanel();
                 if (item && host) void openPeek(host, item).then((resolved) => {
-                  if (resolved.open) prepareOpenCommand(host, item);
+                  if (resolved.open && resolved.item) prepareOpenCommand(host, resolved.item);
                   if (currentCtx) renderPanel();
                 });
               },
-              rowCount: () => (dockPane === "agents" && !panelCollapsed ? liveAgents.length : 0),
-              agentLayout: () => ({ items: liveAgents, selectedIndex: selectedAgent }),
+              rowCount: () => (interaction.context.dockPane === "agents" && !interaction.context.panelCollapsed ? liveAgents.length : 0),
+              agentLayout: () => ({ items: liveAgents, selectedIndex: interaction.context.selectedAgent }),
             },
           ),
         { placement: "aboveEditor" },
       );
-      dockMounted = true;
+      interaction.send({ type: "DOCK", style: presentationEnabled ? "styled" : "plain" });
     } catch {
       // The transcript receipt remains available if the dock cannot be mounted.
     }
@@ -1074,7 +1081,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
       ctx.ui.notify("No todo list or retained agent history for this session yet.", "info");
       return;
     }
-    panelCollapsed = !panelCollapsed;
+    interaction.send({ type: "SELECT", patch: { panelCollapsed: !interaction.context.panelCollapsed } });
     renderPanel();
   }
 
@@ -1089,11 +1096,11 @@ export function installTodoTools(pi: ExtensionAPI): void {
       return;
     }
     if (pane === "todos" && !current && liveAgents.length > 0) {
-      dockPane = "agents";
+      interaction.send({ type: "SELECT", patch: { dockPane: "agents" } });
       renderPanel();
       return;
     }
-    dockPane = pane;
+    interaction.send({ type: "SELECT", patch: { dockPane: pane } });
     renderPanel();
   }
 
@@ -1101,9 +1108,9 @@ export function installTodoTools(pi: ExtensionAPI): void {
     liveAgents = [...items];
     refreshOpenPeek(liveAgents);
     clampSelection();
-    if (liveAgents.length === 0 && dockPane === "agents") dockPane = "todos";
+    if (liveAgents.length === 0 && interaction.context.dockPane === "agents") interaction.send({ type: "SELECT", patch: { dockPane: "todos" } });
     if (presentationEnabled && liveAgents.length > 0 && !current) {
-      dockPane = "agents";
+      interaction.send({ type: "SELECT", patch: { dockPane: "agents" } });
     }
     if (currentCtx) renderPanel();
   });
@@ -1188,7 +1195,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     }
     const item = id
       ? liveAgents.find((entry) => entry.id === id)
-      : liveAgents[Math.min(selectedAgent, liveAgents.length - 1)];
+      : liveAgents[Math.min(interaction.context.selectedAgent, liveAgents.length - 1)];
     if (!item) {
       ctx.ui.notify(id ? `No agent "${cleanInline(id, 40)}".` : "No agents.", "info");
       return;
@@ -1197,12 +1204,12 @@ export function installTodoTools(pi: ExtensionAPI): void {
       switchSession?: (path: string) => Promise<{ cancelled: boolean }>;
     };
     const resolved = await openPeek(ctx, item, typeof privileged.switchSession === "function");
-    if (resolved.open) {
+    if (resolved.open && resolved.item) {
       if (typeof privileged.switchSession === "function") {
         // Re-resolve and recheck lifecycle immediately before activation.
-        await openAgentSession(ctx, item.id);
+        await openAgentSession(ctx, resolved.item.id);
       } else {
-        prepareOpenCommand(ctx, item);
+        prepareOpenCommand(ctx, resolved.item);
       }
     }
     if (currentCtx) renderPanel();
@@ -1273,7 +1280,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     });
     pi.registerShortcut("alt+a", {
       description: "Show the agents tab in the todo dock",
-      handler: (ctx) => switchPane(ctx, dockPane === "agents" ? "todos" : "agents"),
+      handler: (ctx) => switchPane(ctx, interaction.context.dockPane === "agents" ? "todos" : "agents"),
     });
 
     pi.registerCommand("todos", {
@@ -1308,7 +1315,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
   pi.events.on("pi:ui:changed", () => {
     presentationEnabled = apexPresentationEnabled();
     // Disabled mode is a plain todo list: never leave the dock on agents.
-    if (!presentationEnabled && dockPane === "agents") dockPane = "todos";
+    if (!presentationEnabled && interaction.context.dockPane === "agents") interaction.send({ type: "SELECT", patch: { dockPane: "todos" } });
     registerTodoWriteTool();
     registerTodoReadTool();
     renderPanel();
@@ -1324,15 +1331,15 @@ export function installTodoTools(pi: ExtensionAPI): void {
 
   pi.on("session_start", (event: any, ctx: ExtensionContext) => {
     clearPanel();
-    panelCollapsed = false;
-    dockPane = "todos";
+    interaction.send({ type: "SELECT", patch: { panelCollapsed: false } });
+    interaction.send({ type: "SELECT", patch: { dockPane: "todos" } });
     currentCtx = ctx;
     uiPromptDepth = 0;
     current = event?.reason === "new" ? undefined : reconstructTodoState(ctx);
     lastNudgedOpen = undefined;
     liveAgents = currentDockAgents();
     if (presentationEnabled && liveAgents.length > 0 && !current) {
-      dockPane = "agents";
+      interaction.send({ type: "SELECT", patch: { dockPane: "agents" } });
     }
     if (dockHasSurface()) renderPanel();
   });
@@ -1344,7 +1351,7 @@ export function installTodoTools(pi: ExtensionAPI): void {
     lastNudgedOpen = undefined;
     liveAgents = currentDockAgents();
     if (presentationEnabled && liveAgents.length > 0 && !current) {
-      dockPane = "agents";
+      interaction.send({ type: "SELECT", patch: { dockPane: "agents" } });
     }
     if (dockHasSurface()) renderPanel();
   });
@@ -1356,8 +1363,8 @@ export function installTodoTools(pi: ExtensionAPI): void {
     currentCtx = undefined;
     uiPromptDepth = 0;
     liveAgents = [];
-    selectedAgent = 0;
-    dockPane = "todos";
+    interaction.send({ type: "SELECT", patch: { selectedAgent: 0 } });
+    interaction.send({ type: "SELECT", patch: { dockPane: "todos" } });
     unsubscribeFleet();
   });
 

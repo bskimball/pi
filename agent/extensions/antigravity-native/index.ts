@@ -2,23 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { normalizeContext, type TranscriptContext } from "@earendil-works/pi-ai";
 import { AntigravityRuntime } from "pi-agy-acp/src/runtime.ts";
 import { defaults } from "pi-agy-acp/src/config.ts";
 import { runCommand } from "pi-agy-acp/src/host.ts";
 import { streamPi } from "pi-agy-acp/src/pi-stream.ts";
 import { createHost } from "./host.ts";
-
-export function withoutPiInstructions(context: TranscriptContext): TranscriptContext {
-  return normalizeContext({
-    messages: context.messages.map((message) => message.role === "system"
-      ? {
-          role: "system", content: "", timestamp: message.timestamp,
-          toolsAdded: message.toolsAdded, toolsRemoved: message.toolsRemoved,
-        }
-      : message),
-  });
-}
+import { ReplayCheckpoints, withoutPiInstructions, workerContract } from "./context.ts";
+export { withoutPiInstructions } from "./context.ts";
 
 function modelConfigs(runtime: AntigravityRuntime): ProviderModelConfig[] {
   return runtime.catalog.list().map((model) => {
@@ -40,6 +30,8 @@ export default async function (pi: ExtensionAPI) {
   let registered = false;
   let refreshing = false;
   let modeInstructions = "";
+  const taskInstructions = workerContract(process.argv, process.env);
+  const checkpoints = new ReplayCheckpoints(process.env.PI_SUBAGENT === "1");
   let models: ProviderModelConfig[] = [];
   let active: ReturnType<typeof createRuntime> | undefined;
 
@@ -86,14 +78,13 @@ export default async function (pi: ExtensionAPI) {
       streamSimple: (model, context, options) => streamPi({
         stream: (request) => {
           active ??= createRuntime();
-          // Only the mode owner's card may enter ACP, including after payload hooks.
-          return active.runtime.stream({
+          // Payload hooks cannot replace the task-owned contract or mode card.
+          return active.runtime.stream(checkpoints.prepare({
             model: request.model,
             messages: request.messages.filter((message) => message.role !== "system"),
-            system: modeInstructions || undefined,
             tools: request.tools, sessionId: request.sessionId, signal: request.signal,
             reasoningEffort: request.reasoningEffort,
-          });
+          }, taskInstructions || modeInstructions));
         },
       }, model, withoutPiInstructions(context), options),
       refreshModels: async (context) => {
@@ -115,11 +106,13 @@ export default async function (pi: ExtensionAPI) {
     unsubscribeGuidance();
     await active?.dispose();
     active = undefined;
+    checkpoints.clear();
   });
-  pi.on("session_tree", () => active?.runtime.resetConversations());
-  pi.on("session_compact", () => active?.runtime.resetConversations());
+  pi.on("session_tree", () => { checkpoints.reset(false); return active?.runtime.resetConversations(); });
+  pi.on("session_compact", () => { checkpoints.reset(); return active?.runtime.resetConversations(); });
   pi.on("session_start", () => {
     modeInstructions = "";
+    checkpoints.clear();
     return active?.runtime.resetConversations();
   });
   pi.on("agent_settled", (_event, ctx) => {

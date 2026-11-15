@@ -7,6 +7,7 @@
 // Store logic lives in continual-memory/store.ts; this file is the tool adapter.
 
 import { Type } from "typebox";
+import { createReminderState } from "./continual-memory/reminder-state.ts";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -89,7 +90,7 @@ export default function (pi: ExtensionAPI): void {
   let projectContext: ProjectContext | undefined;
   let projectLoadError: string | undefined;
   let globalLoadError: string | undefined;
-  let compactReminderPending = false;
+  const compactReminder = createReminderState();
   const resolveProject = createProjectResolver();
   const memoryWriteReminder =
     "If this session produced a durable fact (preference, failure, project decision) that is not already listed above, offer memory_write — do not auto-write. Skip secrets, transcripts, and one-off task dump.";
@@ -120,6 +121,7 @@ export default function (pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    compactReminder.send("reset");
     reconstructLocal(ctx);
     reloadProject(ctx);
     reloadGlobal();
@@ -131,10 +133,11 @@ export default function (pi: ExtensionAPI): void {
   });
   pi.on("session_compact", () => {
     if (process.env.PI_SUBAGENT === "1") return;
-    compactReminderPending = true;
+    compactReminder.send("compact");
   });
 
   pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+    compactReminder.send("reset");
     if (process.env.PI_SUBAGENT === "1") return;
     const message = "If this session produced a durable fact, offer memory_write — do not auto-write.";
     if (ctx.hasUI) {
@@ -165,10 +168,10 @@ export default function (pi: ExtensionAPI): void {
       globalLoadError ? `(Continual memory: global store unavailable — ${globalLoadError})` : "",
     ].filter(Boolean);
     const warning = warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
-    const reminder = compactReminderPending
+    const reminder = compactReminder.pending
       ? `\n\n${memoryWriteReminder}`
       : "";
-    compactReminderPending = false;
+    compactReminder.send("consume");
     event.systemPromptOptions.appendSystemPrompt = [event.systemPromptOptions.appendSystemPrompt, `${overview}${warning}${reminder}`].filter(part => part?.trim()).join("\n\n");
   });
 

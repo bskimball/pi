@@ -13,7 +13,7 @@ Listing callers is not the job; grep does that in a second. The job is the break
 
 ## Don't trust your own writeup
 
-A blast-radius writeup that sounds right is worthless: it reads as convincing whether or not it is true. Find the one or two facts the safety depends on and prove them by running code.
+A blast-radius writeup that sounds right is worthless: it reads as convincing whether or not it is true. Find the one or two facts the safety depends on. Use existing tests or focused execution when the risk warrants it; direct code evidence can settle a simple contract. State the verification level reached.
 
 ### How sure are you
 
@@ -43,6 +43,6 @@ Level 4 is usually one small script that imports the library the app ships and c
 - **Cleared.** What you checked and why it is fine.
 - **Before you merge.** The cheapest test or repro that catches the real bug, including the script you wrote. Recommend a repository test; don't add one unasked.
 
-Run the prose through [`unslop`](../unslop/SKILL.md), cite real code, and strip anything private before it goes anywhere public.
+Keep the report concise, cite real code, and strip private information before public sharing.
 
 Adapted from pstack (MIT, (c) 2026 Lauren Tan): https://github.com/cursor/plugins/tree/main/pstack/skills/blast-radius

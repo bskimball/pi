@@ -1,4 +1,5 @@
 /** Task adapter over the kit Agent Catalog. Spawn policy stays in this extension. */
+import { getSupportedThinkingLevels, type Model, type Api } from "@earendil-works/pi-ai";
 import { modelAttempts as catalogModelAttempts, resolveAgentThinking as catalogResolveAgentThinking, type AgentDef } from "@pi/ui-kit";
 
 /** Pi CLI thinking levels. Case-insensitive on input; stored lowercase. */
@@ -16,6 +17,23 @@ export function parseThinkingOverride(value: string | undefined): { thinking?: s
     return { error: `Invalid thinking level "${trimmed}". Use one of: ${THINKING_LEVELS.join(", ")}.` };
   }
   return { thinking: level };
+}
+
+/** Reject explicit thinking requests that Pi would silently clamp. */
+export function validateThinkingForAttempts(level: string | undefined, attempts: Array<string | undefined>, registry: { getAll(): Model<Api>[] }): string | undefined {
+  if (!level) return undefined;
+  const models = registry.getAll();
+  for (const attempt of attempts) {
+    const matches = attempt ? models.filter((model) => attempt === model.id || attempt === `${model.provider}/${model.id}`) : [];
+    if (matches.length !== 1) return `Cannot verify thinking level "${level}" for model "${attempt ?? "default"}"; specify an unambiguous configured model.`;
+    const supported = getSupportedThinkingLevels(matches[0]);
+    if (!supported.includes(level as (typeof supported)[number])) return `Model "${attempt}" does not support thinking level "${level}". Supported: ${supported.join(", ")}.`;
+  }
+  return undefined;
+}
+
+export function taskAllowsFallback(model: string | undefined, allowFallback: boolean | undefined): boolean {
+  return allowFallback ?? !model?.trim();
 }
 
 /** Opt-in single-model execution; ordinary spawns retain declared fallbacks. */

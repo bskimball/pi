@@ -33,6 +33,8 @@ import {
   orchestrateAgentList,
   orchestrateAgentParamDescription,
   parseThinkingOverride,
+  validateThinkingForAttempts,
+  taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
   THINKING_OVERRIDE_DESCRIPTION,
@@ -791,7 +793,7 @@ export default function (pi: ExtensionAPI) {
   const utopiaAgentCatalog = sidekickDef
     ? `${apexAgentCatalog}\n- sidekick: ${sidekickDef.description}`
     : apexAgentCatalog;
-  const taskStartFullDescription = `Start an asynchronous specialist sub-agent in an isolated session. Use it when work benefits from separate specialist context, such as broad investigation, an independent separable implementation slice, or fresh-eyes review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Use synchronous \`task\` for one blocking result, such as a final verification gate or review verdict, when no specific independent lead work is ready and the engagement needs no follow-up. Use task_start when specific independent work is ready or the engagement needs steering or follow-up. If a worker is already started and no independent work is ready, call task_wait as the very next action; do not invent work to fill the wait.
+  const taskStartFullDescription = `Start a specialist in an isolated session for broad investigation, separable implementation, or independent review. Multi-file, long-running, or frontend work may remain inline in regular mode. Returns task_N immediately and runs in the background. Stay responsive to the user: continue useful lead work or reply while workers run. Worker completion automatically wakes an idle lead; retrieve the report with task_wait then. Wait immediately only when the next action requires the result. Do not poll or invent work to fill the wait.
 
 Available agents:
 ${apexAgentCatalog}
@@ -808,7 +810,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
-  const taskStartWorkDescription = `Start a Work crew specialist in an isolated session. Work is inline-first: dispatch strategist (business/productivity planning), researcher (external source-traced research), author (all email drafting and substantive email rewriting; other human-readable prose when separate context pays), or clerk (broad recon, monotonous reversible execution) when its routing trigger fires. Email reading, factual extraction, and summarization remain inline unless another trigger fires; prefer the synchronous \`task\` tool for a single bounded result in-line. Returns a worker id (task_N) immediately, so use it when you want to keep working, steer the specialist later, or collect results with task_wait. Park the worker with task_close when done.
+  const taskStartWorkDescription = `Start a Work crew specialist in the background: strategist for business/productivity planning, researcher for external research, author for all email drafting and substantive email rewriting, or clerk for broad recon and repetitive reversible work. Work stays inline-first. Email reading, factual extraction, and summarization remain inline unless another trigger fires. Returns task_N immediately. Keep responding to the user while it runs; completion wakes an idle lead. Retrieve results with task_wait and close accepted one-shot workers.
 
 Available agents:
 ${workCrewList(agents)}
@@ -1246,7 +1248,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
 
     worker.fallbackInProgress = true;
     worker.fallbackAwaitingAgentStart = true;
-    worker.lifecycle = "retrying";
+    runtime.transitionLifecycle(worker, "RETRY");
     clearIdle(worker);
     closeAllRunning(worker, "error");
     const previousModel = worker.model ?? "default model";
@@ -1292,7 +1294,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       worker.pendingSteer = 0;
       worker.pendingFollowUp = 0;
       worker.directive = undefined;
-      worker.lifecycle = "running";
+      runtime.transitionLifecycle(worker, "AGENT_START");
       touch(worker);
       syncFleetWidget();
 
@@ -1321,7 +1323,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       worker.model = nextModel;
       worker.modelError = message;
       worker.fallbackInProgress = false;
-      worker.lifecycle = "running";
+      runtime.transitionLifecycle(worker, "AGENT_START");
       pushError(worker, `${nextModel}: fallback setup failed: ${message}`);
       armIdle(worker);
       notifySubscribers(worker);
@@ -1712,6 +1714,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (scoped.error) return { error: scoped.error };
       attempts = scoped.attempts;
     }
+    if (thinkingRequest.thinking && !params.ctx) return { error: "Cannot verify requested thinking level without a model registry." };
+    const thinkingError = params.ctx ? validateThinkingForAttempts(thinkingRequest.thinking, attempts, params.ctx.modelRegistry) : undefined;
+    if (thinkingError) return { error: thinkingError };
     // Fusion has a configured sidekick model when set; in Utopia without a pair,
     // sidekick resolves via Hydra or static frontmatter.
     const initial = isFusion && forcedFusionModel
@@ -1862,6 +1867,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         env: {
           ...process.env,
           PI_SUBAGENT: "1",
+          PI_TASK_PROMPT_CONTRACT: "1",
           PI_ASYNC_RPC: "1",
           PI_TASK_NOTES_DIR: sessionDir,
           PI_PROJECT_CONTEXT_CWD: process.env.PI_PROJECT_CONTEXT_CWD || params.ctx?.cwd || params.cwd,
@@ -2010,9 +2016,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         if (fallbackResult !== "retried") {
           const finalError = worker.modelError ?? message;
           forceKillWorker(worker, `prompt rejected: ${finalError}`);
-          worker.countsTowardCap = false;
-          worker.lifecycle = "failed";
-          worker.closed = true;
+          runtime.transitionLifecycle(worker, "DISPOSE_FAILED");
+          worker.pendingUi.clear();
           try {
             deleteWorkerSidecar(worker.sessionDir);
           } catch {
@@ -2055,9 +2060,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (fallbackResult !== "retried") {
         const finalError = worker.modelError ?? message;
         forceKillWorker(worker, `prompt accept failed: ${finalError}`);
-        worker.countsTowardCap = false;
-        worker.lifecycle = "failed";
-        worker.closed = true;
+        runtime.transitionLifecycle(worker, "DISPOSE_FAILED");
+        worker.pendingUi.clear();
         try {
           deleteWorkerSidecar(worker.sessionDir);
         } catch {
@@ -2075,7 +2079,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       .catch(() => {});
 
     if (worker.lifecycle === "starting") {
-      worker.lifecycle = "running";
+      runtime.transitionLifecycle(worker, "AGENT_START");
     }
     armIdle(worker);
     syncFleetWidget();
@@ -2166,9 +2170,11 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     worker.fallbackEpoch += 1;
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
-    worker.closed = true;
-    worker.lifecycle = "closed";
-    worker.countsTowardCap = false;
+    runtime.transitionLifecycle(worker, "CLOSE");
+    worker.pendingUi.clear();
+    worker.pendingSteer = 0;
+    worker.pendingFollowUp = 0;
+    worker.phase = "none";
     // Normal cleanup and routine transcript parking of a settled sidekick are
     // not failures and must not become a red `×` killReason on the work card.
     // Preserve only real stop/kill reasons.
@@ -2245,12 +2251,12 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     model: Type.Optional(
       Type.String({
         description:
-          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; declared fallbacks apply unless allowFallback is false.",
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; explicit overrides do not fall back unless allowFallback is true.",
       }),
     ),
     allowFallback: Type.Optional(
       Type.Boolean({
-        description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
+        description: "Defaults to false with an explicit model, otherwise true. Set true to permit declared fallbacks.",
       }),
     ),
     thinking: Type.Optional(
@@ -2284,10 +2290,10 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     promptSnippet:
       "Start an async RPC specialist (returns handle immediately; use task_wait/task_send/task_close).",
     promptGuidelines: [
-      "After deciding to delegate, use task_start when the specialist engagement is multi-turn or may need steering.",
-      "Use synchronous task for one blocking result, such as a final verification gate or review verdict, when no specific independent lead work is ready and the engagement needs no follow-up.",
-      "After task_start, do specific independent work already ready, then one task_wait. If no independent work is ready, call task_wait as the very next action; do not invent work to fill the wait. Default wait is 600s, 900s for machinist/artisan, 1200s for oracle/stevedore/inspector. A timeout heartbeat is not a poll cue: do independent work before waiting the same generation again.",
-      "Always task_close as soon as a report is accepted; workers hold a concurrency slot until closed. Respawn instead of parking a settled worker for follow-up.",
+      "After deciding to delegate, prefer task_start so the conversation can continue while the worker runs. Mode-specific roster restrictions still apply.",
+      "Use synchronous task only for a short result needed immediately or a specialist the active mode exposes only synchronously.",
+      "After task_start, continue useful work or respond to the user while the worker runs. You may end the conversational turn: completion automatically wakes the idle lead. Use task_wait when a result is needed now or to retrieve a completed report. Do not poll or invent work to fill a wait; a wait timeout leaves the worker running.",
+      "Close accepted one-shot workers to release their slots. Keep Fusion/Utopia sidekicks warm when related follow-up is likely, following the active mode's lifecycle rules.",
       "Do not nest task/task_* tools inside workers (they are excluded).",
     ],
     parameters: taskStartParams,
@@ -2433,7 +2439,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         cwd,
         modelOverride: params.model?.trim() || undefined,
         thinkingOverride: thinkingRequest.thinking,
-        allowFallback: params.allowFallback,
+        allowFallback: taskAllowsFallback(params.model, params.allowFallback),
         reportSchema,
         forkSessionFile,
         fusion: isSidekickSpawn,
@@ -2485,7 +2491,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         reportSchema ? "reportSchema: requested" : undefined,
         `mission: ${cleanOneLine(worker.mission, 140)}`,
         `live_workers: ${liveCount()}/${MAX_LIVE_WORKERS}`,
-        `After useful independent work, one task_wait (default ${resolveWaitTimeoutSec({ agent: worker.agent })}s for ${worker.agent}). task_status is for blockers, not polling.`,
+        "Running in the background. Continue work or reply to the user; completion wakes the idle lead. Use task_wait when you need the result. task_status is for blockers, not polling.",
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
@@ -3197,7 +3203,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           worker.fallbackEpoch += 1;
           worker.fallbackInProgress = false;
           worker.fallbackAwaitingAgentStart = false;
-          if (worker.lifecycle === "retrying") worker.lifecycle = "running";
+          if (worker.lifecycle === "retrying") runtime.transitionLifecycle(worker, "AGENT_START");
           armIdle(worker);
           notifySubscribers(worker);
           syncFleetWidget();
@@ -3252,7 +3258,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         worker.fallbackEpoch += 1;
         worker.fallbackInProgress = false;
         worker.fallbackAwaitingAgentStart = false;
-        if (worker.lifecycle === "retrying") worker.lifecycle = "running";
+        if (worker.lifecycle === "retrying") runtime.transitionLifecycle(worker, "AGENT_START");
         armIdle(worker);
         notifySubscribers(worker);
         syncFleetWidget();
@@ -4502,7 +4508,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         clearHard(worker);
         clearIdle(worker);
         clearAbortTimer(worker);
-        worker.countsTowardCap = false;
+        runtime.transitionLifecycle(worker, "RELEASE");
         try {
           worker.client?.closeStdin();
         } catch {
@@ -4655,7 +4661,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
     },
   );
 
-  pi.registerCommand("dispatch", {
+  pi.registerCommand("task", {
     description:
       "Ask the parent to launch a worker for additional work as soon as it can safely do so",
     handler: async (args, ctx) => {
@@ -4674,7 +4680,7 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
         });
       } catch (error) {
         ctx.ui.notify(
-          `Could not record /dispatch: ${error instanceof Error ? error.message : String(error)}`,
+          `Could not record /task: ${error instanceof Error ? error.message : String(error)}`,
           "error",
         );
         return;

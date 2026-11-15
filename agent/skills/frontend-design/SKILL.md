@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: Production-grade frontend and visual design in code. Use when building, extending, or redesigning web UI, workflows, dashboards, landing pages, design systems, components, layouts, interaction polish, diagrams, slides, or data visualization. Triggers on frontend design, visual design, redesign, UI restyle, landing page, dashboard, design system, aesthetic direction, visitor mode, "make it look good", avoid AI slop, memorable interface. Load this skill for substantial visual or design work even when a specialist is not available.
+description: Design and implement substantial web UI, layouts, and visual redesigns in code while respecting the existing design system. Use for meaningful visual or interaction design, rather than routine frontend logic changes.
 ---
 
 # Frontend Design
@@ -24,7 +24,7 @@ mode — Operate, Read / understand, Persuade / decide, or Experience / explore;
 reference or anti-reference (when relevant); scope / constraints.
 ```
 
-If an open taste or product decision would materially change the design and cannot be inferred from the repo or brief, stop and ask for that exact decision rather than inventing requirements.
+If an open taste or product decision would materially change the design and cannot be inferred from the repo or brief, ask for that specific decision while continuing independent work. Infer minor choices from existing patterns.
 
 ## 2. Design-system context
 
@@ -115,13 +115,13 @@ Implement the smallest coherent change that delivers the chosen design at the re
 
 If validation fails, fix the concrete defect rather than restarting design exploration unless the failure disproves the design.
 
-Finish with a `make-interfaces-feel-better` polish pass where it applies to the elements you actually built (Emil Kowalski's animation decision framework, custom easing curves, `<300ms` duration ceiling, origin-aware popovers, concentric radii on genuinely nested rounded surfaces, optical alignment, shadows vs. structural borders, tabular numbers, restrained motion, exact transition properties, minimum hit areas). Load `~/.pi/agent/skills/make-interfaces-feel-better/SKILL.md` (or the project `.agents/skills` copy if present) to refine chosen surfaces and animations — never add extra containers, animations, or borders just to exercise a polish rule.
+Check implemented states and visual details proportionally to the change. If animation or interaction craft needs deeper guidance, consult an installed `make-interfaces-feel-better` skill when available. A separate skill or full polish audit is optional.
 
 ## 7. Report
 
 Keep the report concise:
 
-- **Context and direction** — design-system mode (`Apply`, `Extend`, or `Establish`), primary surface mode, and the chosen structural/visual approach in 1–2 sentences (plus the two-direction choice when one was required).
+- **Context and direction** — design-system mode (`Apply`, `Extend`, or `Establish`), primary surface mode, and the chosen structural/visual approach in 1–2 sentences when useful.
 - **Files or artifacts** — paths changed or created.
 - **Key design decisions** — hierarchy, grouping/containment choices, tokens or components reused/added, and interaction states covered.
-- **Accessibility, responsiveness, and polish** — what was verified and which `make-interfaces-feel-better` checks applied.
+- **Accessibility, responsiveness, and polish** — what was verified and any remaining limitations.

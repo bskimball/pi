@@ -21,6 +21,14 @@ export function childToolArgs(
 ): string[] {
   const args: string[] = [];
   const injectedTools: string[] = [];
+  const tools = def.tools?.split(",").map((tool) => tool.trim()).filter(Boolean) ?? [];
+  // Pi's --tools keeps every MCP tool unless the list names MCP explicitly.
+  // Fixed-role workers should not inherit unrelated service schemas. Discovery
+  // roles retain MCP access; explicit MCP lists are already enforced by Pi.
+  if (tools.length && !tools.some(tool => tool.startsWith("mcp__") || tool.startsWith("+") ||
+      tool === "tool_search" || tool === "codemode" || tool.includes("*"))) {
+    excludedTools += ",mcp__*";
+  }
   if (def.apexBrowser && env.PRIME_WORK_BROWSER_URL?.trim() &&
       env.PRIME_WORK_BROWSER_TOKEN?.trim() && env.PRIME_WORK_BROWSER_EXTENSION_PATH?.trim()) {
     args.push("--extension", env.PRIME_WORK_BROWSER_EXTENSION_PATH);
@@ -33,7 +41,6 @@ export function childToolArgs(
   }
   args.push("--exclude-tools", excludedTools);
   if (def.tools) {
-    const tools = def.tools.split(",").map((tool) => tool.trim()).filter(Boolean);
     if (tools.length) args.push("--tools", [...new Set([...tools, ...injectedTools])].join(","));
   }
   return args;

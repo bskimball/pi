@@ -6,6 +6,7 @@
 // async-task.ts supplies model/circuit and Pi-notification policy through hooks
 // and owns the task_* tool adapters.
 
+import { advanceWorkerLifecycle, initialWorkerLifecycle, type WorkerLifecycleSnapshot, type WorkerLifecycleEvent } from "./worker-lifecycle.ts";
 import { ActivityLedger, type ActivityStatus } from "./activity-ledger.ts";
 import { JobRegistry } from "./job-registry.ts";
 import { killProcessTree } from "./process-tree-kill.ts";
@@ -58,15 +59,8 @@ function extractTextDelta(event: Record<string, unknown>): string {
     : delta;
 }
 
-export type WorkerLifecycle =
-  | "starting"
-  | "running"
-  | "retrying"
-  | "compacting"
-  | "settled"
-  | "aborting"
-  | "failed"
-  | "closed";
+export type { WorkerLifecycle } from "./worker-lifecycle.ts";
+import type { WorkerLifecycle } from "./worker-lifecycle.ts";
 
 export type WorkerPhase = "model" | "tool" | "retry" | "compacting" | "none";
 
@@ -99,6 +93,7 @@ export interface RuntimeClient {
 export interface RuntimeWorker extends CapWorker {
   lifecycle: WorkerLifecycle;
   phase: WorkerPhase;
+  pendingUi?: Map<string, RuntimePendingUiRequest>;
   updatedAt: number;
   /** Monotonic renderer invalidation token; advances with each published state. */
   renderVersion: number;
@@ -245,7 +240,7 @@ export function hasActiveTools(worker: WorkerActivityState): boolean {
 }
 
 export function workerStateLabel(view: WorkerStateView): string {
-  if (view.waitingUi.length) return "waiting for reply";
+  if (isLiveLifecycle(view.lifecycle) && view.lifecycle !== "aborting" && view.waitingUi.length) return "waiting for reply";
   if (view.lifecycle === "running") {
     if (view.phase === "tool") return "tool";
     if (view.phase === "model") return "thinking";
@@ -271,6 +266,25 @@ function isTerminalLifecycle(lifecycle: WorkerLifecycle): boolean {
 
 export class WorkerRuntime<TWorker extends RuntimeWorker> {
   readonly workers = new JobRegistry<TWorker>();
+  private readonly lifecycleSnapshots = new WeakMap<TWorker, WorkerLifecycleSnapshot>();
+
+  transitionLifecycle(worker: TWorker, type: WorkerLifecycleEvent["type"]): boolean {
+    const previous = this.lifecycleSnapshots.get(worker) ?? initialWorkerLifecycle(
+      worker.lifecycle, worker.closed ? "closed" : worker.countsTowardCap ? "alive" : "exited",
+    );
+    const accepted = previous.can({ type });
+    if (!accepted) return false;
+    const next = advanceWorkerLifecycle(previous, { type });
+    this.lifecycleSnapshots.set(worker, next);
+    worker.lifecycle = next.value as WorkerLifecycle;
+    worker.closed = next.context.process === "closed";
+    worker.countsTowardCap = next.context.process === "alive";
+    if (isTerminalLifecycle(worker.lifecycle)) {
+      worker.pendingUi?.clear();
+      worker.phase = "none";
+    }
+    return accepted;
+  }
   private readonly maxErrors: number;
   private readonly maxSettled: number;
   private readonly normalizeError: (message: string) => string;
@@ -444,6 +458,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     hooks?: WorkerRuntimeEventHooks<TEventWorker>,
   ): boolean {
     if (worker.closed || isTerminalLifecycle(worker.lifecycle)) return false;
+    if (!this.transitionLifecycle(worker, lifecycle === "settled" ? "SETTLE" : "FAIL")) return false;
     worker.fallbackEpoch += 1;
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
@@ -454,11 +469,11 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
       worker,
       lifecycle === "failed" || options.killReason ? "error" : "completed",
     );
-    worker.lifecycle = lifecycle;
     worker.generationSettledAt = Date.now();
     worker.phase = "none";
     worker.pendingSteer = 0;
     worker.pendingFollowUp = 0;
+    worker.pendingUi.clear();
     if (options.error) this.pushError(worker, options.error);
     if (options.killReason) worker.killReason = options.killReason;
     if (!worker.latestResult && worker.latestAssistantText) {
@@ -493,7 +508,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     // Publish process ownership atomically with settlement. Subscribers must
     // never observe a failed worker that still appears to hold capacity or a
     // live client after the process has already exited.
-    worker.countsTowardCap = false;
+    this.transitionLifecycle(worker, "RELEASE");
     worker.client = undefined;
     if (worker.closed) {
       this.pruneSettled();
@@ -509,12 +524,14 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     } else {
       this.notify(worker);
     }
+    this.transitionLifecycle(worker, "EXIT");
     this.pruneSettled();
   }
 
   startGeneration<TEventWorker extends TWorker & RuntimeEventWorker>(
     worker: TEventWorker,
   ): void {
+    if (worker.closed || !this.transitionLifecycle(worker, "START")) return;
     worker.generation += 1;
     worker.generationStartedAt = Date.now();
     worker.generationSettledAt = undefined;
@@ -537,7 +554,6 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     worker.fallbackEpoch += 1;
     worker.killReason = undefined;
     worker.exitCode = null;
-    worker.lifecycle = "running";
     this.touch(worker);
     if (worker.hardTimeoutMs != null) this.armHard(worker, worker.hardTimeoutMs);
     this.armIdle(worker);
@@ -550,6 +566,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
   ): void {
     if (worker.closed) return;
     const type = String(event.type ?? "");
+    if (isTerminalLifecycle(worker.lifecycle) && type !== "agent_start") return;
     this.touch(worker);
 
     switch (type) {
@@ -563,7 +580,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
           // result/error/tool/UI state across it.
           this.startGeneration(worker);
         } else {
-          if (worker.lifecycle !== "aborting") worker.lifecycle = "running";
+          this.transitionLifecycle(worker, "AGENT_START");
           this.armIdle(worker);
         }
         break;
@@ -720,7 +737,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         break;
       }
       case "auto_retry_start": {
-        worker.lifecycle = "retrying";
+        this.transitionLifecycle(worker, "RETRY");
         this.armIdle(worker);
         break;
       }
@@ -728,12 +745,12 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         if (event.success === false) {
           this.pushError(worker, String(event.finalError ?? "auto-retry failed"));
         }
-        if (worker.lifecycle === "retrying") worker.lifecycle = "running";
+        this.transitionLifecycle(worker, "RETRY_END");
         this.armIdle(worker);
         break;
       }
       case "compaction_start": {
-        worker.lifecycle = "compacting";
+        this.transitionLifecycle(worker, "COMPACT");
         this.armIdle(worker);
         break;
       }
@@ -743,7 +760,7 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
         } else if (event.errorMessage) {
           this.pushError(worker, String(event.errorMessage));
         }
-        if (worker.lifecycle === "compacting") worker.lifecycle = "running";
+        this.transitionLifecycle(worker, "COMPACT_END");
         this.armIdle(worker);
         break;
       }
@@ -812,7 +829,8 @@ export class WorkerRuntime<TWorker extends RuntimeWorker> {
     worker.fallbackEpoch += 1;
     worker.fallbackInProgress = false;
     worker.fallbackAwaitingAgentStart = false;
-    worker.lifecycle = "aborting";
+    if (isTerminalLifecycle(worker.lifecycle) || worker.closed) return { cooperative: false, settled: true };
+    this.transitionLifecycle(worker, "ABORT");
     worker.killReason = worker.killReason ?? "abort requested";
     this.clearIdle(worker);
     this.notify(worker);

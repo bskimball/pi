@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readPreferences, savePreferences, type UiPresentation } from "./mode-state.ts";
+import { createTransitionController } from "./transition-controller.ts";
 
 const UI_CHROME_ENV_VAR = "PI_UI_CHROME";
 const UI_CHROME_LEGACY_ENV_VAR = "PI_APEX_UI";
@@ -61,6 +62,10 @@ function idle(pi: ExtensionAPI, ctx: ExtensionContext): boolean {
 export function registerPresentationSwitch(pi: ExtensionAPI): void {
   if (process.env.PI_SUBAGENT === "1") return;
   const preferencePath = join(getAgentDir(), "mode-settings.json");
+  const lifecycle = createTransitionController();
+  pi.events.on?.("pi:modes:query-busy", (payload: unknown) => {
+    if (payload && typeof payload === "object" && "busy" in payload && lifecycle.busy) payload.busy = true;
+  });
   applyUiEnv(resolveInstalledUi(readPreferences(preferencePath).ui));
 
   pi.registerCommand("ui", {
@@ -78,38 +83,88 @@ export function registerPresentationSwitch(pi: ExtensionAPI): void {
         ctx.ui.notify(`${uiLabels[value]} UI is not installed.`, "error");
         return;
       }
-      const preferences = readPreferences(preferencePath);
-      const oldUi = preferences.ui;
-      preferences.themes[oldUi] = oldUi === "pi"
-        ? ctx.ui.theme.name ?? preferences.themes.pi
-        : CANONICAL_CUSTOM_THEMES[oldUi];
-      const targetTheme = themeForUi(preferences, value);
-      const result = ctx.ui.setTheme(targetTheme);
-      if (!result.success) {
-        ctx.ui.notify(result.error ?? "Theme unavailable", "error");
-        return;
-      }
-      preferences.themes[value] = targetTheme;
-      preferences.ui = value;
-      applyUiEnv(value);
-      pi.events.emit("pi:ui:changed", { ui: value, ctx });
-      savePreferences(preferencePath, preferences);
-      ctx.ui.notify(`UI: ${uiLabels[value]}`, "info");
+      if (!idle(pi, ctx)) return;
+      const token = lifecycle.begin("presentation");
+      if (token === undefined) return;
+      const oldTheme = ctx.ui.theme.name;
+      const oldEnv = [UI_CHROME_ENV_VAR, UI_CHROME_LEGACY_ENV_VAR, SKIN_ENV_VAR].map(key => [key, process.env[key]] as const);
+      let previous: ReturnType<typeof readPreferences> | undefined;
+      let persisted = false;
+      let applied = false;
+      try {
+        const preferences = readPreferences(preferencePath);
+        previous = structuredClone(preferences);
+        const oldUi = preferences.ui;
+        preferences.themes[oldUi] = oldUi === "pi"
+          ? ctx.ui.theme.name ?? preferences.themes.pi
+          : CANONICAL_CUSTOM_THEMES[oldUi];
+        const targetTheme = themeForUi(preferences, value);
+        applied = true;
+        const result = ctx.ui.setTheme(targetTheme);
+        if (!result.success) {
+          ctx.ui.notify(result.error ?? "Theme unavailable", "error");
+          return;
+        }
+        preferences.themes[value] = targetTheme;
+        preferences.ui = value;
+        savePreferences(preferencePath, preferences);
+        persisted = true;
+        applyUiEnv(value);
+        pi.events.emit("pi:ui:changed", { ui: value, ctx });
+        lifecycle.recoveryBlocked = false;
+        ctx.ui.notify(`UI: ${uiLabels[value]}`, "info");
+      } catch (error) {
+        const failures: string[] = [];
+        if (applied && oldTheme) {
+          try {
+            const restored = ctx.ui.setTheme(oldTheme);
+            if (!restored.success) throw new Error(restored.error ?? "Theme unavailable");
+          } catch (restoreError) { failures.push(`theme restore: ${String(restoreError)}`); }
+        }
+        for (const [key, value] of oldEnv) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        if (persisted && previous) {
+          try {
+            const latest = readPreferences(preferencePath);
+            latest.ui = previous.ui;
+            latest.themes = previous.themes;
+            savePreferences(preferencePath, latest);
+          } catch (restoreError) { failures.push(`preferences restore: ${String(restoreError)}`); }
+        }
+        if (applied && previous) {
+          try { pi.events.emit("pi:ui:changed", { ui: resolveInstalledUi(previous.ui), ctx }); }
+          catch (restoreError) { failures.push(`presentation restore: ${String(restoreError)}`); }
+        }
+        if (failures.length) lifecycle.recoveryBlocked = failures.join("; ");
+        ctx.ui.notify(`UI switch failed (${String(error)}).${failures.length ? ` Recovery incomplete: ${failures.join("; ")}. Retry /ui.` : " Previous presentation restored."}`, "error");
+      } finally { lifecycle.end(token); }
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
-    const preferences = readPreferences(preferencePath);
-    const activeUi = resolveInstalledUi(preferences.ui);
-    const activeTheme = themeForUi(preferences, activeUi);
-    if (preferences.themes[activeUi] !== activeTheme) {
-      preferences.themes[activeUi] = activeTheme;
-      savePreferences(preferencePath, preferences);
-    }
-    applyUiEnv(activeUi);
-    if (!ctx.hasUI) return;
-    ctx.ui.setTheme(activeTheme);
-    pi.events.emit("pi:ui:changed", { ui: activeUi, ctx });
+  pi.on("session_start", async (_event, ctx) => {
+    const token = await lifecycle.acquire("restoring");
+    try {
+      const preferences = readPreferences(preferencePath);
+      const activeUi = resolveInstalledUi(preferences.ui);
+      const activeTheme = themeForUi(preferences, activeUi);
+      if (preferences.themes[activeUi] !== activeTheme) {
+        preferences.themes[activeUi] = activeTheme;
+        savePreferences(preferencePath, preferences);
+      }
+      if (ctx.hasUI) {
+        const result = ctx.ui.setTheme(activeTheme);
+        if (!result.success) throw new Error(result.error ?? "Theme unavailable");
+      }
+      applyUiEnv(activeUi);
+      if (!ctx.hasUI) return;
+      pi.events.emit("pi:ui:changed", { ui: activeUi, ctx });
+      lifecycle.recoveryBlocked = false;
+    } catch (error) {
+      lifecycle.recoveryBlocked = `UI restore failed (${String(error)}). Retry /ui.`;
+      ctx.ui.notify(lifecycle.recoveryBlocked, "error");
+    } finally { lifecycle.end(token); }
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

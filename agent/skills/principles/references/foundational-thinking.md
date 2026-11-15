@@ -10,8 +10,8 @@ At code level, DRY the structure, not every line. Types and data models should c
 
 **Concurrency corollary.** Before sharing state between actors, ask "what happens if another actor modifies this concurrently?" If not "nothing", isolate.
 
-**Scaffold first.** If something helps every later phase, do it first. Ask "does every subsequent phase benefit from this existing?" CI, linting, test infrastructure, and shared types are scaffold. Sequence for option value: setup before features, tests before fixes. Keep commits small and single-purpose.
+**Scaffold first.** If something helps every later phase, do it first. Ask "does every subsequent phase benefit from this existing?" Reuse existing CI, linting, tests, and shared types. Add foundations only when the current task depends on them; a local fix rarely needs new infrastructure.
 
 Each increment should land a coherent abstraction or deepen one that exists. Do not spread a new capability across callers as special-case coordination.
 
-Subtraction comes before scaffolding. Remove dead code first, then lay foundations.
+Remove dead code when it obstructs the requested change; keep unrelated cleanup outside the task.

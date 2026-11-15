@@ -1,6 +1,6 @@
 ---
 name: simplify
-description: Complexity-only code review — find what to delete or shrink, never implement. Use when reviewing a diff or path for over-engineering, unnecessary complexity, speculative abstractions, dead code, or excess lockdown. Triggers on simplify, simplification review, over-engineering, overengineering, unnecessary complexity, "does this need to exist", smallest change, speculative abstraction, yagni, dead code, single-implementation interface, single-caller layer, extra lockdown, Lean already. Load for complexity reviews even when no specialist is available.
+description: Complexity-only code review for unnecessary abstractions, dead code, or over-engineering in a specified diff or path. Returns suggested cuts; does not itself authorize implementation.
 ---
 
 # Simplify
@@ -36,4 +36,4 @@ Tags:
 
 If there is nothing to cut, output `Lean already.` and stop. Do not score or project line or dependency savings.
 
-Wait for approval before implementing any suggested cuts.
+This skill supplies a review. If the user has also requested implementation, proceed within that authorization; a review alone does not authorize edits.

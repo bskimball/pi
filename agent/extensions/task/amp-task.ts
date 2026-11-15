@@ -31,6 +31,8 @@ import {
   orchestrateAgentParamDescription,
   piAgentParamDescription,
   parseThinkingOverride,
+  validateThinkingForAttempts,
+  taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
   THINKING_OVERRIDE_DESCRIPTION,
@@ -553,12 +555,12 @@ export default function (pi: ExtensionAPI) {
     model: Type.Optional(
       Type.String({
         description:
-          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; declared fallbacks apply unless allowFallback is false.",
+          "Optional explicit model override. Leave unset to use the agent's configured default (plus automatic fallback chain). Set only when the user explicitly requested a different model for this delegation; it replaces the primary; explicit overrides do not fall back unless allowFallback is true.",
       }),
     ),
     allowFallback: Type.Optional(
       Type.Boolean({
-        description: "Default true. Set false to attempt only the selected model, without declared model fallbacks.",
+        description: "Defaults to false with an explicit model, otherwise true. Set true to permit declared fallbacks.",
       }),
     ),
     thinking: Type.Optional(
@@ -578,6 +580,7 @@ export default function (pi: ExtensionAPI) {
     name: "task",
     label: "Task",
     description: taskFullDescription,
+    promptGuidelines: ["This tool waits for the full result. Prefer task_start for background delegation where the active mode allows it; use synchronous task for a short result needed immediately or a specialist available only here."],
     parameters: TaskParams,
     executionMode: "parallel",
 
@@ -679,12 +682,14 @@ export default function (pi: ExtensionAPI) {
         def,
         parentThinking: pi.getThinkingLevel(),
         modelOverride: params.model?.trim() || undefined,
-        allowFallback: params.allowFallback,
+        allowFallback: taskAllowsFallback(params.model, params.allowFallback),
         ctx,
         emitEvent: (ev, payload) => pi.events.emit(ev, payload),
       });
       const thinking = thinkingRequest.thinking ?? resolved.thinking;
       const attempts = resolved.attempts;
+      const thinkingError = validateThinkingForAttempts(thinkingRequest.thinking, attempts, ctx.modelRegistry);
+      if (thinkingError) return { content: [{ type: "text", text: thinkingError }], isError: true, details: {} };
       if (resolved.error) {
         const text = resolved.error;
         return {
@@ -878,6 +883,7 @@ export default function (pi: ExtensionAPI) {
               windowsHide: true,
               env: isolatedChildEnv({
                 PI_SUBAGENT: "1",
+                PI_TASK_PROMPT_CONTRACT: "1",
                 PI_PROJECT_CONTEXT_CWD: process.env.PI_PROJECT_CONTEXT_CWD || ctx.cwd,
                 PI_SUBAGENT_AGENT: def.name,
                 PI_SUBAGENT_MODEL: modelLabel,

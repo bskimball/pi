@@ -1,15 +1,11 @@
 ---
 name: unslop
-description: "Remove AI writing patterns when writing or editing prose a human will read, including docs, READMEs, PR or commit text, reports, and copy. Use when asked to unslop or de-AI text."
+description: "Edit prose to remove repetitive AI writing patterns while preserving meaning and voice. Use for an explicit unslop request or substantial prose cleanup."
 ---
 
 # Unslop
 
 Edit text to remove AI patterns. Run this small editing pass inline.
-
-## Pi routing
-
-Dispatch subagents through the active mode's delegation path. Fusion: use `task_start` sidekick units (agent `sidekick`), one per explorer/reviewer/investigator, with disjoint read-only scopes and compact reports; never use other agents unless the user named them. Apex / Pi (regular) / Apex Orchestrate: use `task`, with `scout` for exploration/reading, `oracle` for review/judgment, and `librarian` for external/remote sources; parallel means multiple task calls in one message. Work: spawn no subagents; run the method inline. Subagents use their configured model defaults.
 
 ## Process
 

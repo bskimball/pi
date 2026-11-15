@@ -166,7 +166,7 @@ test("custom UI switches replace stale themes with their canonical live theme", 
     let saved = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
     assert.deepEqual(saved.themes, { pi: "light", apex: "apex-dark", claude: "claude-dark", hal: "hal-dark" });
     writeFileSync(join(dir, "mode-settings.json"), JSON.stringify({ ...saved, ui: "hal", themes: { ...saved.themes, hal: "stale-hal" } }));
-    for (const handler of handlers.session_start) handler({ reason: "resume" }, ctx);
+    for (const handler of handlers.session_start) await handler({ reason: "resume" }, ctx);
     saved = JSON.parse(readFileSync(join(dir, "mode-settings.json"), "utf8"));
     assert.equal(ctx.ui.theme.name, "hal-dark");
     assert.equal(saved.themes.hal, "hal-dark");

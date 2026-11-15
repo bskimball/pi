@@ -1741,6 +1741,7 @@ describe("agents tab in all modes with selection and peek", () => {
       },
       panel: () => mountedPanel,
       overlay: () => overlayComponent,
+      resolveOverlay: (value: any) => overlayDone?.(value),
       input: (data: string) => terminalInput?.(data),
       editorText: () => editorText,
       setEditorText: (value: string) => { editorText = value; },
@@ -3088,6 +3089,95 @@ describe("agents tab in all modes with selection and peek", () => {
       assert.doesNotMatch(settledIdle, /x abort/);
     });
   });
+
+  it("rejects stale overlay input and open result after a session replacement", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      const item = worker({ id: "task_1", lifecycle: "settled", fusion: false });
+      publishDockAgents([item]);
+      const peek = dock.mock.commands.get("agents").handler("peek task_1", dock.tuiCtx);
+      const oldOverlay = dock.overlay();
+      dock.mock.emit("session_start", { reason: "new" }, dock.tuiCtx);
+      oldOverlay.handleInput("o");
+      assert.deepEqual(oldOverlay.render(100), [], "invalidated overlay cannot render or handle input");
+      dock.resolveOverlay({ open: true, item });
+      await peek;
+      assert.equal(dock.editorText(), "", "stale open cannot prepare a command in the replacement session");
+    } finally { dock.shutdown(); }
+  });
+
+  it("opens the worker selected by cycling rather than the original worker", async () => {
+    const dock = mountPlan("1");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([
+        worker({ id: "task_1", lifecycle: "settled", fusion: false }),
+        worker({ id: "task_2", lifecycle: "settled", fusion: false }),
+      ]);
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+      dock.overlay().handleInput("]");
+      dock.overlay().handleInput("o");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(dock.editorText(), "/agents open task_2");
+    } finally { dock.shutdown(); }
+  });
+
+  it("registers keyboard input when a mounted plain dock gains chrome", async () => {
+    const dock = mountPlan("0");
+    try {
+      await writePlan(dock.mock, dock.tuiCtx);
+      publishDockAgents([worker({ id: "task_1", fusion: false })]);
+      const mounts = dock.setWidgetCalls();
+      process.env.PI_APEX_UI = "1";
+      dock.mock.emitEvent("pi:ui:changed");
+      await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+      assert.equal(dock.setWidgetCalls(), mounts, "existing dock stays mounted");
+      assert.deepEqual(dock.input("\r"), { consume: true });
+      assert.ok(dock.overlay(), "Enter reaches the newly enabled listener");
+    } finally { dock.shutdown(); }
+  });
+
+  for (const action of ["send", "abort", "close"] as const) {
+    for (const replacement of ["cycle", "reopen"] as const) {
+      it(`ignores stale ${action} completion after ${replacement}`, async () => {
+        const dock = mountPlan("1");
+        let complete!: (value: { ok: boolean; message: string }) => void;
+        const pending = new Promise<{ ok: boolean; message: string }>((resolve) => { complete = resolve; });
+        (globalThis as Record<string, unknown>).__piTaskFleetControl = {
+          send: () => pending, abort: () => pending, close: () => pending,
+        };
+        try {
+          await writePlan(dock.mock, dock.tuiCtx);
+          publishDockAgents([worker({ id: "task_1", fusion: false }), worker({ id: "task_2", fusion: false })]);
+          await dock.mock.commands.get("agents").handler("", dock.tuiCtx);
+          dock.panel().handleMouse({ type: "click", button: "left", y: 1 });
+          if (action === "send") {
+            dock.overlay().handleInput("s");
+            dock.overlay().handleInput("hello");
+            dock.overlay().handleInput("\r");
+          } else {
+            dock.overlay().handleInput(action === "abort" ? "x" : "c");
+            dock.overlay().handleInput("y");
+          }
+          if (replacement === "cycle") dock.overlay().handleInput("]");
+          else {
+            dock.overlay().handleInput("q");
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            dock.panel().handleMouse({ type: "click", button: "left", y: 2 });
+          }
+          const before = stripAnsi(dock.overlay().render(100).join("\n"));
+          complete({ ok: true, message: "STALE COMPLETION" });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          assert.equal(stripAnsi(dock.overlay().render(100).join("\n")), before);
+        } finally {
+          delete (globalThis as Record<string, unknown>).__piTaskFleetControl;
+          dock.shutdown();
+        }
+      });
+    }
+  }
 
   it("cycles the peeked worker with [ and ]", async () => {
     const dock = mountPlan("1");

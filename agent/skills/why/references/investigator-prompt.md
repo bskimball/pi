@@ -1,6 +1,6 @@
 # Investigator Prompt Template
 
-Build each investigator's prompt from this template. Fill in the placeholders. Keep all queries and source access read-only. Return a compact report with precise citations, queries, contradictions, and gaps. Append the single category playbook `sources/<source>.md` matching this investigator's evidence category (see `source-playbook.md` for the index). If the target code looks defensive (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers), also append `sources/incident-postmortem.md` for the incident-flavored queries to run inside its own source.
+Build each investigator's prompt from this template. Fill in the placeholders. Keep all queries and source access read-only. Return a compact report with precise citations, queries, contradictions, and gaps. Append the single category playbook `sources/<source>.md` matching this investigator's evidence category (see `source-playbook.md` for the index). When an incident is a plausible lead, append `sources/incident-postmortem.md` for relevant queries within the assigned source.
 
 ---
 
@@ -13,7 +13,7 @@ If other investigators search different sources, don't try to cover everything. 
 Work like a careful, cautious, precise investigator. Don't produce a narrative. Surface evidence and describe it accurately, including the parts that don't fit a tidy story. The more boring and exact your output, the more useful it is. A single verbatim quote with a precise citation beats a paragraph of plausible-sounding summary.
 
 - **Quote, don't paraphrase** when the exact wording matters. Citations should let the reader jump to the source and confirm the claim in seconds.
-- **Go wide before going deep.** Cast a broad first net so you don't miss related context. Only then narrow in.
+- **Start focused.** Follow concrete symbols, dates, and links; widen when the focused search leaves the question unanswered.
 - **Track what you searched, not just what you found.** An absence is only useful if the reader knows what was looked for. Record queries verbatim.
 - **Resist the story.** If three pieces of evidence line up neatly and a fourth contradicts them, the contradiction is the most interesting finding. Don't file it away.
 - **Consider the counterfactual.** Before reporting a finding as strong, ask whether you would expect to find it if your current reading were wrong, and how the evidence would differ.
@@ -46,7 +46,7 @@ Work like a careful, cautious, precise investigator. Don't produce a narrative. 
 
 Gather **evidence**. Don't answer the question directly. The synthesizer weighs the evidence and forms conclusions. Follow this loop:
 
-1. **Cast a wide net first.** Start broad so you don't miss related context, then narrow in on specific items.
+1. **Search proportionally.** Begin with the strongest lead and stop when the assigned question is answered or further searches add no useful evidence.
 2. **Read the whole thing.** Read any PR, ticket, doc, or thread fully, not just the title or summary. The key evidence is often buried in a comment, a subtask, or a follow-up.
 3. **Follow links within your assigned source.** If a PR references another PR or commit, pull it. If a ticket links a parent or sibling, pull it. If a doc links another doc, pull it. Stay inside your assigned source. When you spot a cross-source reference, do NOT chase it yourself. Record it under "Additional Leads" so the investigator assigned to that source can pick it up. The one-investigator-per-category design depends on this. Chasing cross-source links duplicates work and confuses scope.
 4. **Capture quotes verbatim** with their location (PR number, ticket ID, URL, commit hash, file:line). The synthesizer needs to cite this precisely.
@@ -64,7 +64,7 @@ Don't synthesize or form a final opinion on "the why." Collect the raw material 
 
 ## Output Format
 
-Return your findings in this structure. The synthesizer will read it directly.
+Use the relevant sections below. Omit empty sections; preserve citations, contradictions, and material gaps.
 
 ### Source
 Which source you investigated (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, code comments, etc.).
