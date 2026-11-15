@@ -1,10 +1,10 @@
 ---
 name: scout
 description: Fast, cheap local codebase reconnaissance for broad scans, architecture mapping, pattern discovery, and context gathering.
-model: muse-code/muse-ember-1.0-contributor
+model: claude-bridge/claude-haiku-5-5
 fallbackModels:
-  - claude-bridge/claude-haiku-5-5
   - openai/gpt-6-luna
+  - muse-code/muse-ember-1.0-contributor
   - antigravity/gemini-4-hydrogen
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
