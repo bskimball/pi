@@ -14,7 +14,8 @@
     "npm:@amaster.ai/pi-computer-use"
   ],
   "extensions": [
-    "-extensions/antigravity-ua.ts"
+    "-extensions/antigravity-ua.ts",
+    "-extensions/muse/index.ts"
   ],
   "skills": [],
   "pi-computer-use": {

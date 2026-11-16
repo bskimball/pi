@@ -3,8 +3,9 @@ name: machinist
 description: Implementation specialist for independent separable non-visual slices across backend logic, data, CLI, build/config, refactors, migrations, bug fixes, and tests, plus execution of exact Oracle-authored diagnostic experiment plans. Long or multi-file work alone is not a reason to delegate in regular mode. Not for UI or prose deliverables.
 model: openai/gpt-6.1-sol
 fallbackModels:
+  - antigravity/gemini-4-hydrogen
   - xai/grok-4.7
-  - muse-code/muse-spark-1.3-contributor
+  - meta/muse-spark-1.3-contributor
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731'
 thinking: low
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp

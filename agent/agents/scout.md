@@ -4,11 +4,11 @@ description: Fast, cheap local codebase reconnaissance for broad scans, architec
 model: claude-bridge/claude-haiku-5-5
 fallbackModels:
   - openai/gpt-6-luna
-  - muse-code/muse-ember-1.0-contributor
+  - meta/muse-ember-1.0
   - antigravity/gemini-4-hydrogen
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
-thinking: low
+thinking: medium
 tools: read, ffgrep, fffind, ls, bash, codemode
 inheritSkills: false
 maxTurns: 45

@@ -4,7 +4,7 @@ description: Work general researcher (Oscar, intellectual deep-space octopus). V
 model: xai/grok-4.7
 fallbackModels:
   - antigravity/gemini-4-hydrogen
-  - muse-code/muse-spark-1.3-contributor
+  - meta/muse-spark-1.3-contributor
   - openai/gpt-6.1-terra
   - claude-bridge/claude-sonnet-5
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'

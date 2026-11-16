@@ -4,7 +4,7 @@ description: Fast, cheap read-only browser verification for live interaction, sc
 model: openai/gpt-6.1-terra
 fallbackModels:
   - claude-bridge/claude-sonnet-5-5
-  - muse-code/muse-spark-1.3-contributor
+  - meta/muse-spark-1.3-contributor
   - antigravity/gemini-4-hydrogen
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
