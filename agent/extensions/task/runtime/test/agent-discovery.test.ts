@@ -11,6 +11,7 @@ import {
   taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
+  resolveModelOverride,
   scopeRebindAttempts,
   stripRegularModeCarveout,
   type AgentDef,
@@ -28,13 +29,10 @@ function def(partial: Partial<AgentDef> & Pick<AgentDef, "name">): AgentDef {
 }
 
 describe("apexBrowser opt-in", () => {
-  it("enables inspector but not ordinary specialists", () => {
-    const inspector = parseAgentFile(fileURLToPath(new URL("../../../../agents/inspector.md", import.meta.url)));
-    const oracle = parseAgentFile(fileURLToPath(new URL("../../../../agents/oracle.md", import.meta.url)));
-    assert.ok(inspector);
-    assert.ok(oracle);
-    assert.equal(inspector.apexBrowser, true);
-    assert.equal(oracle.apexBrowser, false);
+  it("enables browser-verifying roles but not ordinary specialists", () => {
+    const load = (name: string) => parseAgentFile(fileURLToPath(new URL(`../../../../agents/${name}.md`, import.meta.url)));
+    for (const name of ["inspector", "artisan", "sidekick"]) assert.equal(load(name)?.apexBrowser, true, name);
+    assert.equal(load("oracle")?.apexBrowser, false);
   });
 });
 
@@ -332,4 +330,25 @@ it("defaults explicit model overrides to no fallback", () => {
   assert.equal(taskAllowsFallback("p/m", true), true);
   assert.equal(taskAllowsFallback(undefined, undefined), true);
   assert.equal(taskAllowsFallback(undefined, false), false);
+});
+
+describe("resolveModelOverride", () => {
+  const model = (provider: string, id: string) => ({ provider, id }) as any;
+  const registry = (models: any[], authed = models) => ({ getAll: () => models, hasConfiguredAuth: (m: any) => authed.includes(m) });
+  const muse = [model("local-proxy", "muse-spark-1.3"), model("muse-code", "muse-spark-1.3")];
+
+  it("never prefixes a bare id with an agent provider that lacks it", () => {
+    assert.deepEqual(resolveModelOverride("muse-spark-1.3", "antigravity/gemini-4-hydrogen", registry(muse)), { model: "muse-code/muse-spark-1.3" });
+  });
+  it("prefers the agent provider, then the sole authenticated provider", () => {
+    assert.deepEqual(resolveModelOverride("muse-spark-1.3", "local-proxy/x", registry(muse)), { model: "local-proxy/muse-spark-1.3" });
+    assert.deepEqual(resolveModelOverride("muse-spark-1.3", undefined, registry(muse, [muse[0]])), { model: "local-proxy/muse-spark-1.3" });
+  });
+  it("keeps exact provider/model values and reports unknown or ambiguous ids", () => {
+    assert.deepEqual(resolveModelOverride("muse-code/muse-spark-1.3", "a/b", registry(muse)), { model: "muse-code/muse-spark-1.3" });
+    assert.match(resolveModelOverride("nope-1", "a/b", registry(muse)).error ?? "", /not in the model registry/);
+    const twin = [model("p1", "same-1"), model("p2", "same-1")];
+    assert.match(resolveModelOverride("same-1", undefined, registry(twin)).error ?? "", /p1\/same-1, p2\/same-1/);
+    assert.deepEqual(resolveModelOverride(undefined, "a/b", registry(muse)), { model: undefined });
+  });
 });

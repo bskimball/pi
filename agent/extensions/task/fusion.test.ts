@@ -18,6 +18,7 @@ import {
   fusionModelId,
   isMuseWorker,
   refreshMuseContextTokens,
+  sidekickOverride,
 } from "./runtime/fusion-lifecycle.ts";
 
 function fusionHarness(
@@ -257,29 +258,37 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     registerTool: (tool: any) => { tools.set(tool.name, tool); snapshotWrap(tool); },
     registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
     on(name: string, fn: Function) { handlers.set(name, [...handlers.get(name) ?? [], fn]); },
-    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); } },
+    events: { on(name: string, fn: Function) { bus.set(name, [...bus.get(name) ?? [], fn]); }, emit: (name: string, payload: any) => emitBus(name, payload) },
     getThinkingLevel: () => "medium",
   };
   try {
     asyncTask(pi); ampTask(pi);
+    emitBus("pi:modes:changed", { mode: "fusion" });
     const ctx: any = { cwd: process.cwd(), hasUI: false, ui: { setWidget() {} } };
-    const blocked = await tools.get("task_start").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
-    assert.equal(blocked.isError, true);
-    assert.match(blocked.content[0].text, /only for sidekick/);
+    const rerouted = await tools.get("task_start").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
+    assert.equal(rerouted.isError, true);
+    assert.match(rerouted.content[0].text, /Fusion sidekick configuration is unavailable/, "a roster agent runs as a sidekick unit, not a rejection");
+    const crew = await tools.get("task_start").execute("call", { agent: "author", prompt: "write prose" }, undefined, undefined, ctx);
+    assert.equal(crew.isError, true);
+    assert.match(crew.content[0].text, /only for sidekick/);
     const oldName = await tools.get("task_start").execute("call", { agent: "fusion-sidekick", prompt: "write a file" }, undefined, undefined, ctx);
     assert.equal(oldName.isError, true);
     assert.match(oldName.content[0].text, /Unknown agent "fusion-sidekick"/);
     const acceptedName = await tools.get("task_start").execute("call", { agent: "sidekick", prompt: "write a file" }, undefined, undefined, ctx);
     assert.equal(acceptedName.isError, true);
     assert.match(acceptedName.content[0].text, /Fusion sidekick configuration is unavailable/);
-    const sync = await tools.get("task").execute("call", { agent: "machinist", prompt: "write a file" }, undefined, undefined, ctx);
-    assert.equal(sync.isError, true);
-    assert.match(sync.content[0].text, /Apex-only/);
+    for (const agent of ["sidekick", "machinist"]) {
+      const sync = await tools.get("task").execute("call", { agent, prompt: "write a file" }, undefined, undefined, ctx);
+      assert.equal(sync.isError, true);
+      assert.match(sync.content[0].text, /Fusion sidekick configuration is unavailable/, `sync task forwards ${agent} to task_start`);
+    }
     for (const agent of ["librarian", "stevedore", "oracle", "picasso"]) {
       const allowedSync = await tools.get("task").execute("call", { agent, prompt: "do work" }, AbortSignal.abort(), undefined, ctx);
       const text = allowedSync.content?.[0]?.text ?? "";
-      assert.doesNotMatch(text, /Apex-only|Synchronous task spawning is disabled/);
+      assert.doesNotMatch(text, /runs synchronous task only|Synchronous task spawning is disabled|sidekick configuration/);
     }
+    assert.match(tools.get("task").description, /task_start with agent "sidekick"/);
+    assert.doesNotMatch(tools.get("task").parameters.properties.agent.description, /machinist|scout|artisan/);
     const chain = await tools.get("task_chain").execute("call", { steps: [{ agent: "machinist", prompt: "write a file" }] }, undefined, undefined, ctx);
     assert.equal(chain.isError, true);
     const busy = { busy: true }; emitBus("pi:modes:query-busy", busy); assert.equal(busy.busy, true);
@@ -331,8 +340,11 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     assert.match(advertised().description, /machinist|advisor|librarian|scout/);
     assert.match(agentParam(), /sidekick/);
     assert.match(agentParam(), /machinist|advisor|librarian|scout/);
-    const utopiaSyncSidekick = await tools.get("task").execute("call", { agent: "sidekick", prompt: "do work" }, undefined, undefined, ctx);
-    assert.equal(utopiaSyncSidekick.isError, true, "sidekick remains async task_start only even in Utopia");
+    const missingCwd = `${process.cwd()}/__no_such_dir__`;
+    const utopiaSyncSidekick = await tools.get("task").execute("call", { agent: "sidekick", prompt: "do work", cwd: missingCwd }, undefined, undefined, ctx);
+    assert.equal(utopiaSyncSidekick.isError, true);
+    assert.match(utopiaSyncSidekick.content[0].text, /does not exist/, "Utopia sync sidekick is forwarded through task_start validation");
+    assert.doesNotMatch(utopiaSyncSidekick.content[0].text, /Fusion-only/);
     emitBus("pi:modes:changed", { mode: "apex" });
     process.env.PI_BEHAVIOR_MODE = "apex";
     const apexChainSidekick = await tools.get("task_chain").execute("call", { steps: [{ agent: "sidekick", prompt: "do work" }] }, undefined, undefined, ctx);
@@ -396,9 +408,10 @@ test("Fusion runtime rejects roster dispatch and preserves an existing busy gate
     process.env.PI_BEHAVIOR_MODE = "work";
     const workSync = await tools.get("task").execute("call", { agent: "machinist", prompt: "do work" }, AbortSignal.abort(), undefined, ctx);
     assert.equal(workSync.isError, true);
-    assert.match(workSync.content?.[0]?.text ?? "", /Work permits synchronous task only for/);
+    assert.match(workSync.content?.[0]?.text ?? "", /Work runs synchronous task only for/);
+    assert.doesNotMatch(workSync.content?.[0]?.text ?? "", /Apex-only/);
     const workCrewSync = await tools.get("task").execute("call", { agent: "author", prompt: "write kind prose" }, AbortSignal.abort(), undefined, ctx);
-    assert.doesNotMatch(workCrewSync.content?.[0]?.text ?? "", /Work permits synchronous task only for|Synchronous task spawning is disabled/);
+    assert.doesNotMatch(workCrewSync.content?.[0]?.text ?? "", /Work runs synchronous task only for|Synchronous task spawning is disabled/);
     assert.match(tools.get("task").description, /Work crew specialist/);
     assert.match(tools.get("task").description, /all email drafting and substantive email rewriting/);
     assert.match(tools.get("task").description, /Email reading, factual extraction, and summarization remain inline unless another trigger fires/);
@@ -605,12 +618,12 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   const h = fusionHarness();
   h.workers.push(h.fusionWorker());
   const model = await h.lifecycle.reuse("x", { model: "q/other" }, 1000) as any;
-  assert.equal(model.kind, "conflict");
-  assert.match(model.reason, /\/mode configure/);
-  assert.doesNotMatch(model.reason, /task_close/);
+  assert.equal(model.kind, "fresh", "an on-demand model starts its own clean sidekick");
   const thinking = await h.lifecycle.reuse("x", { thinking: "xhigh" }, 1000) as any;
-  assert.equal(thinking.kind, "conflict");
-  assert.match(thinking.reason, /thinking are owned by \/mode configure/);
+  assert.equal(thinking.kind, "fresh", "an on-demand thinking level starts its own clean sidekick");
+  const targeted = await h.lifecycle.reuse("x", { model: "q/other", workerId: h.workers[0].id }, 1000) as any;
+  assert.equal(targeted.kind, "conflict");
+  assert.match(targeted.reason, /omit reuse to start an on-demand sidekick/);
   const fork = await h.lifecycle.reuse("x", { context: "fork" }, 1000) as any;
   assert.equal(fork.kind, "conflict");
   assert.match(fork.reason, /cannot fork a transcript/);
@@ -629,6 +642,28 @@ test("FusionLifecycle reuse conflicts name truthful remedies and validates repor
   assert.equal(ok.worker.reportStatus, "missing");
   assert.equal(ok.worker.initialPrompt, "x", "stored prompt stays raw");
   assert.match(String(sent[0]?.message ?? ""), /```report/, "contract instruction reaches the child alongside the prompt");
+});
+
+test("on-demand sidekick identity: overrides only what differs and pinned workers stay out of reuse and configure", async () => {
+  const pair: any = { lead: { provider: "p", modelId: "l" }, sidekick: { provider: "p", modelId: "s", thinking: "low" } };
+  assert.equal(sidekickOverride(pair, undefined, undefined), undefined);
+  assert.equal(sidekickOverride(pair, "p/s", "low"), undefined, "the configured identity is not an override");
+  assert.equal(sidekickOverride(pair, "s", undefined), undefined, "a bare configured model id matches");
+  assert.deepEqual(sidekickOverride(pair, "q/other", undefined), { model: "q/other", thinking: undefined });
+  assert.deepEqual(sidekickOverride(pair, undefined, "xhigh"), { model: "p/s", thinking: "xhigh" }, "thinking-only keeps the pair model");
+  assert.deepEqual(sidekickOverride(undefined, "q/other", undefined), { model: "q/other", thinking: undefined }, "Utopia has no pair");
+
+  const h = fusionHarness();
+  const sent: string[] = [];
+  const client = { isClosed: false, request: async (command: Record<string, unknown>) => { sent.push(String(command.type)); return { success: true }; } };
+  h.workers.push(h.fusionWorker({ pinnedModel: true, model: "q/other", client }));
+  assert.deepEqual(await h.lifecycle.reuse("next", {}, 1000), { kind: "none" }, "a pinned worker is never reused for a prompt-only unit");
+  const configure: any = { fusion: { lead: pair.lead, sidekick: { provider: "p", modelId: "t" } } };
+  h.lifecycle.attachConfigure(configure);
+  assert.equal(configure.acknowledged, true);
+  assert.equal(configure.promise, undefined, "/mode configure leaves a pinned worker on its requested model");
+  assert.equal(h.workers[0].model, "q/other");
+  assert.deepEqual(sent, []);
 });
 
 test("FusionLifecycle holds the single-writer gate on prompt transport failure", async () => {

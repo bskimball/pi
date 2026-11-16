@@ -3,9 +3,9 @@ import { describe, it } from "node:test";
 import { childToolArgs } from "../child-process.ts";
 
 const env = {
-  PRIME_WORK_BROWSER_URL: "http://localhost:1234",
-  PRIME_WORK_BROWSER_TOKEN: "test-token",
-  PRIME_WORK_BROWSER_EXTENSION_PATH: "/browser.ts",
+  APEX_BROWSER_URL: "http://localhost:1234",
+  APEX_BROWSER_TOKEN: "test-token",
+  APEX_BROWSER_EXTENSION_PATH: "/browser.ts",
   APEX_BROWSER_AGENT_EXTENSION_PATH: "/browser-agent.ts",
 };
 const browserTools = "browser_tabs,browser_read_page,browser_screenshot,browser_click,browser_type,browser_press_key,browser_scroll,browser_evaluate,browser_navigate,terminal_read";
@@ -20,13 +20,26 @@ describe("childToolArgs", () => {
   });
 
   it("requires every browser connection variable", () => {
-    for (const key of ["PRIME_WORK_BROWSER_URL", "PRIME_WORK_BROWSER_TOKEN", "PRIME_WORK_BROWSER_EXTENSION_PATH"]) {
+    for (const key of ["APEX_BROWSER_URL", "APEX_BROWSER_TOKEN", "APEX_BROWSER_EXTENSION_PATH"]) {
       for (const value of [undefined, "", "  "]) {
         assert.deepEqual(childToolArgs({ apexBrowser: true, tools: "read" }, "task", { ...env, [key]: value }), [
           "--exclude-tools", "task,mcp__*", "--tools", "read",
         ]);
       }
     }
+  });
+
+  it("accepts the pre-rename PRIME_WORK_BROWSER_* host variables", () => {
+    const legacy = {
+      PRIME_WORK_BROWSER_URL: "http://localhost:1234",
+      PRIME_WORK_BROWSER_TOKEN: "test-token",
+      PRIME_WORK_BROWSER_EXTENSION_PATH: "/legacy-browser.ts",
+    };
+    assert.deepEqual(childToolArgs({ apexBrowser: true, tools: "read" }, "task", legacy), [
+      "--extension", "/legacy-browser.ts",
+      "--exclude-tools", "task,mcp__*,browser_task",
+      "--tools", `read,${browserTools}`,
+    ]);
   });
 
   it("does not inject for an agent without opt-in", () => {

@@ -29,9 +29,12 @@ export function childToolArgs(
       tool === "tool_search" || tool === "codemode" || tool.includes("*"))) {
     excludedTools += ",mcp__*";
   }
-  if (def.apexBrowser && env.PRIME_WORK_BROWSER_URL?.trim() &&
-      env.PRIME_WORK_BROWSER_TOKEN?.trim() && env.PRIME_WORK_BROWSER_EXTENSION_PATH?.trim()) {
-    args.push("--extension", env.PRIME_WORK_BROWSER_EXTENSION_PATH);
+  // Apex publishes APEX_BROWSER_*; PRIME_WORK_BROWSER_* is the pre-rename host.
+  const browserUrl = env.APEX_BROWSER_URL?.trim() || env.PRIME_WORK_BROWSER_URL?.trim();
+  const browserToken = env.APEX_BROWSER_TOKEN?.trim() || env.PRIME_WORK_BROWSER_TOKEN?.trim();
+  const browserExtension = env.APEX_BROWSER_EXTENSION_PATH?.trim() || env.PRIME_WORK_BROWSER_EXTENSION_PATH?.trim();
+  if (def.apexBrowser && browserUrl && browserToken && browserExtension) {
+    args.push("--extension", browserExtension);
     injectedTools.push(...BROWSER_TOOLS);
     if (env.APEX_BROWSER_AGENT_EXTENSION_PATH?.trim()) {
       args.push("--extension", env.APEX_BROWSER_AGENT_EXTENSION_PATH);

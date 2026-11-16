@@ -6,7 +6,7 @@ import { modelAttempts as catalogModelAttempts, resolveAgentThinking as catalogR
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export const THINKING_OVERRIDE_DESCRIPTION =
-  "Optional thinking level for this delegation only: off, minimal, low, medium, high, xhigh, or max. Leave unset to use the agent's configured thinking. Set only when the user explicitly requested a thinking level for that delegation. A Fusion/Utopia sidekick with a configured pair rejects this; change that pair with /mode configure.";
+  "Optional thinking level for this delegation only: off, minimal, low, medium, high, xhigh, or max. Leave unset to use the agent's configured thinking. Set only when the user explicitly requested a thinking level for that delegation. On a Fusion/Utopia sidekick it starts an on-demand sidekick at that level without changing the configured pair.";
 
 /** Empty or whitespace is unset. Unknown values are an error, not a silent fallback. */
 export function parseThinkingOverride(value: string | undefined): { thinking?: string; error?: string } {
@@ -30,6 +30,48 @@ export function validateThinkingForAttempts(level: string | undefined, attempts:
     if (!supported.includes(level as (typeof supported)[number])) return `Model "${attempt}" does not support thinking level "${level}". Supported: ${supported.join(", ")}.`;
   }
   return undefined;
+}
+
+/**
+ * Resolve a user-named model against the live registry before it reaches the
+ * attempt chain, which would otherwise prefix a bare id with the agent's own
+ * provider (`muse-spark-1.3` -> `antigravity/muse-spark-1.3`). A bare id
+ * prefers the agent's provider, then the sole authenticated provider, then the
+ * provider named for the model family (`muse-*` -> `muse-code`). Unknown or
+ * still-ambiguous ids return an error that lists the exact choices.
+ */
+export function resolveModelOverride(
+  override: string | undefined,
+  agentModel: string | undefined,
+  registry: { getAll(): Model<Api>[]; hasConfiguredAuth?(model: Model<Api>): boolean } | undefined,
+): { model?: string; error?: string } {
+  const requested = override?.trim();
+  if (!requested || !registry) return { model: requested || undefined };
+  const models = registry.getAll();
+  const lower = requested.toLowerCase();
+  const qualified = (model: Model<Api>) => `${model.provider}/${model.id}`;
+  const exact = models.find((model) => qualified(model).toLowerCase() === lower);
+  if (exact) return { model: qualified(exact) };
+  const candidates = models.filter((model) => model.id.toLowerCase() === lower);
+  if (!candidates.length) {
+    if (requested.includes("/")) return { model: requested };
+    return { error: `Model "${requested}" is not in the model registry; pass provider/model.` };
+  }
+  if (candidates.length === 1) return { model: qualified(candidates[0]) };
+  const agentProviderName = agentModel?.includes("/") ? agentModel.slice(0, agentModel.indexOf("/")) : undefined;
+  const byAgent = candidates.find((model) => model.provider === agentProviderName);
+  if (byAgent) return { model: qualified(byAgent) };
+  const usable = registry.hasConfiguredAuth
+    ? candidates.filter((model) => registry.hasConfiguredAuth!(model))
+    : candidates;
+  if (usable.length === 1) return { model: qualified(usable[0]) };
+  const pool = usable.length ? usable : candidates;
+  const family = lower.split(/[-_.]/)[0];
+  const vendor = pool.filter((model) => model.provider.toLowerCase().split(/[-_.]/)[0] === family);
+  if (vendor.length === 1) return { model: qualified(vendor[0]) };
+  return {
+    error: `Model "${requested}" is offered by several providers (${pool.map(qualified).join(", ")}); pass one of those exact provider/model values.`,
+  };
 }
 
 export function taskAllowsFallback(model: string | undefined, allowFallback: boolean | undefined): boolean {

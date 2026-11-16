@@ -103,7 +103,7 @@ export function prepareRequest(context: Context, cwd: string, toolChoice?: ToolC
   };
 }
 
-export function parseResponse(text: string, tools: Tool[]): { text: string; calls: ToolCall[] } {
+export function parseResponse(text: string, _tools: Tool[]): { text: string; calls: ToolCall[] } {
   const response: unknown = JSON.parse(text);
   if (!response || typeof response !== "object" || !("text" in response) || typeof response.text !== "string"
     || !("tool_calls" in response) || !Array.isArray(response.tool_calls)) {
@@ -114,7 +114,9 @@ export function parseResponse(text: string, tools: Tool[]): { text: string; call
       || !("arguments_json" in call) || typeof call.arguments_json !== "string") {
       throw new Error("Muse returned an invalid Pi tool call.");
     }
-    if (!tools.some(tool => tool.name === call.name)) throw new Error(`Muse requested an unavailable Pi tool: ${call.name}`);
+    // An unlisted tool still passes through: Pi's agent loop answers it with a
+    // "Tool <name> not found" error result and the model continues, matching
+    // every other provider instead of failing the whole run.
     const args: unknown = JSON.parse(call.arguments_json);
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error(`Muse tool arguments must be an object: ${call.name}`);
     return { type: "toolCall", id: randomUUID(), name: call.name, arguments: args as JsonObject };

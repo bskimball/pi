@@ -206,7 +206,8 @@ test("Muse preserves the request before advisories, system patches, tool results
   assert.deepEqual(response.calls[0].arguments, { path: "agent/SYSTEM.md" });
   assert.ok(response.calls[0].id);
   assert.throws(() => parseResponse('{"text":"","tool_calls":[]}', []), /neither/);
-  assert.throws(() => parseResponse('{"text":"","tool_calls":[{"name":"bash","arguments_json":"{}"}]}', request.tools), /unavailable/);
+  const unlisted = parseResponse('{"text":"","tool_calls":[{"name":"bash","arguments_json":"{}"}]}', request.tools);
+  assert.equal(unlisted.calls[0].name, "bash", "an unlisted tool reaches Pi's loop, which answers 'Tool not found' instead of failing the run");
   // Token counts captured from the real Muse Wonder round-trip (not a synthetic usage format).
   assert.deepEqual(parseUsage({ models: [{ model: "muse-wonder-1.0", input_tokens: 17978, cached_tokens: 0, output_tokens: 175, reasoning_tokens: 120, calls: 1 }] }), { input: 17978, output: 175, cacheRead: 0, cacheWrite: 0 });
   assert.throws(() => parseUsage({}), /no per-model/);

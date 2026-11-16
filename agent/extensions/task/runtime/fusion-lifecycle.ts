@@ -48,6 +48,30 @@ export function fusionModelId(
   return `${pair.sidekick.provider}/${pair.sidekick.modelId}`;
 }
 
+/**
+ * Per-call sidekick identity requested on demand. Returns the requested
+ * model/thinking when either differs from the configured pair (a bare model
+ * id matches the pair's modelId); undefined when the call adds nothing.
+ */
+export function sidekickOverride(
+  pair: FusionPairConfig | undefined,
+  model: string | undefined,
+  thinking: string | undefined,
+): { model?: string; thinking?: string } | undefined {
+  const requestedModel = model?.trim() || undefined;
+  const requestedThinking = thinking?.trim() || undefined;
+  if (!requestedModel && !requestedThinking) return undefined;
+  const modelDiffers = requestedModel !== undefined && (
+    !pair || (requestedModel !== fusionModelId(pair) && requestedModel !== pair.sidekick.modelId)
+  );
+  const thinkingDiffers = requestedThinking !== undefined && requestedThinking !== pair?.sidekick.thinking;
+  if (!modelDiffers && !thinkingDiffers) return undefined;
+  return {
+    model: modelDiffers ? requestedModel : fusionModelId(pair),
+    thinking: requestedThinking,
+  };
+}
+
 export interface FusionObservedIdentity {
   model?: string;
   thinking?: string;
@@ -80,6 +104,8 @@ export function fusionIdentityReceipt(
 export interface FusionWorkerState {
   id: string;
   fusion?: boolean;
+  /** Started with an on-demand model/thinking: never reused, resumed, or reconfigured. */
+  pinnedModel?: boolean;
   closed: boolean;
   lifecycle: WorkerLifecycle;
   generation?: number;
@@ -427,7 +453,7 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
     const priorPair = this.pair ? structuredClone(this.pair) : undefined;
     // Snapshot every sidekick's identity: the apply fans out to all live
     // transports and rollback restores each one from its own snapshot.
-    const targets = this.findAll().map((worker) => ({
+    const targets = this.findAll().filter((worker) => !worker.pinnedModel).map((worker) => ({
       worker,
       priorModel: worker.model,
       priorThinking: worker.thinking,
@@ -557,15 +583,20 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           `an idle sidekick or start a clean one.`,
       };
     }
-    if (!all.length) return wantsFresh ? { kind: "fresh" } : { kind: "none" };
-    if (inputs.model?.trim() || inputs.thinking?.trim()) {
-      return {
-        kind: "conflict",
-        reason:
-          `Fusion sidekick reuse accepts only a prompt; the sidekick model and thinking are owned by /mode configure, ` +
-          `not by a fresh worker. Run /mode configure to change them.`,
-      };
+    // An on-demand model/thinking always gets its own clean sidekick: it
+    // never inherits a transcript or retunes a warm worker.
+    if (sidekickOverride(this.pair, inputs.model, inputs.thinking)) {
+      if (targetId) {
+        return {
+          kind: "conflict",
+          reason:
+            `reuse: "${targetId}" continues that sidekick on its own model; omit model/thinking to continue it, ` +
+            `or omit reuse to start an on-demand sidekick on the requested model.`,
+        };
+      }
+      return { kind: "fresh" };
     }
+    if (!all.length) return wantsFresh ? { kind: "fresh" } : { kind: "none" };
     if (inputs.context !== undefined && !wantsFresh) {
       return {
         kind: "conflict",
@@ -584,12 +615,13 @@ export class FusionLifecycle<TWorker extends FusionWorkerState> {
           candidate,
           "Fusion sidekick transport lost; parking for transcript resume",
         );
-        parked ??= candidate;
+        if (!candidate.pinnedModel) parked ??= candidate;
       }
     }
     const idle = all.filter(
       (candidate) =>
         !candidate.closed &&
+        !candidate.pinnedModel &&
         !!candidate.client &&
         !candidate.client.isClosed &&
         !isLiveLifecycle(candidate.lifecycle) &&

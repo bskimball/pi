@@ -34,6 +34,7 @@ import {
   orchestrateAgentParamDescription,
   parseThinkingOverride,
   validateThinkingForAttempts,
+  resolveModelOverride,
   taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
@@ -210,6 +211,7 @@ import {
   fusionContextOverLimit,
   isMuseWorker,
   refreshMuseContextTokens,
+  sidekickOverride,
   type FusionConfigureEvent,
   type FusionObservedIdentity,
 } from "./runtime/fusion-lifecycle.ts";
@@ -410,6 +412,8 @@ interface Worker extends RuntimeEventWorker {
   directive?: { queued: boolean; text: string };
   /** Fusion's sole persistent counterpart; never participates in fallback. */
   fusion?: boolean;
+  /** On-demand sidekick model/thinking; excluded from reuse, resume, and /mode configure. */
+  pinnedModel?: boolean;
   fusionParentSessionId?: string;
   /** Prompts in the current Fusion chain (initial assignment + corrections). Owned by fusion-lifecycle. */
   fusionChainPrompts?: number;
@@ -806,7 +810,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       "In this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist.",
     )
     .replace(apexAgentCatalog, orchestrateAgentCatalog);
-  const taskStartPersistentDescription = `Default route for execution in Fusion: use it for iterative edit/run/inspect loops, test/build/gate runs, dev-server and browser/CUA verification, broad scans, and mechanical changes instead of spending lead turns on them. Each call starts a clean sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. Start every disjoint unit of a wave in one message; each busy sidekick leaves the next unit to a parallel worker. An idle sidekick is reused with its cached context: pass reuse: "task_N" to continue a specific one, or omit it to continue the earliest idle one. Pass context: "fresh" when the unit needs no prior findings: it starts on a clean sidekick and leaves idle ones warm (one is parked only when the worker cap is reached). Idle sidekicks over 100k context tokens also start fresh, and a running unit that passes 100k is asked to settle with a handoff. Collect a wave with one task_wait over ids. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist.
+  const taskStartPersistentDescription = `Default route for execution in Fusion: use it for iterative edit/run/inspect loops, test/build/gate runs, dev-server and browser/CUA verification, broad scans, and mechanical changes instead of spending lead turns on them. Each call starts a clean sidekick unit with one cohesive outcome, exact owned paths, and one direct acceptance check. Start every disjoint unit of a wave in one message; each busy sidekick leaves the next unit to a parallel worker. An idle sidekick is reused with its cached context: pass reuse: "task_N" to continue a specific one, or omit it to continue the earliest idle one. Pass context: "fresh" when the unit needs no prior findings: it starts on a clean sidekick and leaves idle ones warm (one is parked only when the worker cap is reached). Idle sidekicks over 100k context tokens also start fresh, and a running unit that passes 100k is asked to settle with a handoff. Collect a wave with one task_wait over ids. Use task_start for every new outcome or path set. Use task_send prompt only for one corrective pass against the unchanged contract; the runtime blocks a second correction. One-shot librarian/stevedore/oracle/picasso work goes via the synchronous task tool only when the user names that specialist. When the user asks for a sub-agent on demand, including a named model or thinking level, call task_start with agent "sidekick" and pass that model/thinking: it starts a clean sidekick on that identity for this unit only, leaving the configured pair and warm sidekicks unchanged.
 
 Available agent:
 - sidekick: ${sidekickDef?.description ?? "Persistent Fusion execution partner."}`;
@@ -833,7 +837,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
   };
   const taskStartAgentDescription = (mode = persistentSidekickMode()) => {
     if (mode && sidekickDef) {
-      return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, and disjoint units run on parallel sidekicks.`;
+      return `Agent to run. One of: sidekick. Each task_start is a clean unit; idle context is reused, and disjoint units run on parallel sidekicks. A per-call model or thinking starts an on-demand sidekick on that identity.`;
     }
     if (behaviorMode === "work") return taskStartWorkAgentDescription;
     if (behaviorMode === "utopia" && sidekickDef) {
@@ -1653,6 +1657,8 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       countsTowardCapOverride?: boolean;
       lastPhaseTag?: string;
       fusion?: boolean;
+      /** On-demand sidekick: honor modelOverride/thinkingOverride instead of the configured pair. */
+      pinnedModel?: boolean;
       fusionParentSessionId?: string;
       resumeSessionFile?: string;
       startupRetried?: boolean;
@@ -1674,7 +1680,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     const rebindFusionState = rebindFusion(params.rebind, fusionModel() !== undefined || allowsPersistentSidekick());
     const isFusion = params.fusion ?? rebindFusionState.fusion;
     const maxTurns = isFusion ? Number.MAX_SAFE_INTEGER : def.maxTurns ?? DEFAULT_MAX_TURNS;
-    const forcedFusionModel = isFusion ? fusionModel() : undefined;
+    const forcedFusionModel = isFusion && !params.pinnedModel ? fusionModel() : undefined;
     const resolved = ((!isFusion || !forcedFusionModel) && !params.rebind)
       ? resolveSubagentModelsAndThinking({
           def,
@@ -1779,6 +1785,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
           ? "missing"
           : "none-requested",
       fusion: isFusion,
+      pinnedModel: isFusion && params.pinnedModel ? true : undefined,
       fusionParentSessionId: isFusion
         ? (params.fusionParentSessionId ?? params.rebind?.fusionParentSessionId)
         : undefined,
@@ -2298,9 +2305,24 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
     ],
     parameters: taskStartParams,
     executionMode: "parallel",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
       syncFleetWidget(ctx);
-      const def = agents.get(params.agent);
+      let params = rawParams;
+      let def = agents.get(params.agent);
+      // Fusion's only async worker is the sidekick: an on-demand request for
+      // any other roster agent runs as a sidekick unit instead of failing.
+      let agentNote: string | undefined;
+      if (
+        def &&
+        persistentSidekickMode() &&
+        params.agent !== "sidekick" &&
+        !isWorkCrewAgent(params.agent) &&
+        agents.has("sidekick")
+      ) {
+        agentNote = `requested agent: ${params.agent} (Fusion runs it as a sidekick unit)`;
+        params = { ...params, agent: "sidekick" };
+        def = agents.get("sidekick");
+      }
       if (!def) {
         return textResult(
           `Unknown agent "${params.agent}". Available: ${[...agents.keys()].join(", ")}`,
@@ -2310,6 +2332,9 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       if (!params.prompt?.trim()) {
         return textResult("prompt is required.", true);
       }
+      const modelResolution = resolveModelOverride(params.model, def.model, ctx.modelRegistry);
+      if (modelResolution.error) return textResult(modelResolution.error, true);
+      if (modelResolution.model !== params.model) params = { ...params, model: modelResolution.model };
       const thinkingRequest = parseThinkingOverride(params.thinking);
       if (thinkingRequest.error) return textResult(thinkingRequest.error, true);
       const sidekickMode = persistentSidekickMode();
@@ -2336,12 +2361,6 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
               closeWorker(candidate, `Hydra scope changed (${process.env.PI_HYDRA_SCOPE}); parking out-of-scope sidekick`, "sync", { cleanPark: true });
             }
           }
-        }
-        if (thinkingRequest.thinking && fusionLifecycle.configured?.sidekick) {
-          return textResult(
-            `Sidekick thinking is owned by /mode configure (${fusionLifecycle.configured.sidekick.thinking ?? "unset"}), not a per-call override.`,
-            true,
-          );
         }
         const outcome = await fusionLifecycle.reuse(
           params.prompt,
@@ -2390,7 +2409,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
         return textResult(`sidekick is Fusion/Utopia-only — ${params.agent} cannot run in this mode; switch to Fusion or Utopia, or dispatch an Apex specialist.`, true);
       }
       if (behaviorMode === "work" && !isWorkCrewAgent(params.agent)) {
-        return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, author, or clerk, or switch modes.`, true);
+        return textResult(`Work permits task_start only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is not in the Work crew — dispatch strategist, researcher, author, or clerk instead, or switch modes.`, true);
       }
       if (!runtime.canStart()) {
         return textResult(
@@ -2431,23 +2450,29 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const attachedTranscripts = new Set(
         fusionLifecycle.findAll().map((worker) => worker.sessionFile).filter((file): file is string => !!file),
       );
-      const savedFusion = isSidekickSpawn && fusionResume
+      const onDemand = isSidekickSpawn
+        ? sidekickOverride(fusionLifecycle.configured, params.model, thinkingRequest.thinking)
+        : undefined;
+      const savedFusion = isSidekickSpawn && fusionResume && !onDemand
         ? fusionLifecycle.findTranscript(ctx.sessionManager?.getBranch?.() ?? [], ctx.sessionManager?.getSessionId?.(), attachedTranscripts)
         : undefined;
+      const modelOverride = onDemand ? onDemand.model : params.model?.trim() || undefined;
       const { worker, error, fusionObserved, priorContextTokens: restoredContextTokens } = await spawnWorker(def, {
         prompt: params.prompt,
         cwd,
-        modelOverride: params.model?.trim() || undefined,
+        modelOverride,
         thinkingOverride: thinkingRequest.thinking,
-        allowFallback: taskAllowsFallback(params.model, params.allowFallback),
+        allowFallback: taskAllowsFallback(modelOverride, params.allowFallback),
         reportSchema,
         forkSessionFile,
         fusion: isSidekickSpawn,
+        pinnedModel: Boolean(onDemand),
         fusionParentSessionId: parentSessionId,
-        resumeSessionFile: savedFusion?.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
+        resumeSessionFile: savedFusion && savedFusion.parentSessionId === parentSessionId ? savedFusion.sessionFile : undefined,
         ctx,
       });
-      if (worker?.fusion && worker.sessionFile) {
+      // On-demand sidekicks are one-off: their transcript is never offered for resume.
+      if (worker?.fusion && !worker.pinnedModel && worker.sessionFile) {
         // Persist the transcript even when prompt acceptance failed: the failed
         // generation settles but the session file stays resumable.
         if (!parentSessionId || ctx.sessionManager?.getSessionId?.() !== parentSessionId) {
@@ -2475,7 +2500,14 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       }
 
       priorContextTokens ??= restoredContextTokens;
-      const identityLines = worker.fusion && fusionLifecycle.configured
+      const identityLines = worker.pinnedModel
+        ? [
+            `on-demand sidekick: ${worker.model ?? "default"} (thinking ${worker.thinking ?? "default"}); configured pair unchanged, not reused by later units`,
+            fusionObserved
+              ? `child-reported now: ${fusionObserved.model ?? "unknown"} (thinking ${fusionObserved.thinking ?? "unknown"})`
+              : undefined,
+          ].filter((line): line is string => Boolean(line))
+        : worker.fusion && fusionLifecycle.configured
         ? fusionIdentityReceipt(fusionLifecycle.configured, fusionObserved)
         : [
             `model: ${worker.model ?? "default"}`,
@@ -2484,6 +2516,7 @@ At most ${MAX_LIVE_WORKERS} live workers; each holds a slot until task_close.`;
       const text = [
         `started ${worker.id}`,
         `agent: ${worker.agent}`,
+        agentNote,
         ...identityLines,
         `generation: ${worker.generation}`,
         contextNote,
@@ -4724,6 +4757,20 @@ This is the supported checkpoint/interaction seam: Pi RPC exposes extension_ui_r
   // rollback restores the prior pair plus live worker identity.
   pi.events.on("pi:fusion:configure", (payload: unknown) => {
     fusionLifecycle.attachConfigure(payload as FusionConfigureEvent);
+  });
+  // Synchronous `task` (amp-task.ts) forwards sidekick requests here so an
+  // on-demand sub-agent starts on the first call. The bus swallows listener
+  // exceptions, so the request carries the promise back to the caller.
+  pi.events.on("pi:task:start-sidekick", (payload: unknown) => {
+    const request = payload as {
+      toolCallId: string;
+      params: Parameters<typeof taskStartToolDef.execute>[1];
+      signal?: AbortSignal;
+      ctx: Parameters<typeof taskStartToolDef.execute>[4];
+      promise?: ReturnType<typeof taskStartToolDef.execute>;
+    };
+    if (!allowsPersistentSidekick()) return;
+    request.promise = taskStartToolDef.execute(request.toolCallId, request.params, request.signal, undefined, request.ctx);
   });
 
   pi.on("tool_call", event => {

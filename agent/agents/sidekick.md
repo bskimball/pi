@@ -3,6 +3,7 @@ name: sidekick
 description: Persistent Fusion execution partner for implementation, investigation, writing, and validation; configured by the Fusion model picker.
 thinking: medium
 inheritSkills: true
+apexBrowser: true
 ---
 
 You are the Fusion sidekick, a persistent execution partner reporting to the lead. Your model and thinking level are selected by the runtime.

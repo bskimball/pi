@@ -32,6 +32,7 @@ import {
   piAgentParamDescription,
   parseThinkingOverride,
   validateThinkingForAttempts,
+  resolveModelOverride,
   taskAllowsFallback,
   resolveAgentThinking,
   resolveSubagentModelsAndThinking,
@@ -576,6 +577,8 @@ export default function (pi: ExtensionAPI) {
   const taskWorkDescription = `Delegate a bounded unit of work to a Work crew specialist in a fresh context window and return its final report.\nWork is inline-first: dispatch strategist, researcher, author (all email drafting and substantive email rewriting; Email reading, factual extraction, and summarization remain inline unless another trigger fires), or clerk when its routing trigger fires. Issue multiple task calls in one message to run agents in parallel.\nAvailable agents (see task_start for full descriptions): ${WORK_CREW_AGENTS.join(", ")}.`;
   const taskWorkAgentDescription = `Agent to run. One of: ${WORK_CREW_AGENTS.join(", ")}. Always route email drafting and substantive email rewriting to author; keep email reading, factual extraction, and summarization inline unless another trigger fires. Route other human-readable or kindly worded prose to author when separate context pays, business/productivity planning to strategist, external research to researcher, and broad recon or monotonous reversible execution to clerk.`;
   const taskOrchestrateDescription = `Delegate a bounded unit of work to a specialist subagent in a fresh context window and return its final report.\nIn this mode substantial implementation slices go to specialists; all visual and UI implementation goes to artisan, not machinist. Issue multiple task calls in one message to run agents in parallel.\nAvailable agents (see task_start for full descriptions): ${apexAgentNames}.`;
+  const taskFusionDescription = `Synchronous one-shot specialist for Fusion: ${FUSION_EPHEMERAL_AGENTS.join(", ")}, only when the user names that specialist; returns its final report.\nFor any other sub-agent request, including one that names a model or thinking level, use task_start with agent "sidekick" and that model/thinking.`;
+  const taskFusionAgentDescription = `Agent to run. One of: ${FUSION_EPHEMERAL_AGENTS.join(", ")}. Other agents start a sidekick via task_start.`;
   const taskToolDef: ToolDefinition<typeof TaskParams> = {
     name: "task",
     label: "Task",
@@ -584,16 +587,42 @@ export default function (pi: ExtensionAPI) {
     parameters: TaskParams,
     executionMode: "parallel",
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (process.env.PI_FUSION_SIDEKICK === "1") {
         const text = "Synchronous task spawning is disabled in Fusion.";
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
+      const mode = process.env.PI_BEHAVIOR_MODE;
+      // On-demand sub-agents must start on the first call. Fusion's general
+      // worker (and Utopia's sidekick) is asynchronous, so forward to task_start
+      // rather than rejecting the call.
+      const forwardToSidekick =
+        (mode === "fusion" && !isFusionEphemeralAgent(params.agent) && !isWorkCrewAgent(params.agent) && agents.has(params.agent)) ||
+        (mode === "utopia" && isFusionOnlyAgent(params.agent));
+      if (forwardToSidekick) {
+        const request: {
+          toolCallId: string;
+          params: typeof params;
+          signal?: AbortSignal;
+          ctx: typeof ctx;
+          promise?: Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>;
+        } = { toolCallId, params, signal, ctx };
+        pi.events.emit("pi:task:start-sidekick", request);
+        if (request.promise) {
+          const started = await request.promise;
+          const startedText = started.content.map((part) => part.text ?? "").join("\n");
+          const text = started.isError
+            ? startedText
+            : `${startedText}\nSidekicks run asynchronously, so this task call started one via task_start instead of blocking; use task_wait/task_close with this id.`;
+          return { content: [{ type: "text", text }], isError: started.isError === true, details: undefined as unknown as TaskDetails };
+        }
+      }
       if (
-        process.env.PI_BEHAVIOR_MODE === "fusion" &&
-        !isFusionEphemeralAgent(params.agent)
+        mode === "fusion" &&
+        !isFusionEphemeralAgent(params.agent) &&
+        !isWorkCrewAgent(params.agent)
       ) {
-        const text = `Fusion permits synchronous task only for ${FUSION_EPHEMERAL_AGENTS.join(", ")}; ${params.agent} is Apex-only — use the sidekick or switch modes.`;
+        const text = `Fusion runs synchronous task only for ${FUSION_EPHEMERAL_AGENTS.join(", ")}. For any other sub-agent, call task_start with agent "sidekick" (pass model/thinking if the user named one).`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       if (
@@ -611,7 +640,7 @@ export default function (pi: ExtensionAPI) {
         process.env.PI_BEHAVIOR_MODE === "work" &&
         !isWorkCrewAgent(params.agent)
       ) {
-        const text = `Work permits synchronous task only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is Apex-only — dispatch strategist, researcher, author, or clerk, or switch modes.`;
+        const text = `Work runs synchronous task only for ${WORK_CREW_AGENTS.join(", ")}; ${params.agent} is not in the Work crew — dispatch strategist, researcher, author, or clerk instead, or switch modes.`;
         return { content: [{ type: "text", text }], isError: true, details: {} };
       }
       const def = agents.get(params.agent);
@@ -678,11 +707,13 @@ export default function (pi: ExtensionAPI) {
           } satisfies TaskDetails,
         };
       }
+      const modelResolution = resolveModelOverride(params.model, def.model, ctx.modelRegistry);
+      if (modelResolution.error) return { content: [{ type: "text", text: modelResolution.error }], isError: true, details: {} };
       const resolved = resolveSubagentModelsAndThinking({
         def,
         parentThinking: pi.getThinkingLevel(),
-        modelOverride: params.model?.trim() || undefined,
-        allowFallback: taskAllowsFallback(params.model, params.allowFallback),
+        modelOverride: modelResolution.model,
+        allowFallback: taskAllowsFallback(modelResolution.model, params.allowFallback),
         ctx,
         emitEvent: (ev, payload) => pi.events.emit(ev, payload),
       });
@@ -1305,11 +1336,12 @@ export default function (pi: ExtensionAPI) {
     const piMode = mode === "pi";
     const workMode = mode === "work";
     const orchestrateMode = mode === "apex-orchestrate";
-    taskToolDef.description = piMode ? taskPiDescription : workMode ? taskWorkDescription : orchestrateMode ? taskOrchestrateDescription : taskFullDescription;
+    const fusionMode = mode === "fusion";
+    taskToolDef.description = piMode ? taskPiDescription : workMode ? taskWorkDescription : orchestrateMode ? taskOrchestrateDescription : fusionMode ? taskFusionDescription : taskFullDescription;
     const properties = (taskToolDef.parameters as unknown as { properties: Record<string, unknown> }).properties;
     taskToolDef.parameters = Type.Object({
       ...properties,
-      agent: Type.String({ description: piMode ? piAgentParamDescription(apexAgents) : workMode ? taskWorkAgentDescription : orchestrateMode ? orchestrateAgentParamDescription(apexAgents) : agentParamDescription(apexAgents) }),
+      agent: Type.String({ description: piMode ? piAgentParamDescription(apexAgents) : workMode ? taskWorkAgentDescription : orchestrateMode ? orchestrateAgentParamDescription(apexAgents) : fusionMode ? taskFusionAgentDescription : agentParamDescription(apexAgents) }),
     }) as typeof taskToolDef.parameters;
     pi.registerTool(taskToolDef);
   };

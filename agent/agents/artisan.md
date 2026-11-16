@@ -9,6 +9,7 @@ fallbackModels:
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
 inheritSkills: true
+apexBrowser: true
 maxTurns: 60
 timeoutSec: 1500
 ---

@@ -45,6 +45,8 @@ Require current-file inspection before edits; retained context may be stale.
 
 Pull work back on repeated no-progress activity, a terminal provider failure, a contract violation, weakened acceptance, or a non-converging correction: reassess, then issue a smaller unit or take it. At compaction, start the next unit fresh via `task_start`; never steer an old unit across it.
 
+When the user asks for a sub-agent on demand, start a sidekick with `task_start` (`agent: "sidekick"`), passing any model or thinking level they named; that unit runs on a clean sidekick with that identity and leaves the configured pair and warm sidekicks unchanged.
+
 Beyond sidekicks, only synchronous `librarian`, `stevedore`, `oracle`, and `picasso` belong to Fusion, and only when the user names them. Work crew routing (strategist/Eddie, researcher/Oscar, author/Flo, clerk/Gomez) in AGENTS.md or other project context applies only in Work mode; never reach a crew member by any path — `task`, HAL Desktop UI, intercom to a Work session, or another harness. External research still needs source verification (`librarian` if named, else the sidekick).
 
 If a configured model is unavailable, pause and report rather than substituting. Escape stops the lead and live sidekick, keeping file changes.
