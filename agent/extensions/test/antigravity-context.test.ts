@@ -134,7 +134,8 @@ test("registered provider uses actual Pi projection for full instructions, tools
   const bundleDir = mkdtempSync(join(tmpdir(), "pi-agy-provider-test-"));
   const captureKey = Symbol.for("pi-agy-context-test");
   const captures: GenerateOptions[] = [];
-  (globalThis as any)[captureKey] = captures;
+  const defaultEfforts: string[] = [];
+  (globalThis as any)[captureKey] = { captures, defaultEfforts };
   const handlers = new Map<string, Function>();
   try {
     const outfile = join(bundleDir, "provider.mjs");
@@ -144,10 +145,11 @@ test("registered provider uses actual Pi projection for full instructions, tools
         builder.onResolve({ filter: /^pi-agy-acp\/src\/(runtime|host)\.ts$/ }, args => ({ path: args.path, namespace: "offline" }));
         builder.onLoad({ filter: /.*/, namespace: "offline" }, args => ({ contents:
           args.path.endsWith("runtime.ts") ? `export class AntigravityRuntime {
+            constructor(host) { globalThis[Symbol.for("pi-agy-context-test")].defaultEfforts.push(host.config.defaultEffort); }
             catalog = { list: () => [] }; async warmup() {} async dispose() {}
             resetConversations() {} settleSession() {}
             async *stream(request) {
-              globalThis[Symbol.for("pi-agy-context-test")].push(request);
+              globalThis[Symbol.for("pi-agy-context-test")].captures.push(request);
               yield { type: "finish", reason: { kind: "stop" } };
             }
           }` : "export function runCommand() { throw Error('Unexpected CLI invocation'); }",
@@ -180,6 +182,16 @@ test("registered provider uses actual Pi projection for full instructions, tools
     assert.deepEqual(result.messages.map(message => message.role), ["system", "user", "system"]);
     assert.match(captures[1].system!, /PAYLOAD_SYSTEM/);
     assert.match(captures[1].system!, /Conversation recovery/);
+    assert.equal(captures[0].reasoningEffort, undefined, "omitted reasoning reaches the configured runtime default");
+    for (const [reasoning, expected] of [["off", undefined], ["minimal", "low"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "high"], ["max", "high"]]) {
+      const stream = provider.streamSimple(model, context, { sessionId: "worker", reasoning });
+      await stream.result();
+      assert.equal(captures.at(-1)!.reasoningEffort, expected, `${reasoning} translation`);
+    }
+    const overridden = provider.streamSimple(model, context, { sessionId: "worker", onPayload: (request: GenerateOptions) => ({ ...request, reasoningEffort: "medium" }) });
+    await overridden.result();
+    assert.equal(captures.at(-1)!.reasoningEffort, "medium", "payload effort remains authoritative");
+    assert.deepEqual(defaultEfforts, ["medium", "medium"], "discovery and inference runtimes both use medium fallback effort");
   } finally {
     await handlers.get("session_shutdown")?.();
     for (const dir of new Set(captures.map(directory))) rmSync(dir, { recursive: true, force: true });

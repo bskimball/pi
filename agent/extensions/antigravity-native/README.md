@@ -20,6 +20,10 @@ Recovery files are created lazily on inference, never during catalog discovery. 
 
 Task role tool lists also restrict context: fixed lists without MCP names or discovery tools exclude unrelated MCP schemas. Explicit MCP lists, `codemode`/`tool_search` roles, wildcard lists, and unrestricted sidekicks retain their intended discovery behavior. The upstream MCP schema compactor still retains full instructions for oversized tools; the adapter does not remove schema constraints or arbitrary tool prose.
 
+## Reasoning effort
+
+Omitted reasoning (including Pi's `off` selection) falls back to `medium`, not the upstream runtime's `high` default. This is a fallback effort, not a promise of zero reasoning: the runtime selects the nearest effort the model offers, and fixed-effort model IDs retain their built-in level. Explicit `low`, `medium`, and `high` selections remain unchanged; the translator maps `minimal` to `low` and `xhigh`/`max` to `high`. Payload-hook effort overrides remain effective. The model picker still advertises only levels the CLI actually supports.
+
 ## Execution and authentication
 
 The dedicated child runs `agy acp --dangerously-skip-permissions`, explicitly authorized by the user. This automatically approves the CLI's tool-permission requests. Upstream's minimal `pi-bridge` agent declares `tools: []` and `excludeDefaultComponents: true`; native filesystem and shell tools are disabled. The authenticated local MCP bridge exposes Pi tools, returns their calls to Pi, and resumes with Pi's results. The adapter does not enable unrestricted native shell execution.
@@ -30,7 +34,7 @@ Each runtime has a unique OS-temp home. Startup and sessionless model refresh us
 
 ## Verification
 
-Offline regression coverage: `node --experimental-transform-types --test agent/extensions/test/antigravity-context.test.ts agent/extensions/task/runtime/test/child-process.test.ts`. This exercises the registered provider through the actual pinned Pi translator with a mocked inference runtime, the pinned ACP replay formatter, prompt sections and updates, payload hooks, stable continuation instructions, forked worker work orders, chunked text and image recovery, compaction, and role-scoped MCP tools.
+Offline regression coverage: `node --experimental-transform-types --test agent/extensions/test/antigravity-context.test.ts agent/extensions/task/runtime/test/child-process.test.ts`. This exercises the registered provider through the actual pinned Pi translator with a mocked inference runtime, the pinned ACP replay formatter, prompt sections and updates, payload hooks, stable continuation instructions, forked worker work orders, chunked text and image recovery, compaction, role-scoped MCP tools, medium default effort, and preservation of explicit reasoning levels and payload overrides.
 
 An isolated live Hydrogen smoke check passed after the rollback-readiness changes: custom and appended system-prompt markers both reached ACP, a real Pi `read` call completed, and the continuation returned the file's dependency version plus both markers. It used an ephemeral session and a process-local `local-agy` key override, without changing the active direct-API provider or stored OAuth. Large-history reset recovery and archived-image retrieval are covered offline, not live. Earlier live checks also covered Carbon, selected mode guidance, and Windows process-tree shutdown.
 

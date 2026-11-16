@@ -36,7 +36,7 @@ export default async function (pi: ExtensionAPI) {
     const home = mkdtempSync(join(tmpdir(), `pi-antigravity-${process.pid}-`));
     const host = createHost();
     const runtime = new AntigravityRuntime({
-      config: { ...defaults, provider: "antigravity", displayName: "Antigravity (native ACP)", home },
+      config: { ...defaults, provider: "antigravity", displayName: "Antigravity (native ACP)", home, defaultEffort: "medium" },
       spawnAcp: host.spawnAcp, runCommand,
       log: { info() {}, warn() {} },
       onModelsChanged() {
