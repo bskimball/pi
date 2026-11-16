@@ -13,6 +13,7 @@ import memory from "../continual-memory.ts";
 import profile from "../user-profile.ts";
 import jev from "../jev/index.ts";
 import { prepareRequest, parseResponse, parseUsage } from "../muse/protocol.ts";
+import { museReasoningEffort, museSkillOverrides } from "../muse/transport.ts";
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { streamMuse } from "../muse/index.ts";
@@ -175,7 +176,7 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
 test("Muse preserves the request before advisories, system patches, tool results and image positions", () => {
   const readTool = { name: "read", description: "Read a file", parameters: Type.Object({ path: Type.String() }) };
   const context: Context = { messages: [
-    { role: "system", content: "Base instructions", sections: { mode: "Old mode", profile: "Keep profile" }, toolsAdded: [readTool], timestamp: 0 },
+    { role: "system", content: "Base instructions", sections: { mode: "Old mode", profile: "Keep profile", skills: "<available_skills><skill><name>review</name><description>Review code when asked</description><location>C:/skills/review/SKILL.md</location></skill></available_skills>" }, toolsAdded: [readTool], timestamp: 0 },
     { role: "user", content: "Analyze our prompts and skills; compare the show-me article", timestamp: 1 },
     { role: "assistant", content: [{ type: "thinking", thinking: "Private reasoning", thinkingSignature: "ENCRYPTED-SIGNATURE" }, { type: "toolCall", id: "read-1", name: "read", arguments: { path: "agent/SYSTEM.md" } }], api: "openai-responses", provider: "openai", model: "previous", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
     { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Actual file contents" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], details: { rendererOnly: "RENDERER-DETAILS" }, isError: false, timestamp: 3 },
@@ -188,6 +189,9 @@ test("Muse preserves the request before advisories, system patches, tool results
   assert.match(request.prompt, /Later instructions/);
   assert.match(request.prompt, /Regular mode/);
   assert.match(request.prompt, /Keep profile/);
+  assert.match(request.prompt, /Review code when asked/);
+  assert.match(request.prompt, /C:\/skills\/review\/SKILL\.md/);
+  assert.equal(request.prompt.split("<available_skills>").length - 1, 1);
   assert.doesNotMatch(request.prompt, /Old mode/);
   assert.match(request.prompt, /Analyze our prompts and skills/);
   assert.match(request.prompt, /Jev routing advisory/);
@@ -211,6 +215,17 @@ test("Muse preserves the request before advisories, system patches, tool results
   // Token counts captured from the real Muse Wonder round-trip (not a synthetic usage format).
   assert.deepEqual(parseUsage({ models: [{ model: "muse-wonder-1.0", input_tokens: 17978, cached_tokens: 0, output_tokens: 175, reasoning_tokens: 120, calls: 1 }] }), { input: 17978, output: 175, cacheRead: 0, cacheWrite: 0 });
   assert.throws(() => parseUsage({}), /no per-model/);
+  assert.equal(museReasoningEffort(), "minimal");
+  assert.equal(museReasoningEffort("off"), "minimal");
+  assert.equal(museReasoningEffort("high"), "high");
+  assert.equal(museReasoningEffort("max"), "ultra");
+  assert.deepEqual(museSkillOverrides({ skills: [{ scope: "bundled", path: "bundled://example/SKILL.md" }, { scope: "user", path: "$HOME/skills/example/SKILL.md" }] }), [
+    "--config", 'skills.activation.bundled={"bundled://example/SKILL.md":"off"}',
+    "--config", 'skills.activation.user={"$HOME/skills/example/SKILL.md":"off"}',
+  ]);
+  assert.deepEqual(museSkillOverrides({ skills: [] }), []);
+  assert.throws(() => museSkillOverrides({}), /Invalid Muse skill catalog/);
+  assert.throws(() => museSkillOverrides({ skills: [{ scope: "unknown", path: "x" }] }), /Unsupported Muse skill catalog entry/);
 });
 
 test("Muse honors outgoing-payload interception before launching the CLI", async () => {

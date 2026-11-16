@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { normalizeContext } from "@earendil-works/pi-ai";
-import { ReplayCheckpoints, withoutPiInstructions, workerContract } from "../antigravity-native/context.ts";
+import { ReplayCheckpoints } from "../antigravity-native/context.ts";
 import type { GenerateOptions, RequestMessage } from "../antigravity-native/node_modules/pi-agy-acp/src/protocol.ts";
 
 const user = (id: string, text: string): RequestMessage => ({ id, role: "user", content: [{ type: "text", text }] });
@@ -18,45 +18,50 @@ function directory(request: GenerateOptions): string {
   return dir;
 }
 
-test("task contracts preserve role, constraints and report schema without taking the rendered Pi prompt", () => {
-  const argv = ["node", "pi", "--system-prompt", "ROLE: read only", "--append-system-prompt", "HANDOFF", "--append-system-prompt", "SCHEMA"];
-  assert.equal(workerContract(argv, { PI_SUBAGENT: "1", PI_TASK_PROMPT_CONTRACT: "1" }), "ROLE: read only\n\nHANDOFF\n\nSCHEMA");
-  assert.equal(workerContract(argv, { PI_SUBAGENT: "1" }), "");
-  assert.equal(workerContract(argv, { PI_TASK_PROMPT_CONTRACT: "1" }), "");
-  const projected = withoutPiInstructions(normalizeContext({ messages: [
-    { role: "system", content: "LEAD_PROMPT", sections: { private: "PROFILE" }, timestamp: 0 },
-    { role: "user", content: "WORK_ORDER", timestamp: 1 },
-  ] }));
-  assert.doesNotMatch(JSON.stringify(projected), /LEAD_PROMPT|PROFILE/);
-  assert.match(JSON.stringify(projected), /WORK_ORDER/);
+test("checkpoints preserve system instructions and updates without changing their message order", () => {
+  const checkpoints = new ReplayCheckpoints();
+  const messages: RequestMessage[] = [
+    { role: "system", content: [{ type: "text", text: "ROLE_AND_PROFILE" }] },
+    user("task", "WORK_ORDER"),
+    { role: "system", content: [{ type: "text", text: "UPDATED_MODE" }] },
+  ];
+  const request = checkpoints.prepare({ model: "test", messages, system: "PAYLOAD_SYSTEM" });
+  try {
+    assert.equal(request.messages, messages);
+    assert.match(request.system!, /PAYLOAD_SYSTEM/);
+    assert.match(readFileSync(join(directory(request), "history.json"), "utf8"), /UPDATED_MODE/);
+  } finally { rmSync(directory(request), { recursive: true, force: true }); }
 });
 
-test("checkpoint stays stable across tool continuations and archives text without image or reasoning payloads", () => {
+test("checkpoint stays stable across tool continuations and preserves images without private reasoning", () => {
   const checkpoints = new ReplayCheckpoints();
-  const initial: GenerateOptions = { model: "test", sessionId: "lead", messages: [user("u1", "Do not edit production")] };
-  const first = checkpoints.prepare(initial, "MODE");
+  const initial: GenerateOptions = { model: "test", sessionId: "lead", system: "MODE", messages: [user("u1", "Do not edit production")] };
+  const first = checkpoints.prepare(initial);
   const dir = directory(first);
+  const pixels = Buffer.from("offline image bytes");
   try {
-    const next = checkpoints.prepare({ ...initial, system: "PAYLOAD_OVERRIDE", messages: [...initial.messages,
+    const next = checkpoints.prepare({ ...initial, messages: [...initial.messages,
       { id: "a1", role: "assistant", source: { kind: "model", provider: "test" }, content: [
         { type: "reasoning", text: "PRIVATE_REASONING" },
         { type: "tool-call", id: "call", name: "read", arguments: "{}" },
       ] },
-      { id: "t1", role: "tool", toolCallId: "call", content: [{ type: "text", text: "DECISIVE_EVIDENCE" }, { type: "image", data: "PIXEL_SECRET", mimeType: "image/png" }] },
-    ] }, "MODE");
+      { id: "t1", role: "tool", toolCallId: "call", content: [{ type: "text", text: "DECISIVE_EVIDENCE" }, { type: "image", data: pixels.toString("base64"), mimeType: "image/png" }] },
+    ] });
     assert.equal(next.system, first.system);
-    assert.doesNotMatch(next.system!, /PAYLOAD_OVERRIDE/);
-    const history = readFileSync(join(dir, "history.jsonl"), "utf8");
+    const history = readFileSync(join(dir, "history.json"), "utf8");
     assert.match(history, /DECISIVE_EVIDENCE/);
-    assert.doesNotMatch(history, /PRIVATE_REASONING|PIXEL_SECRET/);
-    assert.match(history, /Historical image/);
+    assert.doesNotMatch(history, /PRIVATE_REASONING/);
+    const image = JSON.parse(history)[2].content[1];
+    assert.equal(image.type, "image-file");
+    assert.equal(dirname(image.path), dir);
+    assert.deepEqual(readFileSync(image.path), pixels);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("compaction retains original task, explicit handoff and pre-reset evidence; worker forks pin the new work order", () => {
   const checkpoints = new ReplayCheckpoints(true);
-  const initial: GenerateOptions = { model: "test", sessionId: "worker", messages: [user("parent", "Unrelated parent task"), user("unit", "Owned path src/a.ts")] };
-  const first = checkpoints.prepare(initial, "WORKER");
+  const initial: GenerateOptions = { model: "test", sessionId: "worker", system: "WORKER", messages: [user("parent", "Unrelated parent task"), user("unit", "Owned path src/a.ts")] };
+  const first = checkpoints.prepare(initial);
   const dir = directory(first);
   try {
     assert.match(first.system!, /Owned path src\/a.ts/);
@@ -64,11 +69,11 @@ test("compaction retains original task, explicit handoff and pre-reset evidence;
     checkpoints.prepare({ ...initial, messages: [...initial.messages, {
       id: "a1", role: "assistant", source: { kind: "model", provider: "test" },
       content: [{ type: "text", text: '```handoff\n{"findings":"Do not retry migration"}\n```' }],
-    }] }, "WORKER");
+    }] });
     checkpoints.reset();
-    const compacted = checkpoints.prepare({ ...initial, messages: [user("summary", "Compaction summary: validation pending")] }, "WORKER");
+    const compacted = checkpoints.prepare({ ...initial, messages: [user("summary", "Compaction summary: validation pending")] });
     assert.equal(compacted.system, first.system);
-    assert.match(readFileSync(join(dir, "history-1.jsonl"), "utf8"), /Do not retry migration/);
+    assert.match(readFileSync(join(dir, "history-1.json"), "utf8"), /Do not retry migration/);
     const checkpoint = readFileSync(join(dir, "checkpoint.md"), "utf8");
     assert.match(checkpoint, /Do not retry migration/);
     assert.match(checkpoint, /validation pending/);
@@ -76,14 +81,15 @@ test("compaction retains original task, explicit handoff and pre-reset evidence;
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("actual pinned ACP replay omits an old constraint that remains recoverable from the checkpoint", async () => {
+test("pinned ACP replay remains bounded while large omitted results are fully recoverable by line", async () => {
   const bundleDir = mkdtempSync(join(tmpdir(), "pi-agy-replay-test-"));
   const checkpoints = new ReplayCheckpoints();
-  const request = checkpoints.prepare({ model: "test", sessionId: "large", messages: [
+  const evidence = "x".repeat(180_000) + "DECISIVE_TAIL";
+  const request = checkpoints.prepare({ model: "test", sessionId: "large", system: "MODE", messages: [
     user("original", "MUST_PRESERVE_CONSTRAINT"),
-    { id: "large-result", role: "tool", toolCallId: "call", content: [{ type: "text", text: "x".repeat(180_000) }] },
+    { id: "large-result", role: "tool", toolCallId: "call", content: [{ type: "text", text: evidence }] },
     user("next", "Continue validation"),
-  ] }, "MODE");
+  ] });
   const dir = directory(request);
   try {
     const outfile = join(bundleDir, "history.mjs");
@@ -93,7 +99,10 @@ test("actual pinned ACP replay omits an old constraint that remains recoverable 
     assert.match(replay, /omitted|truncated/);
     assert.doesNotMatch(replay, /MUST_PRESERVE_CONSTRAINT/);
     assert.match(request.system!, /MUST_PRESERVE_CONSTRAINT/);
-    assert.match(readFileSync(join(dir, "history.jsonl"), "utf8"), /MUST_PRESERVE_CONSTRAINT/);
+    const history = readFileSync(join(dir, "history.json"), "utf8");
+    assert.equal(JSON.parse(history)[1].content[0].text.chunks.join(""), evidence);
+    assert.ok(history.split("\n").every(line => Buffer.byteLength(line) < 16_000));
+    assert.match(history, /DECISIVE_TAIL/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(bundleDir, { recursive: true, force: true });
@@ -105,15 +114,15 @@ test("sessions are isolated and branch switches do not reuse an abandoned handof
   const first = checkpoints.prepare({ model: "test", sessionId: "first", messages: [user("one", "FIRST_TASK"), {
     id: "answer", role: "assistant", source: { kind: "model", provider: "test" },
     content: [{ type: "text", text: '```handoff\n{"findings":"ABANDONED_DECISION"}\n```' }],
-  }] }, "MODE");
-  const second = checkpoints.prepare({ model: "test", sessionId: "second", messages: [user("two", "SECOND_TASK")] }, "MODE");
+  }] });
+  const second = checkpoints.prepare({ model: "test", sessionId: "second", messages: [user("two", "SECOND_TASK")] });
   const firstDir = directory(first), secondDir = directory(second);
   try {
     assert.notEqual(firstDir, secondDir);
     assert.doesNotMatch(second.system!, /FIRST_TASK/);
     assert.doesNotMatch(readFileSync(join(secondDir, "checkpoint.md"), "utf8"), /ABANDONED_DECISION/);
     checkpoints.reset(false);
-    checkpoints.prepare({ model: "test", sessionId: "first", messages: [user("one", "FIRST_TASK"), user("branch", "Different approach")] }, "MODE");
+    checkpoints.prepare({ model: "test", sessionId: "first", messages: [user("one", "FIRST_TASK"), user("branch", "Different approach")] });
     assert.doesNotMatch(readFileSync(join(firstDir, "checkpoint.md"), "utf8"), /ABANDONED_DECISION/);
   } finally {
     rmSync(firstDir, { recursive: true, force: true });
@@ -121,53 +130,60 @@ test("sessions are isolated and branch switches do not reuse an abandoned handof
   }
 });
 
-test("registered provider forwards only the worker contract and recovery instructions after payload projection", async () => {
+test("registered provider uses actual Pi projection for full instructions, tools, updates and payload hooks", async () => {
   const bundleDir = mkdtempSync(join(tmpdir(), "pi-agy-provider-test-"));
-  const oldArgv = process.argv;
-  const oldSubagent = process.env.PI_SUBAGENT;
-  const oldContract = process.env.PI_TASK_PROMPT_CONTRACT;
-  let checkpointDir: string | undefined;
+  const captureKey = Symbol.for("pi-agy-context-test");
+  const captures: GenerateOptions[] = [];
+  (globalThis as any)[captureKey] = captures;
   const handlers = new Map<string, Function>();
   try {
     const outfile = join(bundleDir, "provider.mjs");
     await build({ entryPoints: ["agent/extensions/antigravity-native/index.ts"], outfile, bundle: true, platform: "node", format: "esm", plugins: [{
       name: "offline-runtime", setup(builder) {
         builder.onResolve({ filter: /^@earendil-works\// }, args => ({ path: import.meta.resolve(args.path), external: true }));
-        builder.onResolve({ filter: /^pi-agy-acp\// }, args => ({ path: args.path, namespace: "offline" }));
+        builder.onResolve({ filter: /^pi-agy-acp\/src\/(runtime|host)\.ts$/ }, args => ({ path: args.path, namespace: "offline" }));
         builder.onLoad({ filter: /.*/, namespace: "offline" }, args => ({ contents:
           args.path.endsWith("runtime.ts") ? `export class AntigravityRuntime {
             catalog = { list: () => [] }; async warmup() {} async dispose() {}
-            resetConversations() {} settleSession() {} stream(request) { return request; }
-          }` : args.path.endsWith("config.ts") ? "export const defaults = {};"
-          : args.path.endsWith("host.ts") ? "export function runCommand() { throw Error('Unexpected CLI invocation'); }"
-          : "export function streamPi(runtime, model, context, options) { return runtime.stream(options.request); }",
+            resetConversations() {} settleSession() {}
+            async *stream(request) {
+              globalThis[Symbol.for("pi-agy-context-test")].push(request);
+              yield { type: "finish", reason: { kind: "stop" } };
+            }
+          }` : "export function runCommand() { throw Error('Unexpected CLI invocation'); }",
         }));
       },
     }] });
-    process.argv = ["node", "pi", "--system-prompt", "ROLE_ONLY", "--append-system-prompt", "HANDOFF_AND_SCHEMA"];
-    process.env.PI_SUBAGENT = "1";
-    process.env.PI_TASK_PROMPT_CONTRACT = "1";
     let provider: any;
     const { default: install } = await import(pathToFileURL(outfile).href);
     await install({ registerProvider(_name: string, config: unknown) { provider = config; },
-      events: { on() { return () => {}; } }, on(name: string, handler: Function) { handlers.set(name, handler); },
+      on(name: string, handler: Function) { handlers.set(name, handler); },
     });
-    const tool = { name: "read", description: "Read exact evidence", parameters: { type: "object" } };
-    const result = provider.streamSimple({}, normalizeContext({ messages: [] }), { request: {
-      model: "test", sessionId: "worker", tools: [tool], system: "PAYLOAD_SYSTEM",
-      messages: [{ role: "system", content: [{ type: "text", text: "PAYLOAD_MESSAGE" }] }, user("unit", "WORK_ORDER")],
-    } });
-    checkpointDir = directory(result);
-    assert.match(result.system, /ROLE_ONLY\n\nHANDOFF_AND_SCHEMA/);
-    assert.doesNotMatch(result.system, /PAYLOAD_SYSTEM|PAYLOAD_MESSAGE/);
+    const tool = { name: "read", description: "Read exact evidence", parameters: { type: "object" as const } };
+    const context = normalizeContext({ messages: [
+      { role: "system", content: "BASE_ROLE", sections: { preamble: "BASE_ROLE", memory: "MEMORY", profile: "PROFILE", skills: "SKILLS", context: "AGENTS", mode: "WORKER_HANDOFF_SCHEMA" }, toolsAdded: [tool], timestamp: 0 },
+      { role: "user", content: "WORK_ORDER", timestamp: 1 },
+      { role: "system", content: "", sections: { mode: "UPDATED_MODE" }, timestamp: 2 },
+    ] });
+    const model = { id: "test", api: "antigravity-native-acp", provider: "antigravity", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    for (const onPayload of [undefined, (request: GenerateOptions) => ({ ...request, system: "PAYLOAD_SYSTEM" })]) {
+      const stream = provider.streamSimple(model, context, { sessionId: "worker", onPayload });
+      for await (const _event of stream) { /* Drain the actual translator. */ }
+      const result = await stream.result();
+      assert.notEqual(result.stopReason, "error", result.errorMessage);
+    }
+    assert.equal(captures.length, 2);
+    const result = captures[0];
+    const text = JSON.stringify(result.messages);
+    for (const marker of ["BASE_ROLE", "MEMORY", "PROFILE", "SKILLS", "AGENTS", "WORKER_HANDOFF_SCHEMA", "UPDATED_MODE", "WORK_ORDER"]) assert.ok(text.includes(marker), marker);
     assert.deepEqual(result.tools, [tool]);
-    assert.deepEqual(result.messages, [user("unit", "WORK_ORDER")]);
+    assert.deepEqual(result.messages.map(message => message.role), ["system", "user", "system"]);
+    assert.match(captures[1].system!, /PAYLOAD_SYSTEM/);
+    assert.match(captures[1].system!, /Conversation recovery/);
   } finally {
     await handlers.get("session_shutdown")?.();
-    process.argv = oldArgv;
-    if (oldSubagent === undefined) delete process.env.PI_SUBAGENT; else process.env.PI_SUBAGENT = oldSubagent;
-    if (oldContract === undefined) delete process.env.PI_TASK_PROMPT_CONTRACT; else process.env.PI_TASK_PROMPT_CONTRACT = oldContract;
-    if (checkpointDir) rmSync(checkpointDir, { recursive: true, force: true });
+    for (const dir of new Set(captures.map(directory))) rmSync(dir, { recursive: true, force: true });
+    delete (globalThis as any)[captureKey];
     rmSync(bundleDir, { recursive: true, force: true });
   }
 });

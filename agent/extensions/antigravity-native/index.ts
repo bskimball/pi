@@ -7,8 +7,7 @@ import { defaults } from "pi-agy-acp/src/config.ts";
 import { runCommand } from "pi-agy-acp/src/host.ts";
 import { streamPi } from "pi-agy-acp/src/pi-stream.ts";
 import { createHost } from "./host.ts";
-import { ReplayCheckpoints, withoutPiInstructions, workerContract } from "./context.ts";
-export { withoutPiInstructions } from "./context.ts";
+import { ReplayCheckpoints } from "./context.ts";
 
 function modelConfigs(runtime: AntigravityRuntime): ProviderModelConfig[] {
   return runtime.catalog.list().map((model) => {
@@ -29,8 +28,6 @@ function modelConfigs(runtime: AntigravityRuntime): ProviderModelConfig[] {
 export default async function (pi: ExtensionAPI) {
   let registered = false;
   let refreshing = false;
-  let modeInstructions = "";
-  const taskInstructions = workerContract(process.argv, process.env);
   const checkpoints = new ReplayCheckpoints(process.env.PI_SUBAGENT === "1");
   let models: ProviderModelConfig[] = [];
   let active: ReturnType<typeof createRuntime> | undefined;
@@ -78,15 +75,9 @@ export default async function (pi: ExtensionAPI) {
       streamSimple: (model, context, options) => streamPi({
         stream: (request) => {
           active ??= createRuntime();
-          // Payload hooks cannot replace the task-owned contract or mode card.
-          return active.runtime.stream(checkpoints.prepare({
-            model: request.model,
-            messages: request.messages.filter((message) => message.role !== "system"),
-            tools: request.tools, sessionId: request.sessionId, signal: request.signal,
-            reasoningEffort: request.reasoningEffort,
-          }, taskInstructions || modeInstructions));
+          return active.runtime.stream(checkpoints.prepare(request));
         },
-      }, model, withoutPiInstructions(context), options),
+      }, model, context, options),
       refreshModels: async (context) => {
         if (context?.allowNetwork !== false) await discover({ force: context?.force, signal: context?.signal });
         return models;
@@ -97,13 +88,7 @@ export default async function (pi: ExtensionAPI) {
   await discover();
   register();
   registered = true;
-  const unsubscribeGuidance = pi.events.on("pi:modes:guidance", (payload) => {
-    const guidance = payload as { mode?: string; instructions?: unknown } | undefined;
-    modeInstructions = guidance && ["apex", "apex-orchestrate", "fusion"].includes(guidance.mode ?? "")
-      && typeof guidance.instructions === "string" ? guidance.instructions : "";
-  });
   pi.on("session_shutdown", async () => {
-    unsubscribeGuidance();
     await active?.dispose();
     active = undefined;
     checkpoints.clear();
@@ -111,7 +96,6 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_tree", () => { checkpoints.reset(false); return active?.runtime.resetConversations(); });
   pi.on("session_compact", () => { checkpoints.reset(); return active?.runtime.resetConversations(); });
   pi.on("session_start", () => {
-    modeInstructions = "";
     checkpoints.clear();
     return active?.runtime.resetConversations();
   });

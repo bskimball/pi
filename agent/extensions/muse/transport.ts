@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { join, resolve } from "node:path";
+import type { ModelThinkingLevel, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { museBinary } from "./catalog.ts";
 import { parseUsage, responseSchema, type MuseRequest } from "./protocol.ts";
 
@@ -29,6 +30,27 @@ export function contributorModeForModel(model: string): "on" | "off" {
   return model.endsWith("-contributor") ? "on" : "off";
 }
 
+export function museReasoningEffort(level?: ModelThinkingLevel): string {
+  if (!level || level === "off") return "minimal";
+  return level === "max" ? "ultra" : level;
+}
+
+const execFileAsync = promisify(execFile);
+
+export function museSkillOverrides(catalog: unknown): string[] {
+  const skills = object(catalog)?.skills;
+  if (!Array.isArray(skills)) throw new Error("Invalid Muse skill catalog.");
+  const scopes: Record<string, Record<string, string>> = {};
+  for (const row of skills) {
+    const skill = object(row);
+    if (!skill || typeof skill.path !== "string" || !["user", "bundled", "plugin"].includes(String(skill.scope))) {
+      throw new Error("Unsupported Muse skill catalog entry.");
+    }
+    (scopes[String(skill.scope)] ??= {})[skill.path] = "off";
+  }
+  return Object.entries(scopes).flatMap(([scope, paths]) => ["--config", `skills.activation.${scope}=${JSON.stringify(paths)}`]);
+}
+
 export async function runMuse(request: MuseRequest, model: string, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<MuseResult> {
   signal.throwIfAborted();
   const dir = await mkdtemp(join(tmpdir(), "pi-muse-"));
@@ -37,15 +59,23 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     const schemaPath = join(dir, "response.schema.json");
     await writeFile(promptPath, request.prompt, { mode: 0o600 });
     await writeFile(schemaPath, JSON.stringify(responseSchema), { mode: 0o600 });
+    const env = { ...process.env };
+    // Keep authentication in Muse; never copy credentials into the temporary workspace.
+    for (const key of Object.keys(env)) if (key.toUpperCase() === "META_API_KEY") delete env[key];
+    const configuredBinary = museBinary();
+    const binary = /[\\/]/.test(configuredBinary) ? resolve(configuredBinary) : configuredBinary;
     const args = [
       "exec", "--json", "--provider", "meta", "--model", model, "--contributor-mode", contributorModeForModel(model), "--preset", "empty", "--yolo",
       "--prompt-file", promptPath, "--output-schema", schemaPath,
-      "--workspace", process.cwd(), "--worktree", "off", "--no-session-log",
+      "--workspace", dir, "--worktree", "off", "--no-session-log",
       "--disable-web-tools", "--disable-request-user-input",
       "--disable-reminders", "--no-foreign-personal-context", "--approval-judge", "off",
+      "--config", `run.system_prompt=${JSON.stringify("You are the Pi assistant. Follow the Pi system instructions and ordered conversation supplied in the prompt. Return the required structured response. Pi executes requested tools; do not execute tools yourself.")}`,
+      "--config", "run.context_usage_message_enabled=false",
+      "--config", "run.context_slimming.meta_context_note_enabled=false",
+      "--config", "run.context_slimming.session_identity_enabled=false",
     ];
-    const effort = options?.reasoning === "max" ? "ultra" : options?.reasoning ?? "minimal";
-    args.push("--reasoning-effort", effort);
+    args.push("--reasoning-effort", museReasoningEffort(options?.reasoning));
     for (const [index, image] of request.images.entries()) {
       const extension = extensions[image.mimeType];
       if (!extension) throw new Error(`Muse CLI does not support this image MIME type: ${image.mimeType}`);
@@ -53,12 +83,20 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
       await writeFile(path, Buffer.from(image.data, "base64"), { mode: 0o600 });
       args.push("--image", path);
     }
-    const env = { ...process.env };
-    // The CLI's existing subscription login is the only authentication path we supply.
-    for (const key of Object.keys(env)) if (key.toUpperCase() === "META_API_KEY") delete env[key];
+    const listing = execFileAsync(binary, ["skills", "list", "--json", "--workspace", dir], {
+      cwd: dir, env, signal, timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+    });
+    const listingClosed = new Promise<void>(done => listing.child.once("close", () => done()));
+    try {
+      const { stdout } = await listing;
+      args.push(...museSkillOverrides(JSON.parse(stdout)));
+    } finally {
+      // execFile rejects on abort before close; wait before removing its working directory.
+      await listingClosed;
+    }
     signal.throwIfAborted();
     return await new Promise<MuseResult>((resolve, reject) => {
-      const child = spawn(museBinary(), args, { cwd: process.cwd(), env, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(binary, args, { cwd: dir, env, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
       let pending = "";
       let stderr = "";
       let bytes = 0;

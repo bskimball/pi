@@ -5,7 +5,7 @@ model: openai/gpt-6.1-sol
 fallbackModels:
   - antigravity/gemini-4-hydrogen
   - xai/grok-4.7
-  - meta/muse-spark-1.3-contributor
+  - muse-code/muse-spark-1.3-contributor
   - 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731'
 thinking: low
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp
