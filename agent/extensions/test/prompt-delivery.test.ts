@@ -209,7 +209,30 @@ test("Muse preserves the request before advisories, system patches, tool results
   assert.equal(response.calls[0].name, "read");
   assert.deepEqual(response.calls[0].arguments, { path: "agent/SYSTEM.md" });
   assert.ok(response.calls[0].id);
+  const escapedArgs = { path: String.raw`C:\new\temp\"quoted"`, text: "first line\nsecond line\twith literal \\n" };
+  const escaped = parseResponse(JSON.stringify({ text: "", tool_calls: [
+    { name: "read", arguments_json: JSON.stringify(escapedArgs) },
+  ] }), request.tools);
+  assert.deepEqual(escaped.calls[0].arguments, escapedArgs);
   assert.throws(() => parseResponse('{"text":"","tool_calls":[]}', []), /neither/);
+  const malformedJson = "private sample payload";
+  assert.throws(() => parseResponse(malformedJson, request.tools), {
+    name: "SyntaxError", message: "Muse returned malformed JSON in the response envelope.",
+  });
+  assert.throws(() => parseResponse(JSON.stringify({ text: "", tool_calls: [
+    { name: "read", arguments_json: malformedJson },
+  ] }), request.tools), {
+    name: "SyntaxError", message: 'Muse returned malformed JSON in arguments for tool "read".',
+  });
+  assert.throws(() => parseResponse(JSON.stringify({ text: "", tool_calls: [
+    { name: "read", arguments_json: "{}" },
+    { name: malformedJson, arguments_json: malformedJson },
+  ] }), request.tools), {
+    name: "SyntaxError", message: "Muse returned malformed JSON in arguments for tool call #2.",
+  });
+  assert.throws(() => parseResponse(JSON.stringify({ text: "", tool_calls: [
+    { name: malformedJson, arguments_json: "null" },
+  ] }), request.tools), { message: "Muse arguments for tool call #1 must be a JSON object." });
   const unlisted = parseResponse('{"text":"","tool_calls":[{"name":"bash","arguments_json":"{}"}]}', request.tools);
   assert.equal(unlisted.calls[0].name, "bash", "an unlisted tool reaches Pi's loop, which answers 'Tool not found' instead of failing the run");
   // Token counts captured from the real Muse Wonder round-trip (not a synthetic usage format).

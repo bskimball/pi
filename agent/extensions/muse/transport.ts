@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ModelThinkingLevel, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { museBinary } from "./catalog.ts";
-import { parseUsage, responseSchema, type MuseRequest } from "./protocol.ts";
+import { parseMuseJson, parseUsage, responseSchema, type MuseRequest } from "./protocol.ts";
 
 export interface MuseResult {
   text: string;
@@ -89,7 +89,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
     const listingClosed = new Promise<void>(done => listing.child.once("close", () => done()));
     try {
       const { stdout } = await listing;
-      args.push(...museSkillOverrides(JSON.parse(stdout)));
+      args.push(...museSkillOverrides(parseMuseJson(stdout, "the CLI skill catalog")));
     } finally {
       // execFile rejects on abort before close; wait before removing its working directory.
       await listingClosed;
@@ -119,7 +119,7 @@ export async function runMuse(request: MuseRequest, model: string, options: Simp
       const abort = () => fail(new Error("Muse request aborted."));
       const onLine = (line: string) => {
         if (!line.trim() || line.startsWith("muse:")) return;
-        const event = object(JSON.parse(line));
+        const event = object(parseMuseJson(line, "the CLI event stream"));
         if (!event || typeof event.payload_type !== "string") throw new Error("Invalid Muse JSONL event.");
         const payload = object(event.payload) ?? {};
         if (event.payload_type === "run.terminal.completed") {

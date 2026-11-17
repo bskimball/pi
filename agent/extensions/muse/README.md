@@ -44,7 +44,7 @@ Muse runs in an empty temporary workspace so it does not load the project rules 
 - Reasoning content is not exposed. Pi's reasoning level maps to `--reasoning-effort` (`off` becomes `minimal`, because the CLI rejects `none` with `--provider meta`; `max` becomes `ultra`).
 - PNG, JPEG, WebP, and GIF images are written to the temp workspace and passed as `--image`. The transcript holds numbered placeholders. Other MIME types fail the turn.
 - Muse's workspace and process directory are temporary; Pi's actual working directory stays in the prompt and Pi executes tools there. Prompt, schema, and image files are deleted when the turn finishes.
-- CLI output over 16 MiB, a failed or missing terminal event, or an invalid envelope fails the turn. Abort and session shutdown kill the process tree.
+- If a completed reply has malformed JSON in the envelope or its encoded tool arguments, the adapter asks Muse to regenerate it once before publishing any text or tool calls. It does not rewrite invalid escapes, and both completions count toward usage. A second malformed reply, an invalid response shape, CLI output over 16 MiB, or a failed or missing terminal event fails the turn. Abort and session shutdown kill the process tree.
 
 ## Usage accounting
 

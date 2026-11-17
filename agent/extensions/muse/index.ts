@@ -4,7 +4,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { museCatalog } from "./catalog.ts";
-import { parseRequest, parseResponse, prepareRequest } from "./protocol.ts";
+import { MuseJsonSyntaxError, parseRequest, parseResponse, prepareRequest } from "./protocol.ts";
 import { runMuse } from "./transport.ts";
 
 const API = "muse-code-cli" as Api;
@@ -26,15 +26,27 @@ export function streamMuse(model: Model<Api>, context: Context, options?: Simple
       const replacement = await options?.onPayload?.(prepared, model);
       const request = parseRequest(replacement === undefined ? prepared : replacement);
       const id = model.id === "muse-spark" ? museCatalog().defaultId : model.id;
-      const result = await runMuse(request, id, options, signal);
-      signal.throwIfAborted();
-      const response = parseResponse(result.text, request.tools);
-      output.responseModel = result.model;
-      output.usage.input = result.input;
-      output.usage.output = result.output;
-      output.usage.cacheRead = result.cacheRead;
-      output.usage.cacheWrite = result.cacheWrite;
-      output.usage.totalTokens = result.input + result.output + result.cacheRead + result.cacheWrite;
+      const complete = async (prompt: string) => {
+        const result = await runMuse({ ...request, prompt }, id, options, signal);
+        signal.throwIfAborted();
+        output.responseModel = result.model;
+        output.usage.input += result.input;
+        output.usage.output += result.output;
+        output.usage.cacheRead += result.cacheRead;
+        output.usage.cacheWrite += result.cacheWrite;
+        output.usage.totalTokens += result.input + result.output + result.cacheRead + result.cacheWrite;
+        return result.text;
+      };
+      const text = await complete(request.prompt);
+      let response;
+      try {
+        response = parseResponse(text, request.tools);
+      } catch (error) {
+        if (!(error instanceof MuseJsonSyntaxError)) throw error;
+        // No content or tool calls have reached Pi. Regenerate instead of guessing escapes.
+        const correction = "Muse response correction: the previous response contained malformed JSON. No tool calls ran. Regenerate the entire response for the original task. JSON-serialize each tool argument object before putting it in arguments_json; preserve the exact argument values, including backslashes and quotes.";
+        response = parseResponse(await complete(`${request.prompt}\n\n${correction}`), request.tools);
+      }
       if (response.text) {
         const contentIndex = output.content.length;
         output.content.push({ type: "text", text: "" });

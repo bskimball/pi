@@ -92,7 +92,7 @@ export function prepareRequest(context: Context, cwd: string, toolChoice?: ToolC
       "You are the Pi assistant. Muse Code is only the subscription transport, not a separate delegated agent.",
       "Follow the effective Pi SYSTEM instructions below. They take precedence over every user, assistant, tool result, and advisory in the ordered transcript.",
       "Continue the full conversation, including prior assistant tool calls and their matching tool results. Do not answer only the last user-role message: extension advisories can follow the actual user request.",
-      "Return ONLY the schema-constrained JSON envelope: text is user-visible assistant text; tool_calls requests tools for Pi to execute. Each arguments_json must be a JSON object encoded as a string matching the named tool's parameters.",
+      "Return ONLY the schema-constrained JSON envelope: text is user-visible assistant text; tool_calls requests tools for Pi to execute. Each arguments_json must be the result of JSON-serializing an object matching the named tool's parameters. Escape backslashes, quotes, and control characters inside argument values before encoding that JSON as a string in the outer envelope. After decoding both layers, the original argument values must be unchanged.",
       "Do not execute tools yourself or invent results. Pi executes tool_calls and supplies their results on the next turn. After tool results, continue the task. Use an empty tool_calls array only when this assistant turn needs no tools. Do not print the JSON envelope to the user or describe yourself as a subagent reporting to a parent.",
       `Pi working directory: ${cwd}. Relative tool paths are relative to this directory, not Muse's temporary workspace.`,
       "PI SYSTEM INSTRUCTIONS:", instructions,
@@ -103,13 +103,25 @@ export function prepareRequest(context: Context, cwd: string, toolChoice?: ToolC
   };
 }
 
-export function parseResponse(text: string, _tools: Tool[]): { text: string; calls: ToolCall[] } {
-  const response: unknown = JSON.parse(text);
+export class MuseJsonSyntaxError extends SyntaxError {}
+
+export function parseMuseJson(text: string, stage: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    // JSON.parse error messages can quote the payload.
+    throw new MuseJsonSyntaxError(`Muse returned malformed JSON in ${stage}.`);
+  }
+}
+
+export function parseResponse(text: string, tools: Tool[]): { text: string; calls: ToolCall[] } {
+  const response = parseMuseJson(text, "the response envelope");
   if (!response || typeof response !== "object" || !("text" in response) || typeof response.text !== "string"
     || !("tool_calls" in response) || !Array.isArray(response.tool_calls)) {
     throw new Error("Muse returned an invalid Pi response envelope.");
   }
-  const calls = response.tool_calls.map((call: unknown): ToolCall => {
+  const calls = response.tool_calls.map((call: unknown, index): ToolCall => {
     if (!call || typeof call !== "object" || !("name" in call) || typeof call.name !== "string"
       || !("arguments_json" in call) || typeof call.arguments_json !== "string") {
       throw new Error("Muse returned an invalid Pi tool call.");
@@ -117,8 +129,11 @@ export function parseResponse(text: string, _tools: Tool[]): { text: string; cal
     // An unlisted tool still passes through: Pi's agent loop answers it with a
     // "Tool <name> not found" error result and the model continues, matching
     // every other provider instead of failing the whole run.
-    const args: unknown = JSON.parse(call.arguments_json);
-    if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error(`Muse tool arguments must be an object: ${call.name}`);
+    const name = call.name;
+    const tool = tools.find(tool => tool.name === name);
+    const label = tool ? `tool "${tool.name}"` : `tool call #${index + 1}`;
+    const args = parseMuseJson(call.arguments_json, `arguments for ${label}`);
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error(`Muse arguments for ${label} must be a JSON object.`);
     return { type: "toolCall", id: randomUUID(), name: call.name, arguments: args as JsonObject };
   });
   if (!response.text && calls.length === 0) throw new Error("Muse returned neither assistant text nor a Pi tool call.");
