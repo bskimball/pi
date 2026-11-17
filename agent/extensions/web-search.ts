@@ -193,7 +193,10 @@ export default function (pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "web_search", label: "Web Search",
-    description: "Search the web with Exa. Supports one query or multiple queries, result limits, content inclusion, recency, and domain filters.",
+    description: "Default tool for public web search, powered by Exa. Use before google_search unless the user requests Google. Supports one query or multiple queries, result limits, content inclusion, recency, and domain filters.",
+    promptGuidelines: [
+      "Use web_search first for public web research, including current information, documentation, and fact-checking. Use google_search only if web_search is unavailable, fails, or returns insufficient results, unless the user explicitly requests Google.",
+    ],
     parameters: Type.Object({
       query: Type.Optional(Type.String()), queries: Type.Optional(Type.Array(Type.String())),
       numResults: Type.Optional(Type.Number()), includeContent: Type.Optional(Type.Boolean()),
