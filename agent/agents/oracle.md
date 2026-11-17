@@ -1,7 +1,7 @@
 ---
 name: oracle
 description: Deep independent code reviewer and debugger for difficult bugs, conflicting evidence, high-stakes decisions, and substantial completed work.
-model: openai/gpt-6-astra
+model: openai/gpt-6.2-astra
 fallbackModels:
   - claude-bridge/claude-opus-5-5
   - antigravity/gemini-4-carbon
