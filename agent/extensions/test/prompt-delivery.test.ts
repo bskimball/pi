@@ -14,13 +14,13 @@ import profile from "../user-profile.ts";
 import jev from "../jev/index.ts";
 import { prepareRequest, parseResponse, parseUsage } from "../muse/protocol.ts";
 import { museReasoningEffort, museSkillOverrides } from "../muse/transport.ts";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage, getSystemMessageText, type Context, type Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { streamMuse } from "../muse/index.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
-const { buildSystemPrompt, normalizeBuildSystemPromptOptions } = await import(pathToFileURL(join(packageRoot, "core/system-prompt.js")).href);
+const { buildSystemPrompt, buildSystemPromptSections, normalizeBuildSystemPromptOptions } = await import(pathToFileURL(join(packageRoot, "core/system-prompt.js")).href);
 
 // Generic entry-point inventory without executing unrelated extensions (which may register tools or start services).
 const entries = readdirSync(root, { withFileTypes: true }).flatMap(item => {
@@ -48,8 +48,8 @@ test("every before_agent_start extension is covered by delivery contract", () =>
 test("mode, memory and profile sections survive Pi and claude-bridge projection", async t => {
   const bridgePackage = join(getAgentDir(), "npm/node_modules/pi-claude-bridge");
   if (!existsSync(bridgePackage)) { t.skip("pi-claude-bridge not installed"); return; }
-  const bridgePath = join(bridgePackage, "src/prompt-capture.ts");
-  assert.ok(existsSync(bridgePath), "bridge layout changed — update prompt-delivery test");
+  const transcriptPath = join(bridgePackage, "src/transcript.ts");
+  assert.ok(existsSync(transcriptPath), "bridge layout changed — update prompt-delivery test");
   const dir = mkdtempSync(join(tmpdir(), "prompt-delivery-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   const oldMode = process.env.PI_BEHAVIOR_MODE;
@@ -58,27 +58,22 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
   process.env.PI_CODING_AGENT_DIR = dir;
   delete process.env.PI_SUBAGENT;
   try {
-    const bridgeBundle = join(dir, "prompt-capture.mjs");
-    await build({ entryPoints: [bridgePath], outfile: bridgeBundle, bundle: true, format: "esm", platform: "node", plugins: [{ name: "pi-runtime", setup(build) {
-      build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: import.meta.resolve("@earendil-works/pi-coding-agent"), external: true }));
-    } }] });
-    const { PromptCaptures, projectPromptCapture } = await import(pathToFileURL(bridgeBundle).href);
     const transcriptBundle = join(dir, "transcript.mjs");
-    await build({ entryPoints: [join(bridgePackage, "src/transcript.ts")], outfile: transcriptBundle, bundle: true, format: "esm", platform: "node", plugins: [{ name: "pi-runtime", setup(build) {
+    await build({ entryPoints: [transcriptPath], outfile: transcriptBundle, bundle: true, format: "esm", platform: "node", plugins: [{ name: "pi-runtime", setup(build) {
       build.onResolve({ filter: /^@earendil-works\/pi-ai$/ }, () => ({ path: import.meta.resolve("@earendil-works/pi-ai"), external: true }));
     } }] });
     const { toBridgeContext } = await import(pathToFileURL(transcriptBundle).href);
     const sections = { preamble: "Base", addendum: "Instructions", project_context: "Project", skills: "Skills", cwd: "Directory", mcp_servers: "MCP servers" };
-    const canonical = Object.values(sections).join("\n\n");
-    const replayed = toBridgeContext({ messages: [
+    const replayMessages: Context["messages"] = [
       { role: "system", content: "", sections, timestamp: 0 },
       { role: "system", content: "", sections: { addendum: null, mcp_servers: null }, timestamp: 1 },
       { role: "system", content: "", sections: { addendum: sections.addendum, mcp_servers: sections.mcp_servers }, timestamp: 2 },
-    ] });
-    assert.equal(replayed.systemPrompt, canonical, "restored sections retain canonical order");
-    const replayCaptures = new PromptCaptures();
-    replayCaptures.record(canonical, { custom: "Base", append: "Instructions", contextFiles: [], skills: [] });
-    assert.ok(replayCaptures.resolve(replayed.systemPrompt), "restored prompt resolves its original capture");
+    ];
+    const replayed = toBridgeContext({ messages: replayMessages });
+    const replayedHead = getCurrentSystemMessage(replayMessages);
+    assert.ok(replayedHead);
+    assert.equal(replayed.systemPrompt, getSystemMessageText(replayedHead), "bridge preserves Pi replay order");
+    for (const section of Object.values(sections)) assert.ok(replayed.systemPrompt.includes(section));
     writeFileSync(join(dir, "USER_PROFILE.local.md"), "Profile delivery token");
     writeFileSync(join(dir, "jev.json"), JSON.stringify({ apiKey: "test-only", routingAdvisory: { enabled: true } }));
     globalThis.fetch = async (_url, init) => {
@@ -128,12 +123,11 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
         assert.match(musePrompt, /Continual memory/);
       }
       if (mode === "fusion") assert.match(current, /^You are a coding assistant running inside pi, a coding agent harness\./, "Fusion retains the stock base without a custom prompt");
-      const captures = new PromptCaptures();
-      captures.record(current, { custom: options.customPrompt, append: options.appendSystemPrompt, contextFiles: options.contextFiles, skills: options.skills });
-      const capture = captures.resolve(current);
-      assert.ok(capture);
-      const projected = projectPromptCapture(capture, { skillReadTool: "none" });
-      assert.match(projected!, new RegExp(marker), `${mode} bridge projection lost mode block`);
+      const projected = toBridgeContext({ messages: [
+        { role: "system", content: "", sections: buildSystemPromptSections(options), timestamp: 0 },
+      ] }).systemPrompt;
+      assert.equal(projected, current, `${mode} bridge altered Pi's system prompt`);
+      assert.match(projected, new RegExp(marker), `${mode} bridge projection lost mode block`);
       const contracts: Record<string, RegExp[]> = {
         pi: [/targeted, bounded reads/, /actual diff and direct callers/, /self-review, not independent review/, /explicit user direction only/, /`\/task <request>`/, /Run it in the background with `task_start` and stay conversational/],
         apex: [/Apex is inline-first/, /bring in a specialist only when separate context, distinct judgment, or parallelism clearly pays/, /independent Oracle review when the user asks/, /MAY end the conversational turn while workers are live/, /not an obligatory next call/],
@@ -153,15 +147,15 @@ test("mode, memory and profile sections survive Pi and claude-bridge projection"
         fusion: [/execution is theirs by default: iterative edit\/run\/inspect loops/, /Sidekick by default for execution/, /Put each item's owner, `lead` or `sidekick`, in its note/, /inspect the actual diff \(for writers\), boundary behavior, and captured acceptance evidence once/, /Accept compliant work/, /Require current-file inspection before edits/, /Stay conversational while the wave runs/, /stay conversational while they run/],
         work: [/informational or hypothetical question alone is not a commitment/, /named or clearly established client, system, asset, or workflow/, /explicit all-system request remains broad/, /ask one focused scope question before cross-system fanout/, /Stay conversational while the crew works/, /You may end the turn while they run/],
       };
-      for (const [projection, text] of [["Pi", current], ["Muse", musePrompt], ["bridge", projected!]]) {
+      for (const [projection, text] of [["Pi", current], ["Muse", musePrompt], ["bridge", projected]]) {
         for (const contract of contracts[mode]!) assert.match(text, contract, `${mode} ${projection} missing ${contract}`);
       }
       assert.equal(options.forceSystemPrompt, undefined, `${mode} forced prompt`);
       if (mode !== "pi") {
         assert.match(current, /Profile delivery token/);
-        assert.match(projected!, /Profile delivery token/);
+        assert.match(projected, /Profile delivery token/);
         assert.match(current, /Continual memory/);
-        assert.match(projected!, /Continual memory/);
+        assert.match(projected, /Continual memory/);
       }
     }
   } finally {
