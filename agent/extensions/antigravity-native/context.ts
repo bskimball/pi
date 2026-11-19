@@ -40,6 +40,7 @@ export class ReplayCheckpoints {
 
   prepare(request: GenerateOptions): GenerateOptions {
     const messages = request.messages;
+    if (!request.sessionId && messages.length <= 2) return request;
     // streamPi normally supplies a session id. Do not let anonymous requests share tasks.
     const key = request.sessionId ?? "anonymous";
     let checkpoint = request.sessionId ? this.sessions.get(key) : undefined;

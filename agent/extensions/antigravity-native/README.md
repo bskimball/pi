@@ -1,6 +1,6 @@
 # Antigravity native ACP provider
 
-Registers `antigravity` through the installed official `agy` CLI (verified with 1.5.9). The adapter uses the pinned `pi-agy-acp@0.1.3` runtime and Pi stream translator. Install dependencies with `npm install --legacy-peer-deps --ignore-scripts` in this directory; Pi host packages are not installed as local peers.
+Registers `agy-acp` through the installed official `agy` CLI using the pinned `pi-agy-acp@0.2.0` runtime and Pi stream translator. Install dependencies with `npm ci --legacy-peer-deps --ignore-scripts` in this directory; Pi host packages are not installed as local peers. Sign in with `agy` if needed, then restart Pi and choose `agy-acp/gemini-4-neon`.
 
 ## Instructions and modes
 
@@ -38,6 +38,4 @@ Offline regression coverage: `node --experimental-transform-types --test agent/e
 
 An isolated live Hydrogen smoke check passed after the rollback-readiness changes: custom and appended system-prompt markers both reached ACP, a real Pi `read` call completed, and the continuation returned the file's dependency version plus both markers. It used an ephemeral session and a process-local `local-agy` key override, without changing the active direct-API provider or stored OAuth. Large-history reset recovery and archived-image retrieval are covered offline, not live. Earlier live checks also covered Carbon, selected mode guidance, and Windows process-tree shutdown.
 
-The same-ID migration preserves the previous stored OAuth entry as `antigravity-legacy-oauth-inactive` in Pi's credential store and configures `antigravity` with a non-secret `local-agy` API-key marker. Pi's stored credentials take precedence over ambient provider configuration, so the old OAuth entry cannot remain under the active ID. Actual Google authentication remains with the CLI. Restart existing Pi sessions after migration; do not use the disabled direct-API provider with the local marker.
-
-The provider replaces chat inference only. It does not reimplement the old package's `google_search`, `generate_image`, OAuth commands, or image-generation models. Use the model picker after reloading/restarting Pi. Existing provider IDs remain `antigravity/*`; available models come from the installed CLI.
+The native adapter registers `agy-acp/*` alongside the existing `antigravity/*` provider. Its `local-agy` marker is not a credential: the CLI owns Google authentication. No Pi OAuth migration or `ANTIGRAVITY_USER_AGENT` override is needed. The native adapter supplies chat inference; `pi-antigravity` remains installed and still owns its search, image, and OAuth tools.

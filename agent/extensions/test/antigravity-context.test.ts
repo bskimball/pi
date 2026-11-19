@@ -130,12 +130,25 @@ test("sessions are isolated and branch switches do not reuse an abandoned handof
   }
 });
 
+test("anonymous short helper requests skip checkpoint creation and system injection", () => {
+  const checkpoints = new ReplayCheckpoints();
+  const request: GenerateOptions = {
+    model: "test",
+    system: "SUMMARIZER",
+    messages: [{ role: "system", content: [{ type: "text", text: "SYS" }] }, user("u1", "Summarize")],
+  };
+  const prepared = checkpoints.prepare(request);
+  assert.equal(prepared, request);
+  assert.equal(prepared.system, "SUMMARIZER");
+});
+
 test("registered provider uses actual Pi projection for full instructions, tools, updates and payload hooks", async () => {
   const bundleDir = mkdtempSync(join(tmpdir(), "pi-agy-provider-test-"));
   const captureKey = Symbol.for("pi-agy-context-test");
   const captures: GenerateOptions[] = [];
   const defaultEfforts: string[] = [];
-  (globalThis as any)[captureKey] = { captures, defaultEfforts };
+  const discoverySignals: AbortSignal[] = [];
+  (globalThis as any)[captureKey] = { captures, defaultEfforts, discoverySignals };
   const handlers = new Map<string, Function>();
   try {
     const outfile = join(bundleDir, "provider.mjs");
@@ -146,10 +159,19 @@ test("registered provider uses actual Pi projection for full instructions, tools
         builder.onLoad({ filter: /.*/, namespace: "offline" }, args => ({ contents:
           args.path.endsWith("runtime.ts") ? `export class AntigravityRuntime {
             constructor(host) { globalThis[Symbol.for("pi-agy-context-test")].defaultEfforts.push(host.config.defaultEffort); }
-            catalog = { list: () => [] }; async warmup() {} async dispose() {}
+            catalog = {
+              list: () => [{ id: "gemini-4-neon", name: "Neon" }, { id: "gpt-oss-120b-medium", name: "GPT-OSS" }, { id: "observed", name: "Observed" }],
+              effortsFor: () => ["medium"],
+            };
+            contextWindowFor(id) { return id === "observed" ? 1048576 : 0; }
+            async warmup(options) { globalThis[Symbol.for("pi-agy-context-test")].discoverySignals.push(options?.signal); }
+            async dispose() { if (globalThis[Symbol.for("pi-agy-context-test")].failDisposal) throw Error("unverified shutdown"); }
             resetConversations() {} settleSession() {}
             async *stream(request) {
               globalThis[Symbol.for("pi-agy-context-test")].captures.push(request);
+              if (globalThis[Symbol.for("pi-agy-context-test")].emitUsage) {
+                yield { type: "usage", usage: globalThis[Symbol.for("pi-agy-context-test")].emitUsage };
+              }
               yield { type: "finish", reason: { kind: "stop" } };
             }
           }` : "export function runCommand() { throw Error('Unexpected CLI invocation'); }",
@@ -158,16 +180,21 @@ test("registered provider uses actual Pi projection for full instructions, tools
     }] });
     let provider: any;
     const { default: install } = await import(pathToFileURL(outfile).href);
-    await install({ registerProvider(_name: string, config: unknown) { provider = config; },
-      on(name: string, handler: Function) { handlers.set(name, handler); },
-    });
+    const api = { registerProvider(name: string, config: unknown) {
+      assert.equal(name, "agy-acp", "native ACP must not replace the direct Antigravity provider");
+      provider = config;
+    }, on(name: string, handler: Function) { handlers.set(name, handler); } };
+    await install(api);
+    assert.equal(provider.apiKey, "local-agy");
+    assert.ok(discoverySignals[0] instanceof AbortSignal, "startup discovery is cancellable");
+    assert.deepEqual(provider.models.map((model: { contextWindow: number }) => model.contextWindow), [256000, 131072, 1048576]);
     const tool = { name: "read", description: "Read exact evidence", parameters: { type: "object" as const } };
     const context = normalizeContext({ messages: [
       { role: "system", content: "BASE_ROLE", sections: { preamble: "BASE_ROLE", memory: "MEMORY", profile: "PROFILE", skills: "SKILLS", context: "AGENTS", mode: "WORKER_HANDOFF_SCHEMA" }, toolsAdded: [tool], timestamp: 0 },
       { role: "user", content: "WORK_ORDER", timestamp: 1 },
       { role: "system", content: "", sections: { mode: "UPDATED_MODE" }, timestamp: 2 },
     ] });
-    const model = { id: "test", api: "antigravity-native-acp", provider: "antigravity", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    const model = { id: "test", api: "antigravity-native-acp", provider: "agy-acp", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     for (const onPayload of [undefined, (request: GenerateOptions) => ({ ...request, system: "PAYLOAD_SYSTEM" })]) {
       const stream = provider.streamSimple(model, context, { sessionId: "worker", onPayload });
       for await (const _event of stream) { /* Drain the actual translator. */ }
@@ -191,7 +218,23 @@ test("registered provider uses actual Pi projection for full instructions, tools
     const overridden = provider.streamSimple(model, context, { sessionId: "worker", onPayload: (request: GenerateOptions) => ({ ...request, reasoningEffort: "medium" }) });
     await overridden.result();
     assert.equal(captures.at(-1)!.reasoningEffort, "medium", "payload effort remains authoritative");
+    (globalThis as any)[captureKey].emitUsage = { inputTokens: 100_000, cacheReadTokens: 400_000, outputTokens: 2_000, totalTokens: 50_000 };
+    try {
+      const normalized = await provider.streamSimple(model, context, { sessionId: "worker" }).result();
+      assert.equal(normalized.usage.totalTokens, 50_000);
+      assert.equal(normalized.usage.input + normalized.usage.cacheRead, 50_000);
+      assert.equal(normalized.usage.cacheRead, 40_000);
+      assert.equal(normalized.usage.input, 10_000);
+    } finally {
+      delete (globalThis as any)[captureKey].emitUsage;
+    }
     assert.deepEqual(defaultEfforts, ["medium", "medium"], "discovery and inference runtimes both use medium fallback effort");
+    (globalThis as any)[captureKey].failDisposal = true;
+    try {
+      await assert.rejects(install(api), /unverified shutdown/, "startup must report a failed ACP shutdown");
+    } finally {
+      (globalThis as any)[captureKey].failDisposal = false;
+    }
   } finally {
     await handlers.get("session_shutdown")?.();
     for (const dir of new Set(captures.map(directory))) rmSync(dir, { recursive: true, force: true });
