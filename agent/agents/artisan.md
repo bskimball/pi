@@ -4,7 +4,7 @@ description: Visual design and UI specialist for substantial frontend, redesign,
 model: muse-code/muse-wonder-1.0-contributor
 fallbackModels:
   - claude-bridge/claude-opus-5-5
-  - antigravity/gemini-4-carbon
+  - agy-acp/gemini-4-carbon
   - openai/gpt-6.2-astra
 thinking: high
 tools: read, ffgrep, fffind, ls, bash, edit, write, task, lsp

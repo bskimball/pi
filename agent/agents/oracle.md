@@ -4,7 +4,7 @@ description: Deep independent code reviewer and debugger for difficult bugs, con
 model: openai/gpt-6.2-astra
 fallbackModels:
   - claude-bridge/claude-opus-5-5
-  - antigravity/gemini-4-carbon
+  - agy-acp/gemini-4-carbon
   - xai/grok-4.7
   - 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
 thinking: xhigh

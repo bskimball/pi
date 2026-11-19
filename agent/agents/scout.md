@@ -5,7 +5,7 @@ model: claude-bridge/claude-haiku-5-5
 fallbackModels:
   - openai/gpt-6-luna
   - muse-code/muse-ember-1.0
-  - antigravity/gemini-4-hydrogen
+  - agy-acp/gemini-4-hydrogen
   - xai/grok-composer-2.5-fast
   - 'cloudflare-workers-ai/@cf/google/gemma-4-26b-a4b-it'
 thinking: medium

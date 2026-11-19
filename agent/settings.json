@@ -7,7 +7,6 @@
     "npm:@ff-labs/pi-fff",
     "npm:pi-intercom",
     "npm:pi-claude-bridge",
-    "npm:pi-antigravity",
     "npm:@amaster.ai/pi-computer-use"
   ],
   "extensions": [

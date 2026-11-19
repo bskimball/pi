@@ -224,7 +224,7 @@ export const EXCLUDED_HYDRA_PROVIDERS = new Set([
  */
 function providerQualityBonus(provider: string): number {
   const p = provider.toLowerCase();
-  if (p === "claude-bridge" || p === "openai" || p === "antigravity" || p === "xai" || p === "muse-code") {
+  if (p === "claude-bridge" || p === "openai" || p === "antigravity" || p === "agy-acp" || p === "xai" || p === "muse-code") {
     return 0.015;
   }
   if (p === "local-proxy") return 0.01;

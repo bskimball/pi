@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { readFileSync, rmSync, mkdtempSync, mkdirSync, utimesSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { normalizeContext } from "@earendil-works/pi-ai";
-import { ReplayCheckpoints } from "../antigravity-native/context.ts";
+import { ReplayCheckpoints, pruneStaleCheckpoints } from "../antigravity-native/context.ts";
 import type { GenerateOptions, RequestMessage } from "../antigravity-native/node_modules/pi-agy-acp/src/protocol.ts";
 
 const user = (id: string, text: string): RequestMessage => ({ id, role: "user", content: [{ type: "text", text }] });
@@ -140,6 +140,55 @@ test("anonymous short helper requests skip checkpoint creation and system inject
   const prepared = checkpoints.prepare(request);
   assert.equal(prepared, request);
   assert.equal(prepared.system, "SUMMARIZER");
+});
+
+test("lead checkpoint digest captures recent dialogue without reasoning and instructs relay retrieval", () => {
+  const checkpoints = new ReplayCheckpoints();
+  const request = checkpoints.prepare({
+    model: "test",
+    sessionId: "lead-digest",
+    messages: [
+      user("u1", "Start live SSH test"),
+      {
+        id: "a1", role: "assistant", source: { kind: "model", provider: "test" },
+        content: [{ type: "reasoning", text: "HIDDEN_THOUGHT" }, { type: "text", text: "Connected and verified auth handshake." }],
+      },
+      user("u2", "Now test saved password"),
+    ],
+  });
+  const dir = directory(request);
+  try {
+    assert.match(request.system!, /mcp_pi_pi_await_result/);
+    const checkpoint = readFileSync(join(dir, "checkpoint.md"), "utf8");
+    assert.match(checkpoint, /Recent conversation digest/);
+    assert.match(checkpoint, /Connected and verified auth handshake\./);
+    assert.doesNotMatch(checkpoint, /HIDDEN_THOUGHT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("pruneStaleCheckpoints removes only expired checkpoint directories", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-agy-prune-test-"));
+  const stale = join(root, "pi-agy-checkpoint-stale");
+  const fresh = join(root, "pi-agy-checkpoint-fresh");
+  const unrelated = join(root, "other-dir");
+  try {
+    mkdirSync(stale);
+    mkdirSync(fresh);
+    mkdirSync(unrelated);
+    const now = Date.now();
+    const oldTime = new Date(now - 48 * 60 * 60 * 1000);
+    utimesSync(stale, oldTime, oldTime);
+    utimesSync(unrelated, oldTime, oldTime);
+    const removed = pruneStaleCheckpoints(root, 24 * 60 * 60 * 1000, now);
+    assert.equal(removed, 1);
+    assert.equal(existsSync(stale), false);
+    assert.equal(existsSync(fresh), true);
+    assert.equal(existsSync(unrelated), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("registered provider uses actual Pi projection for full instructions, tools, updates and payload hooks", async () => {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { detectRoot, languageForPath, pathToUri, uriToPath } from "../paths.ts";
+import { detectRoot, languageForPath, normalizeUriKey, pathToUri, uriToPath } from "../paths.ts";
 
 describe("paths", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-lsp-root-"));
@@ -84,5 +84,22 @@ describe("paths", () => {
       assert.equal(uri, "file:///tmp/file.go");
       assert.equal(uriToPath(uri), "/tmp/file.go");
     }
+  });
+
+  it("normalizes Windows drive-letter casing and %3A colon encoding for URI keys", () => {
+    const a = normalizeUriKey("file:///C:/Users/bskim/.pi/agent/extensions/lsp/client.ts", "win32");
+    const b = normalizeUriKey("file:///c%3A/Users/bskim/.pi/agent/extensions/lsp/client.ts", "win32");
+    const c = normalizeUriKey("file:///c:/users/bskim/.pi/agent/extensions/lsp/client.ts", "win32");
+    assert.equal(a, b);
+    assert.equal(a, c);
+    // POSIX preserves path casing while still decoding percent-encoding consistently.
+    assert.notEqual(
+      normalizeUriKey("file:///tmp/Foo.ts", "linux"),
+      normalizeUriKey("file:///tmp/foo.ts", "linux"),
+    );
+    assert.equal(
+      normalizeUriKey("file:///tmp/my%20file.ts", "linux"),
+      normalizeUriKey("file:///tmp/my file.ts", "linux"),
+    );
   });
 });

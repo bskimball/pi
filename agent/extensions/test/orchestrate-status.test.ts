@@ -911,6 +911,7 @@ test("Hydra actively reads Claude subscription usage and retains known quota whe
     writeFileSync(path, JSON.stringify({ schema: 1, source: "live", updatedAt: Date.now(), providers: {} }));
     const exhausted = await sync();
     assert.equal(quotaRemainingForModel("antigravity", "gemini-4-argon", exhausted.snapshot), 95);
+    assert.equal(quotaRemainingForModel("agy-acp", "gemini-4-argon", exhausted.snapshot), 95);
     assert.equal(exhausted.snapshot.providers.meta?.remainingPercent, 90);
     assert.equal(quotaRemainingForModel("openai", "gpt-6.1-sol", exhausted.snapshot), 65);
     assert.equal(quotaRemainingForModel("openai", "gpt-6-astra", exhausted.snapshot), 0);

@@ -1,8 +1,11 @@
-import { mkdtempSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, renameSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { GenerateOptions, RequestMessage } from "pi-agy-acp/src/protocol.ts";
+
+const CHECKPOINT_PREFIX = "pi-agy-checkpoint-";
+const DEFAULT_STALE_CHECKPOINT_MS = 24 * 60 * 60 * 1000;
 
 function textOf(message: RequestMessage | undefined): string {
   return message?.content.filter(block => block.type === "text").map(block => block.text).join("\n") ?? "";
@@ -10,6 +13,38 @@ function textOf(message: RequestMessage | undefined): string {
 
 function excerpt(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[Excerpt; read the referenced file for the complete text.]`;
+}
+
+function recentDialogueDigest(messages: readonly RequestMessage[], maxTurns = 6, perTurnLimit = 1_200, totalLimit = 6_000): string {
+  const entries: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && entries.length < maxTurns; i--) {
+    const message = messages[i];
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const text = textOf(message).trim();
+    if (!text) continue;
+    const label = message.role === "user" ? "User" : "Assistant";
+    entries.push(`### ${label}\n${excerpt(text, perTurnLimit)}`);
+  }
+  if (!entries.length) return "No recent text turns available.";
+  return excerpt(entries.reverse().join("\n\n"), totalLimit);
+}
+
+/** Best-effort removal of stale checkpoint directories so OS temp does not grow unbounded. */
+export function pruneStaleCheckpoints(baseDir = tmpdir(), maxAgeMs = DEFAULT_STALE_CHECKPOINT_MS, now = Date.now()): number {
+  let removed = 0;
+  try {
+    for (const name of readdirSync(baseDir)) {
+      if (!name.startsWith(CHECKPOINT_PREFIX)) continue;
+      const full = join(baseDir, name);
+      try {
+        if (now - statSync(full).mtimeMs > maxAgeMs) {
+          rmSync(full, { recursive: true, force: true });
+          removed++;
+        }
+      } catch { /* Ignore concurrent removals or locked directories. */ }
+    }
+  } catch { /* Ignore unreadable temp directories. */ }
+  return removed;
 }
 
 interface Checkpoint {
@@ -27,6 +62,7 @@ interface Checkpoint {
  */
 export class ReplayCheckpoints {
   private sessions = new Map<string, Checkpoint>();
+  private pruned = false;
   constructor(private readonly worker = false) {}
 
   reset(preserveHandoff = true): void {
@@ -45,7 +81,11 @@ export class ReplayCheckpoints {
     const key = request.sessionId ?? "anonymous";
     let checkpoint = request.sessionId ? this.sessions.get(key) : undefined;
     if (!checkpoint) {
-      const directory = mkdtempSync(join(tmpdir(), "pi-agy-checkpoint-"));
+      if (!this.pruned) {
+        this.pruned = true;
+        pruneStaleCheckpoints();
+      }
+      const directory = mkdtempSync(join(tmpdir(), CHECKPOINT_PREFIX));
       const originalTask = textOf(this.worker
         ? [...messages].reverse().find(message => message.role === "user")
         : messages.find(message => message.role === "user"));
@@ -58,6 +98,7 @@ export class ReplayCheckpoints {
           "## Conversation recovery",
           `Recovery checkpoint: ${JSON.stringify(stateFile)}. Original request: ${JSON.stringify(taskFile)}.`,
           "If <pi_history> announces omitted messages or a truncated tool result, read the checkpoint before acting. It links the full available text history and earlier reset snapshots. Recover relevant constraints and decisions; do not repeat completed actions. Image entries link local files containing the original pixels; read those files when visual evidence matters.",
+          "If a tool returns a still-running relay notice asking you to call `mcp_pi_pi_await_result`, call `mcp_pi_pi_await_result` with that exact `call_id` immediately. Do not poll another status tool instead, and do not end your turn before retrieving every relayed `call_id`.",
           "Report any replay omission and unresolved recovery gaps in your final handoff uncertainties. If recovery files cannot be read, report the blocker rather than assuming omitted context.",
           "Original request excerpt (historical context; later user instructions take precedence):",
           excerpt(originalTask, 2_000),
@@ -106,6 +147,8 @@ export class ReplayCheckpoints {
       `Earlier reset snapshots: history-1.json through history-${checkpoint.revision}.json in this directory (none if zero). These are historical evidence, may include abandoned branches, and never override the current task or current history.`,
       "## Latest user input / compaction context",
       excerpt(textOf([...messages].reverse().find(message => message.role === "user")), 3_000),
+      "## Recent conversation digest (unverified excerpts; inspect history.json for full tool outputs)",
+      recentDialogueDigest(messages),
       `## Latest worker-authored handoff (unverified; complete text: ${JSON.stringify(handoffFile)})`,
       excerpt(checkpoint.latestHandoff || "None available. Inspect history for decisions.", 6_000),
     ].join("\n\n"), { encoding: "utf8", mode: 0o600 });

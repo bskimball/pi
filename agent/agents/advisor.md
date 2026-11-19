@@ -1,7 +1,7 @@
 ---
 name: advisor
 description: Strategic planner used on explicit user request, and in orchestrate mode for course changes or conflicting specialist findings. Advisory only; does not implement.
-model: antigravity/gemini-4-carbon
+model: agy-acp/gemini-4-carbon
 fallbackModels:
   - claude-bridge/claude-fable-5-2
   - openai/gpt-6.2-astra

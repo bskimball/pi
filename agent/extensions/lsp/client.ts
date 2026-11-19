@@ -15,7 +15,7 @@ import {
 } from "./command.ts";
 import type { PositionEncoding } from "./positions.ts";
 import { pickEncodingFromInitializeResult } from "./positions.ts";
-import { pathToUri } from "./paths.ts";
+import { normalizeUriKey, pathToUri } from "./paths.ts";
 import { logLspDiagnosticEvent, type LspDiagnosticLogger } from "./diagnostic-log.ts";
 
 export interface DocumentState {
@@ -204,25 +204,26 @@ export class LspClient {
     }) => {
       if (!params?.uri) return;
       const receivedAt = Date.now();
+      const uriKey = normalizeUriKey(params.uri);
       const pub: PublishDiagnostics = {
         uri: params.uri,
         version: params.version,
         diagnostics: Array.isArray(params.diagnostics) ? params.diagnostics : [],
         at: receivedAt,
       };
-      const list = this.publishes.get(params.uri) ?? [];
+      const list = this.publishes.get(uriKey) ?? [];
       list.push(pub);
       // Bound history per URI.
       if (list.length > 20) list.splice(0, list.length - 20);
-      this.publishes.set(params.uri, list);
-      const openedAt = this.documentOpenedAt.get(params.uri);
+      this.publishes.set(uriKey, list);
+      const openedAt = this.documentOpenedAt.get(uriKey);
       this.logDiagnostic("publishDiagnostics", {
         uri: params.uri,
         version: params.version,
         diagnosticCount: pub.diagnostics.length,
         msSinceDocumentOpen: openedAt === undefined ? undefined : receivedAt - openedAt,
       });
-      this.notifyWaiters(params.uri);
+      this.notifyWaiters(uriKey);
     });
 
     connection.onError(() => {
@@ -298,12 +299,13 @@ export class LspClient {
   }
 
   async ensureDocument(path: string, uri: string, languageId: string, text: string): Promise<DocumentState> {
-    const existing = this.documents.get(uri);
+    const uriKey = normalizeUriKey(uri);
+    const existing = this.documents.get(uriKey);
     if (!existing) {
       const doc: DocumentState = { uri, path, languageId, version: 1, text };
-      this.documents.set(uri, doc);
+      this.documents.set(uriKey, doc);
       const openedAt = Date.now();
-      this.documentOpenedAt.set(uri, openedAt);
+      this.documentOpenedAt.set(uriKey, openedAt);
       await this.notify("textDocument/didOpen", {
         textDocument: { uri, languageId, version: 1, text },
       });
@@ -321,14 +323,14 @@ export class LspClient {
     existing.version += 1;
     existing.text = text;
     await this.notify("textDocument/didChange", {
-      textDocument: { uri, version: existing.version },
+      textDocument: { uri: existing.uri, version: existing.version },
       contentChanges: [{ text }],
     });
     return existing;
   }
 
   getDocument(uri: string): DocumentState | undefined {
-    return this.documents.get(uri);
+    return this.documents.get(normalizeUriKey(uri));
   }
 
   async request<T = unknown>(
@@ -412,13 +414,14 @@ export class LspClient {
   ): Promise<DiagnosticWaitResult> {
     throwIfAborted(signal);
     const startAt = Date.now();
+    const uriKey = normalizeUriKey(uri);
     this.logDiagnostic("diagnosticWaitStarted", {
       uri,
       waitMs,
-      priorPublishes: this.publishes.get(uri)?.length ?? 0,
+      priorPublishes: this.publishes.get(uriKey)?.length ?? 0,
     });
-    const existing = this.publishes.get(uri) ?? [];
-    if (existing.length) return this.settleFrom(uri, existing, waitMs, startAt, signal);
+    const existing = this.publishes.get(uriKey) ?? [];
+    if (existing.length) return this.settleFrom(uri, uriKey, existing, waitMs, startAt, signal);
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -453,7 +456,7 @@ export class LspClient {
       };
 
       const snapshot = (completionReason: DiagnosticWaitResult["completionReason"]): DiagnosticWaitResult => {
-        const pubs = this.publishes.get(uri) ?? [];
+        const pubs = this.publishes.get(uriKey) ?? [];
         if (!pubs.length) {
           return { status: "unknown", diagnostics: [], publishes: 0, completionReason };
         }
@@ -467,7 +470,7 @@ export class LspClient {
       };
 
       const waiter: PendingDiagnosticWaiter = {
-        uri,
+        uri: uriKey,
         onPublish: () => {
           if (done) return;
           if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
@@ -490,6 +493,7 @@ export class LspClient {
 
   private settleFrom(
     uri: string,
+    uriKey: string,
     existing: PublishDiagnostics[],
     waitMs: number,
     startAt: number,
@@ -501,7 +505,7 @@ export class LspClient {
       let done = false;
 
       const snapshot = (completionReason: DiagnosticWaitResult["completionReason"]): DiagnosticWaitResult => {
-        const pubs = this.publishes.get(uri) ?? existing;
+        const pubs = this.publishes.get(uriKey) ?? existing;
         const last = pubs[pubs.length - 1];
         return {
           status: pubs.length ? "received" : "unknown",
@@ -543,7 +547,7 @@ export class LspClient {
       };
 
       const waiter: PendingDiagnosticWaiter = {
-        uri,
+        uri: uriKey,
         onPublish: () => {
           if (done) return;
           if (waiter.settleTimer) clearTimeout(waiter.settleTimer);
@@ -567,9 +571,9 @@ export class LspClient {
     });
   }
 
-  private notifyWaiters(uri: string): void {
+  private notifyWaiters(uriKey: string): void {
     for (const waiter of this.waiters) {
-      if (waiter.uri !== uri) continue;
+      if (waiter.uri !== uriKey) continue;
       waiter.onPublish();
     }
   }
@@ -596,7 +600,7 @@ export class LspClient {
   }
 
   clearDiagnosticHistory(uri?: string): void {
-    if (uri) this.publishes.delete(uri);
+    if (uri) this.publishes.delete(normalizeUriKey(uri));
     else this.publishes.clear();
   }
 

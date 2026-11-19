@@ -1,7 +1,7 @@
 ---
 name: inspector
 description: Fast, cheap read-only browser verification for live interaction, screenshots, responsive checks, and focused visual regression analysis. Live-page checks route here in regular and orchestrate modes, including Apex shared/preview tabs.
-model: antigravity/gemini-4-hydrogen
+model: agy-acp/gemini-4-hydrogen
 fallbackModels:
   - openai/gpt-6.1-terra
   - claude-bridge/claude-sonnet-5-5

@@ -192,7 +192,7 @@ export function inferModelFamily(provider: string, modelId: string): string {
   const combined = `${provider}/${modelId}`.toLowerCase();
   if (/claude|anthropic/.test(combined)) return "anthropic";
   if (/gpt|codex|openai/.test(combined)) return "openai";
-  if (/gemini|antigravity|google/.test(combined)) return "google";
+  if (/gemini|antigravity|agy-acp|google/.test(combined)) return "google";
   if (/grok|xai/.test(combined)) return "xai";
   if (/muse|meta/.test(combined)) return "meta";
   if (/kimi|moonshot/.test(combined)) return "kimi";
@@ -201,7 +201,7 @@ export function inferModelFamily(provider: string, modelId: string): string {
   return provider.toLowerCase();
 }
 function quotaEntries(provider: string, modelId: string, quota: QuotaSnapshot): ProviderQuotaEntry[] {
-  const modelProvider = provider === "openai-codex" ? "openai" : provider;
+  const modelProvider = provider === "openai-codex" ? "openai" : provider === "agy-acp" ? "antigravity" : provider;
   return [quota.models?.[`${modelProvider}/${modelId}`], quota.providers[inferModelFamily(provider, modelId)]]
     .filter((entry): entry is ProviderQuotaEntry => entry !== undefined);
 }

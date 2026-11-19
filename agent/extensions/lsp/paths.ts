@@ -152,6 +152,26 @@ export function pathToUri(filePath: string): string {
   return url.href.replace(/^file:\/\/\/([a-z]):/i, (_, d: string) => `file:///${d.toUpperCase()}:`);
 }
 
+/**
+ * Canonical comparison key for file URIs so push notifications match client URIs across
+ * server encoding differences (e.g. `file:///C:/...` vs `file:///c%3A/...` from tsserver).
+ */
+export function normalizeUriKey(uri: string, platform: NodeJS.Platform = process.platform): string {
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== "file:") return uri;
+    let pathname = decodeURIComponent(url.pathname);
+    pathname = pathname.replace(/^\/([A-Za-z]):(?=\/|$)/, (_, d: string) => `/${d.toUpperCase()}:`);
+    if (platform === "win32" && /^\/[A-Z]:(?=\/|$)/.test(pathname)) {
+      pathname = pathname.slice(0, 3) + pathname.slice(3).toLowerCase();
+    }
+    const host = url.host ? url.host.toLowerCase() : "";
+    return `file://${host}${pathname}`;
+  } catch {
+    return uri;
+  }
+}
+
 export function uriToPath(uri: string): string {
   try {
     const url = new URL(uri);
